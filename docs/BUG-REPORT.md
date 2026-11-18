@@ -12,6 +12,16 @@ All line numbers refer to the tree under review (`/Users/nikolassapalidis/Develo
 
 ---
 
+## Resolution status (2026-11-18, commit 40223da)
+
+All CONFIRMED findings 1–12 were fixed in the post-audit pass; fixes are
+covered by `cinder/tests/audit.rs` (25 regression tests, all green). While
+landing them, three additional races were found and fixed: grant-loss on
+early-drain ordering, backlog destruction on transient handshake failure,
+and foreign-sid tombstone poisoning during responder install. The
+"SUSPECTED" list below remains open (lower confidence); see
+`docs/CODE-AUDIT.md` for the parallel security findings, also resolved.
+
 ## Findings, ranked by likelihood × severity
 
 ### 1. CONFIRMED — `mailbox_drain` self-deadlocks `op_lock`; all relay request ops freeze

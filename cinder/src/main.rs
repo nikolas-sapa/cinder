@@ -37,6 +37,9 @@ struct Cli {
     /// address that connected successfully (persisted in the store).
     #[arg(long, global = true)]
     relay: Option<String>,
+    /// Print the keybinding reference and exit
+    #[arg(long)]
+    keybindings: bool,
     #[command(subcommand)]
     command: Option<Command>,
 }
@@ -73,6 +76,10 @@ async fn main() -> anyhow::Result<()> {
         .init();
 
     let mut cli = Cli::parse();
+    if cli.keybindings {
+        print!("{}", include_str!("../../docs/keybindings.md"));
+        return Ok(());
+    }
     let cmd = cli.command.take().unwrap_or(Command::Tui);
     match cmd {
         Command::Id { qr } => cmd_id(&cli, qr).await,

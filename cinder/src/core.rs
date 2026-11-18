@@ -263,8 +263,6 @@ struct MailboxPersist {
 struct PendingMsg {
     app: AppMsg,
     msg_id: Option<String>,
-    client_msg_id: Option<String>,
-    chat_id: String,
 }
 
 struct PeerSession {
@@ -635,6 +633,7 @@ impl Core {
         self.me.upgrade().expect("core arc dead")
     }
 
+    /// Own `peer:` id string (the session.hello `account.peer_id`).
     pub fn peer_id(&self) -> &str {
         &self.peer_id_str
     }
@@ -656,10 +655,6 @@ impl Core {
 
     pub fn conn_state(&self) -> tb::ConnState {
         self.sh().conn
-    }
-
-    pub fn has_live_session(&self, peer: &PeerId) -> bool {
-        self.session(peer).is_some()
     }
 
     pub fn meta_state(&self, peer: &PeerId) -> Option<MetaState> {
@@ -1627,8 +1622,6 @@ impl Core {
                         deposit_token: dtok,
                     },
                     msg_id: None,
-                    client_msg_id: None,
-                    chat_id: chat_str(&peer),
                 },
             )
             .await;
@@ -2330,8 +2323,6 @@ impl Core {
                     &PendingMsg {
                         app: AppMsg::Ack { msg_ids: vec![id] },
                         msg_id: None,
-                        client_msg_id: None,
-                        chat_id,
                     },
                 )
                 .await;
@@ -2614,8 +2605,6 @@ impl Core {
                 body: body.to_string(),
             },
             msg_id: Some(mid.clone()),
-            client_msg_id: Some(client_msg_id.to_string()),
-            chat_id: chat_id.clone(),
         };
         let chat_id2 = chat_id.clone();
         tokio::spawn(async move {
@@ -2820,7 +2809,7 @@ fn store_rpc(e: StoreError) -> RpcError {
             ErrorKind::Conflict,
             "client_msg_id replayed with a different payload",
         ),
-        StoreError::NotFound(id) => RpcError::new(ErrorKind::NotFound, format!("{id}")),
+        StoreError::NotFound(id) => RpcError::new(ErrorKind::NotFound, id),
         StoreError::InvalidCursor => RpcError::new(ErrorKind::InvalidParams, "invalid cursor"),
         StoreError::InvalidTransition { .. } => {
             RpcError::new(ErrorKind::Conflict, "invalid message state transition")
@@ -2865,14 +2854,19 @@ fn ui_event(kind: &str, p: &Value) -> Option<tb::Event> {
                 _ => tb::Trust::Unverified,
             },
         }),
-        "security.identity_changed" => Some(tb::Event::IdentityChanged {
-            contact_id: p["contact_id"].as_str()?.to_string(),
-            peer_id: p["peer_id"].as_str()?.to_string(),
-            chat_id: String::new(),
-        }),
+        "security.identity_changed" => {
+            // chat:<b32> encodes the same PeerId as peer:<b32>.
+            let chat_id = p["peer_id"]
+                .as_str()
+                .and_then(|s| s.strip_prefix("peer:"))
+                .map(|rest| format!("chat:{rest}"))?;
+            Some(tb::Event::IdentityChanged {
+                contact_id: p["contact_id"].as_str()?.to_string(),
+                chat_id,
+            })
+        }
         "security.verification_needed" => Some(tb::Event::VerificationNeeded {
             contact_id: p["contact_id"].as_str()?.to_string(),
-            peer_id: p["peer_id"].as_str()?.to_string(),
             sas: p["sas_hint"]["emoji"].as_str().unwrap_or("").to_string(),
         }),
         _ => None,
@@ -2938,7 +2932,6 @@ impl CinderCore for Core {
             .map_err(store_rpc)?
             .unwrap_or(0);
         let me = self.arc();
-        let chat_id = m.chat_id.clone();
         let msg_id = m.msg_id.clone();
         tokio::spawn(async move {
             me.deliver_or_queue(
@@ -2949,8 +2942,6 @@ impl CinderCore for Core {
                         body: p.body.clone(),
                     },
                     msg_id: Some(msg_id),
-                    client_msg_id: p.client_op_id.clone(),
-                    chat_id,
                 },
             )
             .await;
@@ -2997,7 +2988,6 @@ impl CinderCore for Core {
             }
             let peer = peer_of_chat(&m.chat_id)?;
             let me = self.arc();
-            let chat_id = m.chat_id.clone();
             let msg_id = m.msg_id.clone();
             tokio::spawn(async move {
                 me.deliver_or_queue(
@@ -3007,8 +2997,6 @@ impl CinderCore for Core {
                             msg_id: msg_id.clone(),
                         },
                         msg_id: Some(msg_id),
-                        client_msg_id: p.client_op_id.clone(),
-                        chat_id,
                     },
                 )
                 .await;
@@ -3071,7 +3059,6 @@ impl CinderCore for Core {
             }
         }
         let me = self.arc();
-        let chat_id = m.chat_id.clone();
         let msg_id = m.msg_id.clone();
         tokio::spawn(async move {
             me.deliver_or_queue(
@@ -3082,8 +3069,6 @@ impl CinderCore for Core {
                         emoji: p.emoji.clone(),
                     },
                     msg_id: Some(msg_id),
-                    client_msg_id: None,
-                    chat_id,
                 },
             )
             .await;
@@ -3317,6 +3302,12 @@ impl CinderCore for Core {
             .last()
             .map(|(_, id)| id.clone())
             .unwrap_or_default();
+        // `label` is a local bookkeeping tag (never sent to the invitee):
+        // persist it against the minted invite id.
+        if let Some(label) = p.label {
+            let key = format!("invite.label.{id}");
+            let _ = self.sblk(move |s| s.set_meta(&key, &label)).await;
+        }
         Ok(json!({
             "invite_id": id,
             "link": link,
@@ -3453,7 +3444,7 @@ pub struct TuiBackend {
 
 impl TuiBackend {
     pub fn new(core: Arc<Core>) -> Self {
-        let peer_id = core.peer_id_str.clone();
+        let peer_id = core.peer_id().to_string();
         Self { core, peer_id }
     }
 }
@@ -3590,57 +3581,6 @@ impl tb::Backend for TuiBackend {
             msg_id,
             client_msg_id: cmid,
         })
-    }
-
-    async fn contacts(&mut self) -> Result<Vec<tb::Contact>> {
-        let metas: HashMap<PeerId, ContactMeta> = self
-            .core
-            .shared
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .meta
-            .clone();
-        let peers: Vec<PeerId> = metas.keys().cloned().collect();
-        let (names, trusts) = self
-            .core
-            .cblk(move |c| {
-                let mut names = HashMap::new();
-                let mut trusts = HashMap::new();
-                for peer in &peers {
-                    if let Some(ct) = c.get(peer) {
-                        if !ct.name.is_empty() {
-                            names.insert(*peer, ct.name.clone());
-                        }
-                        trusts.insert(*peer, ct.state.clone());
-                    }
-                }
-                (names, trusts)
-            })
-            .await
-            .unwrap_or_default();
-        let mut out: Vec<tb::Contact> = metas
-            .iter()
-            .map(|(peer, m)| tb::Contact {
-                contact_id: contact_str(peer),
-                peer_id: peer_str(peer),
-                display_name: m.display_name.clone().or_else(|| names.get(peer).cloned()),
-                state: match m.state {
-                    MetaState::PendingOut => tb::ContactState::PendingOut,
-                    MetaState::PendingIn => tb::ContactState::PendingIn,
-                    MetaState::Active => tb::ContactState::Active,
-                    MetaState::Declined => tb::ContactState::Declined,
-                    MetaState::Blocked => tb::ContactState::Blocked,
-                },
-                trust: match trusts.get(peer) {
-                    Some(TrustState::Verified) => tb::Trust::Verified,
-                    Some(TrustState::KeyChanged { .. }) => tb::Trust::KeyChanged,
-                    _ => tb::Trust::Unverified,
-                },
-                chat_id: (m.state == MetaState::Active).then(|| chat_str(peer)),
-            })
-            .collect();
-        out.sort_by(|a, b| a.contact_id.cmp(&b.contact_id));
-        Ok(out)
     }
 
     async fn add_contact(&mut self, uri: &str) -> Result<String> {

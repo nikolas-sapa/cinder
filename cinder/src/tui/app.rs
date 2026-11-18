@@ -161,7 +161,7 @@ impl App {
     }
 
     pub fn set_chats(&mut self, mut chats: Vec<ChatSummary>) {
-        chats.sort_by(|a, b| b.last_activity.cmp(&a.last_activity));
+        chats.sort_by_key(|c| std::cmp::Reverse(c.last_activity));
         for c in &chats {
             if c.unread > 0 {
                 self.unread.insert(c.chat_id.clone(), c.unread);
@@ -299,16 +299,23 @@ impl App {
                 }
                 self.status_line = Some("contact connected".to_string());
             }
-            Event::IdentityChanged { chat_id, .. } => {
+            Event::IdentityChanged {
+                contact_id,
+                chat_id,
+            } => {
                 if let Some(c) = self.chats.iter_mut().find(|c| c.chat_id == chat_id) {
                     c.trust = Trust::KeyChanged;
                 }
-                self.status_line = Some(
-                    "WARNING: contact key changed — sending blocked until /verify".to_string(),
-                );
+                self.status_line = Some(format!(
+                    "WARNING: {contact_id} key changed — sending blocked until /verify"
+                ));
             }
-            Event::VerificationNeeded { contact_id, .. } => {
-                self.status_line = Some(format!("{contact_id} unverified — /finger to inspect"));
+            Event::VerificationNeeded { contact_id, sas } => {
+                self.status_line = Some(if sas.is_empty() {
+                    format!("{contact_id} unverified — /finger to inspect")
+                } else {
+                    format!("{contact_id} unverified — sas: {sas} — /finger to inspect")
+                });
             }
             Event::ConnChanged(s) => {
                 self.conn = s;
@@ -326,7 +333,7 @@ impl App {
 
     fn sort_chats(&mut self) {
         self.chats
-            .sort_by(|a, b| b.last_activity.cmp(&a.last_activity));
+            .sort_by_key(|c| std::cmp::Reverse(c.last_activity));
     }
 
     pub fn on_msg_state(

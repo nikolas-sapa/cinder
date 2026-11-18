@@ -134,6 +134,8 @@ impl RpcError {
         self
     }
 
+    /// v2 wire: merges extra fields (e.g. `retry_after_ms`) into `error.data`.
+    #[allow(dead_code)]
     pub fn with_extra(mut self, key: &str, value: Value) -> Self {
         self.extra
             .get_or_insert_with(Map::new)
@@ -187,6 +189,9 @@ impl RpcError {
         e
     }
 
+    /// Constructor for the `unimplemented` kind — a reserved entry in the
+    /// describe() error table; no v1 method produces it.
+    #[allow(dead_code)]
     pub fn unimplemented() -> Self {
         let mut e = Self::new(
             ErrorKind::Unimplemented,
@@ -225,19 +230,6 @@ impl std::fmt::Display for RpcError {
 }
 
 impl std::error::Error for RpcError {}
-
-#[derive(Debug, Clone)]
-pub struct Request {
-    pub id: Option<Value>,
-    pub method: String,
-    pub params: Option<Value>,
-}
-
-impl Request {
-    pub fn is_notification(&self) -> bool {
-        self.id.is_none()
-    }
-}
 
 pub fn result_response(id: Value, result: Value) -> Value {
     json!({"jsonrpc": "2.0", "id": id, "result": result})

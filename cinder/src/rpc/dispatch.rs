@@ -1,4 +1,4 @@
-use crate::rpc::codec::{is_blank, FrameWriter, LineRead, LineReader};
+use crate::rpc::codec::{is_blank, FrameWriter, LineRead, LineReader, MAX_LINE_BYTES};
 use crate::rpc::core::CinderCore;
 use crate::rpc::describe;
 use crate::rpc::events::{EventManager, OutMsg};
@@ -13,7 +13,7 @@ use std::time::Duration;
 use tokio::io::{AsyncBufRead, AsyncWrite};
 use tokio::sync::{mpsc, Notify};
 
-pub const MAX_FRAME_BYTES: usize = 4 * 1024 * 1024;
+pub const MAX_FRAME_BYTES: usize = MAX_LINE_BYTES;
 pub const MAX_BODY_BYTES: usize = 8192;
 pub const HISTORY_LIMIT_MAX: u32 = 500;
 pub const SEND_QUEUE_FRAMES: usize = 1024;
@@ -93,6 +93,10 @@ pub struct Engine {
 }
 
 impl Engine {
+    /// Default wiring: in-memory replay log. Used by tests via `#[path]`
+    /// include; production builds the engine with `with_events` +
+    /// `SqliteReplayLog` (main.rs `build_engine`).
+    #[allow(dead_code)]
     pub fn new(core: Arc<dyn CinderCore>, cfg: EngineConfig) -> Arc<Self> {
         let events = Arc::new(EventManager::new(
             Box::new(crate::rpc::events::InMemoryReplayLog::new(
@@ -314,10 +318,10 @@ impl Session {
         let Some(def) = describe::method_def(method) else {
             return Err(RpcError::unknown_method());
         };
-        if !self.helloed && def.scope != "" {
+        if !self.helloed && !def.scope.is_empty() {
             return Err(RpcError::pre_hello());
         }
-        if def.scope != "" && !self.scopes.contains("*") && !self.scopes.contains(def.scope) {
+        if !def.scope.is_empty() && !self.scopes.contains("*") && !self.scopes.contains(def.scope) {
             return Err(RpcError::new(
                 ErrorKind::UnauthorizedScope,
                 format!(

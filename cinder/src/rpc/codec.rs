@@ -20,13 +20,6 @@ pub struct LineReader<R> {
 }
 
 impl<R: AsyncBufRead + Unpin> LineReader<R> {
-    pub fn new(inner: R) -> Self {
-        Self {
-            inner,
-            cap: MAX_LINE_BYTES,
-        }
-    }
-
     pub fn with_cap(inner: R, cap: usize) -> Self {
         Self { inner, cap }
     }

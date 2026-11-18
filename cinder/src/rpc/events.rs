@@ -35,12 +35,16 @@ pub trait ReplayLog: Send {
     fn since(&self, since: u64) -> Vec<EventRecord>;
 }
 
+/// Engine::new's default log — used by tests via `#[path]` include;
+/// production wires SqliteReplayLog (core.rs) through Engine::with_events.
+#[allow(dead_code)]
 pub struct InMemoryReplayLog {
     cap: usize,
     events: VecDeque<EventRecord>,
     latest: u64,
 }
 
+#[allow(dead_code)]
 impl InMemoryReplayLog {
     pub fn new(cap: usize) -> Self {
         Self {
@@ -120,7 +124,6 @@ impl ConnHandle {
 
 struct Subscription {
     id: String,
-    conn_id: u64,
     filters: Filters,
     /// While true, live events buffer in `pending` so replay + backlog stay
     /// ahead of them on the wire (strictly increasing seq per subscription).
@@ -248,7 +251,6 @@ impl EventManager {
         let replayed = replay_frames.len() - usize::from(gap);
         let sub = Subscription {
             id: id.clone(),
-            conn_id,
             filters,
             replaying: true,
             pending: VecDeque::new(),

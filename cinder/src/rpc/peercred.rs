@@ -2,8 +2,6 @@
 //! here behind a safe API — the only unsafe block in the rpc module tree,
 //! gated like mod hardening.
 
-#![allow(unsafe_code)]
-
 use std::io;
 
 pub type Uid = u32;

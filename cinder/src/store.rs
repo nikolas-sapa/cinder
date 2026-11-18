@@ -171,7 +171,6 @@ pub struct NewMessage {
 pub struct Reaction {
     pub emoji: String,
     pub reactor: [u8; 32],
-    pub ts: i64,
 }
 
 #[derive(Debug, Clone)]
@@ -185,6 +184,8 @@ pub struct Message {
     pub client_msg_id: Option<String>,
     pub ts: i64,
     pub revision: i64,
+    // used by tests via #[path] include; v1 emits `revision`, not edited_at
+    #[allow(dead_code)]
     pub edited_at: Option<i64>,
     pub deleted: bool,
     pub reactions: Vec<Reaction>,
@@ -195,10 +196,13 @@ pub struct Chat {
     pub chat_id: String,
     pub peer_id: [u8; 32],
     pub title: Option<String>,
-    pub created_at: i64,
     pub last_activity: i64,
     pub unread: i64,
+    // used by tests via #[path] include
+    #[allow(dead_code)]
     pub verified: bool,
+    // used by tests via #[path] include
+    #[allow(dead_code)]
     pub read_upto: i64,
     pub last_message: Option<Box<Message>>,
 }
@@ -216,8 +220,9 @@ pub struct Event {
 pub struct EventsPage {
     pub events: Vec<Event>,
     /// True when `since` predates the retained log: caller emits `event.gap`.
+    // used by tests via #[path] include
+    #[allow(dead_code)]
     pub gap: bool,
-    pub oldest_seq: u64,
     pub latest_seq: u64,
 }
 
@@ -281,6 +286,8 @@ fn derive_key(static_secret: &[u8]) -> [u8; 32] {
 
 pub struct Store {
     conn: Mutex<Connection>,
+    // used by tests via #[path] include (db_path accessor below)
+    #[allow(dead_code)]
     db_path: PathBuf,
 }
 
@@ -334,6 +341,8 @@ impl Store {
         Ok(store)
     }
 
+    // used by tests via #[path] include
+    #[allow(dead_code)]
     pub fn db_path(&self) -> &Path {
         &self.db_path
     }
@@ -476,7 +485,7 @@ impl Store {
     pub fn list_chats_sorted(&self, limit: u32) -> Result<Vec<Chat>> {
         let conn = self.conn()?;
         let mut stmt = conn.prepare(
-            "SELECT chat_id, peer_id, title, created_at, last_activity, unread,
+            "SELECT chat_id, peer_id, title, last_activity, unread,
                     verified, read_upto
              FROM chats ORDER BY last_activity DESC, chat_id ASC LIMIT ?1",
         )?;
@@ -490,7 +499,6 @@ impl Store {
                     r.get::<_, i64>(4)?,
                     r.get::<_, i64>(5)?,
                     r.get::<_, i64>(6)?,
-                    r.get::<_, i64>(7)?,
                 ))
             })?
             .collect::<std::result::Result<Vec<_>, _>>()?;
@@ -498,7 +506,7 @@ impl Store {
         chats
             .into_iter()
             .map(
-                |(chat_id, peer, title, created, activity, unread, verified, read_upto)| {
+                |(chat_id, peer, title, activity, unread, verified, read_upto)| {
                     let peer_id: [u8; 32] = peer
                         .try_into()
                         .map_err(|_| StoreError::Internal("peer_id len"))?;
@@ -507,7 +515,6 @@ impl Store {
                         chat_id,
                         peer_id,
                         title,
-                        created_at: created,
                         last_activity: activity,
                         unread,
                         verified: verified != 0,
@@ -567,26 +574,21 @@ impl Store {
 
     fn reactions_locked(&self, conn: &Connection, msg_id: &str) -> Result<Vec<Reaction>> {
         let mut stmt = conn.prepare(
-            "SELECT emoji, reactor, ts FROM reactions WHERE msg_id = ?1
+            "SELECT emoji, reactor FROM reactions WHERE msg_id = ?1
              ORDER BY ts ASC",
         )?;
         let rows = stmt
             .query_map([msg_id], |r| {
-                Ok((
-                    r.get::<_, String>(0)?,
-                    r.get::<_, Vec<u8>>(1)?,
-                    r.get::<_, i64>(2)?,
-                ))
+                Ok((r.get::<_, String>(0)?, r.get::<_, Vec<u8>>(1)?))
             })?
             .collect::<std::result::Result<Vec<_>, _>>()?;
         rows.into_iter()
-            .map(|(emoji, reactor, ts)| {
+            .map(|(emoji, reactor)| {
                 Ok(Reaction {
                     emoji,
                     reactor: reactor
                         .try_into()
                         .map_err(|_| StoreError::Internal("reactor len"))?,
-                    ts,
                 })
             })
             .collect()
@@ -649,7 +651,9 @@ impl Store {
             .map(|msgs| (msgs, next))
     }
 
+    // exercised in tests (EXPLAIN guard for the index-bounded window query)
     #[doc(hidden)]
+    #[allow(dead_code)]
     pub fn window_plan(&self, chat_id: &str) -> Result<String> {
         let conn = self.conn()?;
         let mut stmt = conn.prepare(
@@ -809,6 +813,8 @@ impl Store {
         Ok(())
     }
 
+    // exercised in tests; msg_states audit log accessor
+    #[allow(dead_code)]
     pub fn state_history(&self, msg_id: &str) -> Result<Vec<(MsgState, i64)>> {
         let conn = self.conn()?;
         let mut stmt =
@@ -1024,6 +1030,8 @@ impl Store {
         Ok(seq as u64)
     }
 
+    // replay-log counters; used by tests via #[path] include
+    #[allow(dead_code)]
     pub fn oldest_seq(&self) -> Result<u64> {
         Ok(self
             .conn()?
@@ -1032,6 +1040,8 @@ impl Store {
             })? as u64)
     }
 
+    // used by tests via #[path] include
+    #[allow(dead_code)]
     pub fn latest_seq(&self) -> Result<u64> {
         Ok(self
             .conn()?
@@ -1093,7 +1103,6 @@ impl Store {
         Ok(EventsPage {
             events,
             gap,
-            oldest_seq: oldest as u64,
             latest_seq: latest as u64,
         })
     }
@@ -1111,6 +1120,8 @@ impl Store {
     }
 
     /// FTS5 search over message bodies, newest-first, limit-bounded.
+    // v2: FTS search is spec'd for a later protocol rev; exercised in tests
+    #[allow(dead_code)]
     pub fn search(&self, query: &str, chat_id: Option<&str>, limit: u32) -> Result<Vec<Message>> {
         let conn = self.conn()?;
         let sql = "SELECT m.msg_id, m.dir, m.kind, m.body, m.state,

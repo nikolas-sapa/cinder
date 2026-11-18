@@ -72,6 +72,9 @@ struct InviteSlot {
 
 struct MailInner {
     boxes: HashMap<MailboxId, Mailbox>,
+    // Raw invite tokens as map keys is deliberate — the rendezvous slot must
+    // be lookup-able by the bearer token itself (PROTOCOL §13 accepts this
+    // residual: a malicious relay can already deny/registrar-squat).
     invites: HashMap<InviteToken, InviteSlot>,
 }
 

@@ -29,7 +29,13 @@ pub enum Error {
     #[error("unknown contact")]
     UnknownContact,
     #[error("peer-id mismatch: expected {expected}, derived {actual}")]
-    PeerIdMismatch { expected: PeerId, actual: PeerId },
+    PeerIdMismatch {
+        expected: PeerId,
+        actual: PeerId,
+        /// The remote static presented on the wire — needed to record the
+        /// key change and report the mismatched fingerprint.
+        actual_static: [u8; 32],
+    },
     #[error("decrypt failure: session destroyed")]
     DecryptFatal,
     #[error("handshake timed out")]

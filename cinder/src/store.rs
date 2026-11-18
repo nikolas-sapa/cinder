@@ -904,6 +904,88 @@ impl Store {
         Ok(())
     }
 
+    /// Peer-supplied mutation gate: an Edit may only touch an INBOUND message
+    /// inside the chat bound to that peer — a contact can never rewrite our
+    /// outbound history or a row in another chat.
+    pub fn apply_peer_edit(&self, msg_id: &str, chat_id: &str, new_body: &str) -> Result<()> {
+        let affected = self.conn()?.execute(
+            "UPDATE messages SET body = ?3, edited_at = ?4, revision = revision + 1
+             WHERE msg_id = ?1 AND chat_id = ?2 AND dir = 'in' AND deleted = 0",
+            params![msg_id, chat_id, new_body, now_ms()],
+        )?;
+        if affected == 0 {
+            return Err(StoreError::NotFound(msg_id.to_string()));
+        }
+        Ok(())
+    }
+
+    /// Same scoping for peer tombstones: inbound-only, this peer's chat only.
+    pub fn apply_peer_delete(&self, msg_id: &str, chat_id: &str) -> Result<()> {
+        let affected = self.conn()?.execute(
+            "UPDATE messages SET deleted = 1, body = ''
+             WHERE msg_id = ?1 AND chat_id = ?2 AND dir = 'in'",
+            params![msg_id, chat_id],
+        )?;
+        if affected == 0 {
+            return Err(StoreError::NotFound(msg_id.to_string()));
+        }
+        Ok(())
+    }
+
+    /// Peer reactions attach to either direction but only on a live message
+    /// inside the chat bound to that peer.
+    pub fn apply_peer_reaction(
+        &self,
+        msg_id: &str,
+        chat_id: &str,
+        emoji: &str,
+        reactor: &[u8; 32],
+    ) -> Result<()> {
+        let conn = self.conn()?;
+        let exists: Option<i64> = conn
+            .query_row(
+                "SELECT 1 FROM messages
+                 WHERE msg_id = ?1 AND chat_id = ?2 AND deleted = 0",
+                params![msg_id, chat_id],
+                |r| r.get(0),
+            )
+            .optional()?;
+        if exists.is_none() {
+            return Err(StoreError::NotFound(msg_id.to_string()));
+        }
+        conn.execute(
+            "INSERT INTO reactions(msg_id, emoji, reactor, ts) VALUES(?1, ?2, ?3, ?4)
+             ON CONFLICT(msg_id, emoji, reactor) DO UPDATE SET ts = excluded.ts",
+            params![msg_id, emoji, reactor.as_slice(), now_ms()],
+        )?;
+        Ok(())
+    }
+
+    /// Peer un-react, same chat scoping.
+    pub fn remove_peer_reaction(
+        &self,
+        msg_id: &str,
+        chat_id: &str,
+        reactor: &[u8; 32],
+    ) -> Result<()> {
+        let conn = self.conn()?;
+        let exists: Option<i64> = conn
+            .query_row(
+                "SELECT 1 FROM messages WHERE msg_id = ?1 AND chat_id = ?2",
+                params![msg_id, chat_id],
+                |r| r.get(0),
+            )
+            .optional()?;
+        if exists.is_none() {
+            return Err(StoreError::NotFound(msg_id.to_string()));
+        }
+        conn.execute(
+            "DELETE FROM reactions WHERE msg_id = ?1 AND reactor = ?2",
+            params![msg_id, reactor.as_slice()],
+        )?;
+        Ok(())
+    }
+
     /// Tombstone: marks deleted and clears the body so plaintext does not
     /// linger in history, FTS, or `chat.list` previews.
     pub fn soft_delete(&self, msg_id: &str) -> Result<()> {

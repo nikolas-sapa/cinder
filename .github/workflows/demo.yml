@@ -1,0 +1,72 @@
+name: demo
+
+# Regenerates docs/demo.gif from demo.tape (charmbracelet/vhs).
+# The gif is an artifact, never committed — download it from the run.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - demo.tape
+      - "cinder/**"
+      - "cinder-core/**"
+      - "cinder-relay/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - ".github/workflows/demo.yml"
+  pull_request:
+    paths:
+      - demo.tape
+      - ".github/workflows/demo.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: demo-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  VHS_VERSION: "0.12.1"
+
+jobs:
+  demo:
+    name: vhs demo.tape → docs/demo.gif
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: install cinder + cinder-relay onto PATH
+        run: |
+          cargo install --locked --path cinder --root "$HOME/.local"
+          cargo install --locked --path cinder-relay --root "$HOME/.local"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      # ttyd + ffmpeg are vhs's runtime deps; the emoji font keeps the
+      # 7-emoji SAS in /finger from rendering as tofu boxes.
+      - name: install vhs runtime deps (tmux, ttyd, ffmpeg, emoji font)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            tmux ttyd ffmpeg fonts-noto-color-emoji
+
+      - name: install vhs ${{ env.VHS_VERSION }}
+        run: |
+          curl -sSfL "https://github.com/charmbracelet/vhs/releases/download/v${VHS_VERSION}/vhs_${VHS_VERSION}_Linux_x86_64.tar.gz" \
+            | tar -xz vhs
+          sudo install -m 0755 vhs /usr/local/bin/vhs
+          vhs --version
+
+      - name: record demo.tape
+        run: vhs demo.tape
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: demo-gif
+          path: docs/demo.gif
+          if-no-files-found: error
+          retention-days: 30

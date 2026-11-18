@@ -327,6 +327,9 @@ async fn msg_react(eng: &Engine, params: Option<Value>) -> Result<Value, RpcErro
         if e.is_empty() {
             return Err(RpcError::invalid_params("emoji must be a non-empty string or null"));
         }
+        if e.len() > 32 {
+            return Err(RpcError::invalid_params("emoji exceeds 32 bytes"));
+        }
     }
     eng.core().msg_react(p).await
 }

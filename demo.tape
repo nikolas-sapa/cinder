@@ -1,23 +1,38 @@
 # cinder — demo tape (charmbracelet/vhs)
 #
 # Regenerate:  vhs demo.tape   →   docs/demo.gif
-# CI-regenerable target: docs/demo.gif is produced from this file in CI.
-# Never hand-edit the gif.
+# CI-regenerable target: docs/demo.gif is produced from this file by
+# .github/workflows/demo.yml — never hand-edit the gif.
 #
-# Requires on PATH: tmux, cinder, cinder-relay.
+# Requires on PATH: vhs, tmux, cinder, cinder-relay. vhs additionally
+# shells out to ttyd + ffmpeg — the workflow installs all of it.
+# (`vhs` is not installed on every dev machine; the workflow is the
+# canonical regenerator.)
 #
-# Written against the spec (BRIEF.md / AGENT-API.md / PROTOCOL.md) before
-# the binaries exist. Pending details, marked TBD-*:
-#   TBD-M3: how the cinder client selects its relay (flag/config/env) —
-#           this tape assumes a configured default of 127.0.0.1:7000.
-#   TBD-M4: contact-request accept affordance and the /verify confirm
-#           flow — Enter is used as a placeholder confirm.
+# Verified against the built binaries — things that are easy to get
+# wrong and why this tape looks the way it does:
 #
-# Layout: left pane mints + shares a one-time rendezvous link; right pane
-# consumes it; both verify SAS and chat. The left side stays connected in
-# `cinder tui` while the right adds — the rendezvous slot is relay-side
-# but the owner must be online to receive the forwarded handshake
-# (PROTOCOL §7: offline slot owner = dropped Msg1).
+#   * Two pane-local identities: without per-pane CINDER_DATA_DIR both
+#     panes load the SAME default identity — you can't add yourself.
+#   * On machines with no OS keyring the age-file fallback prompts for a
+#     passphrase on /dev/tty (first run: create + confirm = two prompts;
+#     later runs: one). The tape types `demo-pass` wherever a real run
+#     prompts. CINDER_IDENTITY=ephemeral is NOT used: `cinder id` and
+#     `cinder tui` are separate processes and would get different
+#     peer-ids.
+#   * The relay slot survives `cinder id` exiting, but the OWNER must be
+#     online when the Msg1 arrives — the left side runs `cinder tui`
+#     before the right runs `cinder add`.
+#   * Inbound adds land pending_in and emit `contact.request`, which the
+#     TUI cannot see or answer (no /accept exists). The tape accepts via
+#     a one-shot `cinder rpc` — the honest path, and it demos the agent
+#     interface.
+#   * `/verify` with no argument only OPENS the fingerprint overlay; it
+#     does not verify. `/verify <sas>` does — and since the tape can't
+#     type emoji, it uses the digit SAS (ident.verify accepts either
+#     form, whitespace-normalized). The digits are lifted out of the
+#     replayed security.verification_needed event into a tmux buffer and
+#     pasted into the input bar with `C-b ]`.
 
 Output docs/demo.gif
 
@@ -32,9 +47,11 @@ Require tmux
 Require cinder
 Require cinder-relay
 
-# ---------- setup (hidden): local relay + attached tmux ----------
+# ---------- setup (hidden): scratch dirs, local relay, attached tmux ----------
 Hide
-Type "cinder-relay --listen 127.0.0.1:7000 >/tmp/cinder-relay.log 2>&1 &"
+Type "pkill -f 'cinder-relay --listen' 2>/dev/null; rm -rf /tmp/cinder-demo; mkdir -p /tmp/cinder-demo"
+Enter
+Type "cinder-relay --listen 127.0.0.1:7000 >/tmp/cinder-demo/relay.log 2>&1 &"
 Enter
 Sleep 1s
 Type "clear"
@@ -48,64 +65,144 @@ Show
 Ctrl+B
 Type "%"
 Sleep 1s
+# focus returns to the left pane for the invite side
+Ctrl+B
+Type "o"
+Sleep 400ms
 
 # ---------- left pane: identity + one-time invite link ----------
+Type "export CINDER_DATA_DIR=/tmp/cinder-demo/left CINDER_RELAY=127.0.0.1:7000"
+Enter
 Type "cinder id --qr"
 Enter
-Sleep 3s
-
-# hidden: capture the URI off this pane's scrollback before the TUI
-# takes the screen (-J joins soft-wrapped lines), then open the TUI
-Hide
-Type "tmux capture-pane -p -J -S - > /tmp/cinder-left-pane.txt"
+Sleep 1500ms
+Type "demo-pass"
 Enter
+Sleep 800ms
+Type "demo-pass"
+Enter
+Sleep 4s
+
+# hidden: capture the minted URI before the TUI takes the screen
+# (-J joins soft-wrapped lines so the full cinder:// URI stays one line)
+Hide
+Type "tmux capture-pane -p -J -S - > /tmp/cinder-demo/left-pane.txt"
+Enter
+Type "grep -o 'cinder://[^ ]*' /tmp/cinder-demo/left-pane.txt | head -n1 > /tmp/cinder-demo/uri.txt"
+Enter
+Show
+
+# the slot owner must be online to answer the forwarded Msg1
 Type "cinder tui"
 Enter
-Sleep 2s
-Show
+Sleep 1500ms
+Type "demo-pass"
+Enter
+Sleep 3s
 
 # ---------- right pane: consume the link ----------
 Ctrl+B
 Type "o"
 Sleep 400ms
+Type "export CINDER_DATA_DIR=/tmp/cinder-demo/right CINDER_RELAY=127.0.0.1:7000"
+Enter
 Hide
-Type "URI=$(grep -o 'cinder://[^ ]*' /tmp/cinder-left-pane.txt | head -n1)"
+Type "URI=$(cat /tmp/cinder-demo/uri.txt)"
 Enter
 Show
 Type "cinder add \"$URI\""
 Enter
-Sleep 4s
+Sleep 1500ms
+Type "demo-pass"
+Enter
+Sleep 800ms
+Type "demo-pass"
+Enter
+Sleep 8s
 Type "cinder tui"
 Enter
-Sleep 2s
+Sleep 1500ms
+Type "demo-pass"
+Enter
+Sleep 3s
 
-# ---------- left pane: inbound contact request ----------
+# ---------- left pane: the request is pending_in; accept over rpc ----------
+# (contact.request has no TUI event and there is no /accept — this is
+# the designed path, and it shows the same core agents use. Requests are
+# piped — the passphrase prompt reads /dev/tty, never stdin, so frames
+# on the pipe stay clean. stdout is tee'd so the pane shows the frames
+# AND we can parse them.)
 Ctrl+B
 Type "o"
 Sleep 400ms
-# TBD-M4: the pending contact.request is on screen; Enter stands in for
-# the accept affordance (final binding lands with the TUI milestone)
-Enter
-Sleep 2s
-
-# ---------- both panes: SAS verification ----------
-# same 7-emoji SAS rendered on both sides — the visual compare IS the
-# out-of-band check this demo demonstrates
-Type "/verify"
-Enter
-Sleep 2s
-# TBD-M4: confirm the SAS match (placeholder Enter)
+Type "/quit"
 Enter
 Sleep 1s
+Type "( echo '{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"session.hello\",\"params\":{\"protocol_version\":[1]}}'; sleep 0.5; echo '{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"contact.list\",\"params\":{}}'; sleep 0.5; echo '{\"jsonrpc\":\"2.0\",\"id\":9,\"method\":\"shutdown.request\",\"params\":{\"grace_ms\":500}}' ) | cinder rpc | tee /tmp/cinder-demo/clist.json"
+Enter
+Sleep 1500ms
+Type "demo-pass"
+Enter
+Sleep 5s
+Hide
+Type "CID=$(grep -oE 'contact:[a-z2-7]{20,}' /tmp/cinder-demo/clist.json | tail -n1)"
+Enter
+Show
+# accept emits security.verification_needed with sas_hint {emoji,digits};
+# subscribe with since:0 replays it into stdout → digits land in the file
+Type "( echo '{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"session.hello\",\"params\":{\"protocol_version\":[1]}}'; sleep 0.5; echo \"{\\\"jsonrpc\\\":\\\"2.0\\\",\\\"id\\\":3,\\\"method\\\":\\\"contact.accept\\\",\\\"params\\\":{\\\"contact_id\\\":\\\"$CID\\\"}}\"; sleep 1.5; echo '{\"jsonrpc\":\"2.0\",\"id\":4,\"method\":\"events.subscribe\",\"params\":{\"since\":0}}'; sleep 1.5; echo '{\"jsonrpc\":\"2.0\",\"id\":9,\"method\":\"shutdown.request\",\"params\":{\"grace_ms\":500}}' ) | cinder rpc | tee /tmp/cinder-demo/accept.json"
+Enter
+Sleep 1500ms
+Type "demo-pass"
+Enter
+Sleep 8s
+Hide
+Type "grep -oE '\"digits\":\"[0-9 ]+\"' /tmp/cinder-demo/accept.json | head -n1 | sed -E 's/\"digits\":\"//; s/\"$//' > /tmp/cinder-demo/digits.txt"
+Enter
+Type "tmux set-buffer \"$(tr -d '\\n' < /tmp/cinder-demo/digits.txt)\""
+Enter
+Show
+Type "cinder tui"
+Enter
+Sleep 1500ms
+Type "demo-pass"
+Enter
+Sleep 3s
+
+# ---------- left pane: fingerprint overlay, verify with the digit SAS ----------
+# /finger shows the 7-emoji SAS; /verify accepts the digit fallback too.
+# The buffer holds the digits — paste with tmux paste-buffer (C-b ]).
+Type "/finger"
+Enter
+Sleep 2s
+Escape
+Sleep 500ms
+Type "/verify "
+Ctrl+B
+Type "]"
+Sleep 500ms
+Enter
+Sleep 2s
+Escape
+Sleep 500ms
+
+# ---------- right pane: same digits, same verdict ----------
 Ctrl+B
 Type "o"
 Sleep 400ms
-Type "/verify"
+Type "/finger"
 Enter
 Sleep 2s
-# TBD-M4: confirm the SAS match (placeholder Enter)
+Escape
+Sleep 500ms
+Type "/verify "
+Ctrl+B
+Type "]"
+Sleep 500ms
 Enter
-Sleep 1s
+Sleep 2s
+Escape
+Sleep 500ms
 
 # ---------- exchange messages, 2 each way ----------
 Type "noise XX done, relay saw only ciphertext"

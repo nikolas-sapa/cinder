@@ -224,6 +224,7 @@ impl Session {
         Err(Error::PeerIdMismatch {
             expected: *expected,
             actual,
+            actual_static: self.remote_static.unwrap_or_default(),
         })
     }
 
@@ -358,7 +359,9 @@ impl Session {
 
     /// Compare the learned remote static against the stored contact key for
     /// the peer-id we expected. A difference is a key change: recorded (loud,
-    /// blocks send) via the contacts path, and `true` is returned.
+    /// blocks send) via the contacts path, and `true` is returned. Called by
+    /// the core after every successful session establishment (§11: pinning
+    /// re-checks against the contacts store on each new XX).
     pub fn detect_key_change(
         &self,
         store: &mut ContactStore,

@@ -1,44 +1,81 @@
 # cinder — Keybindings
 
-Status: bindings marked **spec'd** are contractual from `BRIEF.md` §TUI /
-`PLAN.md` M4. Bindings marked **inferred** are conventional defaults —
-verify against the implementation when M4 lands; this file is updated to
-match.
+Status: **verified** against `cinder/src/tui/keys.rs`, `cinder/src/tui/app.rs`
+(`parse_command`), and `cinder/src/tui/mod.rs` (`handle_key`, `run_command`).
+Anything marked **spec'd-only** is contractual in `BRIEF.md`/`PLAN.md` but has
+no implementation yet.
 
 Notation: `M-` = Alt/Meta, `C-` = Ctrl, `Alt-N` = Alt + digit.
 
 ## Input model
 
 **Input is always focused.** There is no normal/insert mode split: typed
-text goes straight to the input bar, and all navigation happens through
-chords and slash commands.
+text goes straight to the input bar (`ratatui-textarea`), and all navigation
+happens through chords and slash commands. `Enter` always submits — a draft
+cannot contain a literal newline; for multi-line messages compose in
+`$EDITOR` via `M-k`.
 
-## Keys
+## Keys — main UI
 
 | Key | Action | Context | Status |
 |---|---|---|---|
-| _(printable text)_ | Goes to the input bar | everywhere | spec'd (input-always-focused) |
-| `Enter` | Send the composed message | input bar | inferred — verify at M4 |
-| `Alt-1` … `Alt-9` | Jump to conversation buffer 1–9 | global | spec'd |
-| `M-a` | Jump to next conversation with unread messages | global | spec'd |
-| `C-g` | Open fuzzy conversation switcher | global | spec'd |
-| `M-k` | Compose in `$EDITOR` (long / multi-line messages) | input bar | spec'd |
-| `PgUp` / `PgDn` | Scroll chat history (windowed fetch — never load-all) | chat pane | spec'd |
-| `Esc` | Dismiss the current overlay/switcher; clear input when no overlay is open | global | inferred — verify at M4 |
-| `C-c` | Quit cinder | global | inferred — verify at M4 |
+| _(printable text)_ | Goes to the input bar | everywhere | verified |
+| `Enter` | Submit: send the draft, or run it as a `/command` if it starts with `/` | input bar | verified |
+| `Alt-1` … `Alt-9` | Jump to conversation buffer 1–9 | global | verified |
+| `M-a` | Jump to next conversation with unread; "no unread chats" if none | global | verified |
+| `C-g` | Open fuzzy conversation switcher | global | verified |
+| `M-k` | Compose in `$EDITOR` (default `vi`); draft loads back into the input bar, empty result discarded | input bar | verified |
+| `PgUp` | Scroll chat history up; near the top it fetches the next older page (windowed, 50 msgs — never load-all) | chat pane | verified |
+| `PgDn` | Scroll chat history down | chat pane | verified |
+| `Esc` | **No-op in the main UI** — it does *not* clear the draft (use `/clear`) | main UI | verified — differs from spec |
+| `C-c` | Quit cinder | global, also inside every overlay | verified |
+
+## Keys — fuzzy switcher (`C-g`)
+
+| Key | Action | Status |
+|---|---|---|
+| _(printable text)_ | Append to the query | verified |
+| `Backspace` | Delete last query char | verified |
+| `Up` / `Down` | Move selection | verified |
+| `Enter` | Activate selected chat | verified |
+| `Esc` | Close the switcher | verified |
+| `C-c` | Quit cinder | verified |
+
+## Keys — overlays (`/help`, `/finger`)
+
+| Key | Action | Status |
+|---|---|---|
+| `Esc` | Close the overlay | verified |
+| `q` | Close the overlay | verified |
+| `C-c` | Quit cinder | verified |
+| _(anything else)_ | No-op | verified |
 
 ## Slash commands
 
-Typed at the start of the input bar.
+Typed at the start of the input bar (`cinder/src/tui/app.rs:parse_command`).
 
 | Command | Action | Status |
 |---|---|---|
-| `/help` | List commands and bindings | spec'd |
-| `/add <uri>` | Add a contact from a `cinder://` link (rendezvous or static address) | spec'd |
-| `/verify` | Show the contact's SAS (7 emoji / digit fallback) and confirm out-of-band verification | spec'd |
-| `/finger` | Show the contact's key fingerprint / peer-id | spec'd |
-| `/clear` | Clear the current buffer's visible history | spec'd |
-| `/quit` | Exit cinder | spec'd |
+| `/help`, `/h`, `/?` | List commands and bindings | verified |
+| `/add <uri>`, `/invite <uri>` | Add a contact from a `cinder://` link — rendezvous or static. `/invite` is an **alias for `/add`** (it consumes a link); minting a link is `cinder id` / `invite.create` only | verified |
+| `/verify` | No argument: open the fingerprint overlay (same as `/finger`) — shows contact, peer-id, trust, and the current SAS | verified |
+| `/verify <sas>` | Mark the active contact verified: `<sas>` is the 7-emoji string or the digit fallback, compared whitespace-normalized | verified |
+| `/finger`, `/fp` | Show the active contact's fingerprint overlay | verified |
+| `/clear` | Clear the input draft (not the history) | verified |
+| `/status` | Connection state + peer-id + chat/unread counts in the status line | verified |
+| `/next` | Same as `M-a` — next unread chat | verified |
+| `/quit`, `/q` | Exit cinder | verified |
+| _(anything else)_ | `unknown command <x> (/help)` on the status line | verified |
+
+## Known gap — no inbound-request affordance
+
+There is **no key or slash command to accept or decline an inbound contact
+request.** `contact.request` events are not mapped to any TUI event, and
+`/accept` does not exist. Inbound requests land `pending_in` and are only
+answerable via `contact.accept` / `contact.decline` on `cinder rpc` /
+`cinder daemon`. The `pending_in` chat still appears in the list on the
+next TUI start and messaging works while pending — only `declined` /
+`blocked` peers are gated.
 
 ## UI conventions
 
@@ -47,15 +84,18 @@ Typed at the start of the input bar.
 | `…` | queued — accepted into the outbound pipeline |
 | `✓` | sent — live write to the peer, or deposited to the peer's relay mailbox |
 | `✓✓` | delivered — the peer's client acked durable receipt in-band |
+| `!` | failed — terminal failure (`expired` renders as `!` too) |
 
 There is deliberately **no read state**: no cinder peer ever transmits a
 read receipt (`read` is reserved in the protocol schema and never emitted
 in v1).
 
-Trust states shown per contact: `unverified` (neutral), `verified`
-(badge), `key_changed` (loud — sending is blocked until re-verified via
-`/verify` with the new SAS).
+Trust states shown per contact: `unverified` (`○`), `verified` (`●`),
+`key_changed` (`✕` — sending is blocked until re-verified via
+`/verify <sas>` with the new SAS).
+
+Status bar glyphs: `●` connected, `…` connecting, `○` offline.
 
 Layout for orientation: conversation list (activity-sorted, unread
-counts, verified glyph) | chat pane (timestamps, per-peer color,
+counts, trust glyph) | chat pane (timestamps, per-peer color,
 read-marker line, delivery ticks) | status bar | input bar.

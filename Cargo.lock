@@ -655,7 +655,6 @@ name = "cinder-core"
 version = "0.1.0"
 dependencies = [
  "age",
- "anyhow",
  "bincode",
  "bytes",
  "cinder-relay",

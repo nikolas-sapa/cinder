@@ -157,9 +157,8 @@ async fn cmd_id(cli: &Cli, qr: bool) -> Result<()> {
     let uri = match core.invite_link(24 * 3600).await {
         Ok((link, _)) => link,
         Err(_) => {
-            let host = core.relay_host().unwrap_or_default();
-            eprintln!("cinder id: relay unreachable; printing static URI (no rendezvous)");
-            core.identity().uri(&host, None)
+            eprintln!("cinder id: relay unreachable; printing static URI (no rendezvous, no relay)");
+            core.identity().uri_static()
         }
     };
     println!("{uri}");

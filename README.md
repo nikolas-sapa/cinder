@@ -1,8 +1,8 @@
 # cinder
 
 **E2E-encrypted chat your agents can drive.** A Noise-encrypted terminal
-messenger where the TUI and AI agents are equal clients of one typed
-JSON-RPC protocol — no bolted-on API, no privileged UI.
+messenger where the TUI and AI agents drive the same core — one typed
+JSON-RPC protocol, no bolted-on API, no privileged UI.
 
 > [!WARNING]
 > **Pre-1.0, not externally audited.** No formal security review has been
@@ -17,9 +17,10 @@ demo.tape` — regenerated in CI, never hand-edited.*
 
 ## Features
 
-- **Agent-first interface.** Everything — including the TUI — is a client
-  of a newline-delimited JSON-RPC 2.0 protocol (`cinder rpc` on stdio,
-  `cinder daemon` on a peer-credential-authenticated unix socket).
+- **Agent-first interface.** One typed JSON-RPC 2.0 protocol serves
+  everyone (`cinder rpc` on stdio, `cinder daemon` on a
+  peer-credential-authenticated unix socket); the TUI calls the same
+  `CinderCore` methods in-process — no bolted-on API, no privileged UI.
   `rpc.describe` returns the full method/event/error schema **pre-auth**,
   so an agent can connect and self-serve without reading docs.
 - **Real E2E crypto.** `Noise_XX_25519_ChaChaPoly_BLAKE2s` via `snow`. No
@@ -53,30 +54,37 @@ cargo install --locked --git https://github.com/nikolas-sapa/cinder cinder cinde
 ```
 
 The repo is a virtual workspace; the two package names select the
-binaries: `cinder` (client — `tui`, `rpc`, `daemon`, `id`, `add`) and
-`cinder-relay` (the hub). Stable toolchain; see `rust-toolchain.toml`.
+binaries: `cinder` (client — `tui`, `rpc`, `daemon`, `id`, `add`, plus a
+`relay` convenience subcommand) and `cinder-relay` (the hub). Stable
+toolchain; see `rust-toolchain.toml`.
 
 ## Quickstart
 
 ```sh
 # 1. Run a relay somewhere both parties can reach
-cinder-relay --listen 127.0.0.1:7000
+cinder-relay --listen 127.0.0.1:7000        # or: cinder relay --listen 127.0.0.1:7000
 
 # 2. Print your contact link + terminal QR (the URI embeds the relay your
 #    client is configured for). The rendezvous token makes the link
 #    single-use — mint a fresh one per invite.
-cinder id --qr
-# → cinder://oyv4kqz3n5m2w7j1h8g0f4d6s9a2b5c8e1x4v7u0@127.0.0.1:7000?rendezvous=tok_8fk2abc
+cinder --relay 127.0.0.1:7000 id --qr
+# → cinder://oyv4kqz3n5m2w7jhgfdc6sba2c5e2x4vu7u3i6km2nqrtwyzabcde@127.0.0.1:7000?rendezvous=k7vqx2mwzj4tnr6ybp3f5dgshjk
 
 # 3. The other party consumes it (or you consume theirs)
 cinder add 'cinder://<base32-pubkey>@<relay-host>[:<port>]?rendezvous=<token>'
 
 # 4. Chat
-cinder tui
+cinder tui        # bare `cinder` is the same
 ```
 
-A bare `cinder://<pubkey>@<relay-host>` (no token) is a *static address*:
-it sends a contact request the remote side must explicitly accept.
+Two caveats on links:
+
+- A bare `cinder://<pubkey>@<relay-host>` (no `?rendezvous=` token) is a
+  *static address*: it sends a contact request that lands `pending_in` on
+  the remote side until they accept it.
+- If the relay is unreachable, `cinder id` prints a hostless
+  `cinder://<pubkey>` — a key fingerprint, not a usable link. `cinder add`
+  needs the `@<relay-host>` part or the parse fails.
 
 ## Driving it from an agent
 
@@ -111,9 +119,31 @@ EOF
   `deduped:true`) and returns at **acceptance** — delivery progress
   arrives as `msg_state` events (`queued → sent → delivered` / `failed`;
   every accepted send resolves to a terminal state).
-- `cinder daemon` exposes the same protocol over a unix socket
-  (`SO_PEERCRED`/`getpeereid` auth, dir `0700`, socket `0600`,
-  multi-client). The TUI attaches exactly like an agent.
+- `cinder daemon` exposes the same protocol over a unix socket —
+  `$XDG_RUNTIME_DIR/cinder/daemon.sock` (fallback
+  `~/.local/state/cinder/daemon.sock`), `SO_PEERCRED`/`getpeereid` same-uid
+  auth, dir `0700`, socket `0600`, multi-client.
+- One identity = one live core. A second `cinder` process on the same
+  data-dir is rejected by the relay (`PeerIdInUse`, connection closed)
+  and never reaches `connected` — the daemon exists because concurrent
+  clients must share a core, not spawn one each. (Each `cinder` process
+  — `tui`, `rpc`, `daemon` — is its own core.)
+
+### Environment and identity
+
+| Knob | Meaning |
+|---|---|
+| `--data-dir` / `CINDER_DATA_DIR` | Identity, contacts, sqlite store location |
+| `--relay` / `CINDER_RELAY` | Relay `host[:port]` (default port 7000); falls back to the last address that connected |
+| `CINDER_IDENTITY=ephemeral` | Throwaway identity per process — no keyring/file touched. Dev-only: your peer-id changes every run |
+| `XDG_RUNTIME_DIR` | Daemon socket directory when set |
+
+Identity loads from the **OS keyring first**; without one (headless
+Linux, no Secret Service) it falls back to an age-encrypted file and
+prompts for the passphrase **on `/dev/tty`** — never stdin, so piped
+protocol frames stay clean. Truly TTY-less agents need either a working
+keyring or `CINDER_IDENTITY=ephemeral`; `rpassword` cannot prompt without
+a terminal.
 
 ### Methods at a glance
 
@@ -173,6 +203,17 @@ for line in rpc.stdout:                        # one frame per line
 
 Responses and notifications share stdout; correlate responses by `id`.
 
+### Inbound contact requests
+
+When someone adds you (rendezvous link or static address), their client
+completes the handshake immediately — but your side lands `pending_in`
+and emits a `contact.request` event for `contact.accept` /
+`contact.decline`. **The TUI currently has no accept/decline key or
+slash command** — requests are answered over `rpc`/`daemon` only. A
+`pending_in` contact can already message you and be messaged back (only
+`declined`/`blocked` peers are gated); the chat appears in the TUI list
+on next start.
+
 ## Keybindings
 
 The TUI is **input-always-focused** — typing goes to the input bar;
@@ -186,10 +227,13 @@ navigation happens through chords and slash commands. Full reference:
 | `C-g` | Fuzzy conversation switcher |
 | `M-k` | Compose in `$EDITOR` |
 | `PgUp` / `PgDn` | Scroll chat history |
-| `/help` `/add` `/verify` `/finger` `/clear` `/quit` | Slash commands |
+| `Esc` | Close overlay (no-op in main UI) |
+| `C-c` | Quit |
+| `/help` `/add` `/verify [sas]` `/finger` `/status` `/next` `/clear` `/quit` | Slash commands |
 
-Delivery ticks: `…` queued → `✓` sent → `✓✓` delivered. There are no read
-receipts — `delivered` is the furthest state, by design.
+Delivery ticks: `…` queued → `✓` sent → `✓✓` delivered, or `!` on
+terminal failure. There are no read receipts — `delivered` is the
+furthest state, by design.
 
 ## Threat model — the honest version
 

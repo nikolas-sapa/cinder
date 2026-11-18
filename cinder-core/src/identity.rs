@@ -108,6 +108,12 @@ impl Identity {
         s
     }
 
+    /// Hostless static form — printed when no relay is known so the output
+    /// is never a misleading `cinder://<key>@` with an empty host.
+    pub fn uri_static(&self) -> String {
+        format!("cinder://{}", b32_encode(&self.public()))
+    }
+
     pub fn parse_uri(s: &str) -> Result<([u8; 32], String, Option<InviteToken>), Error> {
         let rest = s
             .strip_prefix("cinder://")

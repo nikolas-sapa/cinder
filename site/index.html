@@ -48,7 +48,7 @@
 
     <div class="install mono" data-reveal>
       <span class="prompt" aria-hidden="true">$</span>
-      <code id="install-cmd">cargo install cinder</code>
+      <code id="install-cmd">cargo install --locked --git https://github.com/nikolas-sapa/cinder cinder cinder-relay</code>
       <button class="copy" id="copy-btn" aria-label="Copy install command">
         <svg class="ic-copy" viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="9" width="12" height="12" rx="2" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" fill="none" stroke="currentColor" stroke-width="1.6"/></svg>
         <svg class="ic-check" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 12.5l5 5L20 6.5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
@@ -98,10 +98,10 @@
                 <div class="msg in"><span class="ts">16:04</span><span class="who peer-a">eidolon</span><span class="body">copy that</span></div>
                 <div class="msg in"><span class="ts">16:07</span><span class="who peer-a">eidolon</span><span class="body">wheels up in ten</span></div>
               </div>
-              <div class="tui-input"><span class="caret">&rsaquo;</span> /finger eidolon<span class="cursor">&#9612;</span></div>
+              <div class="tui-input"><span class="caret">&rsaquo;</span> /finger<span class="cursor">&#9612;</span></div>
             </div>
           </div>
-          <div class="tui-status">noise_xx_25519_chachapoly_blake2s &middot; sas verified &middot; relay 127.0.0.1:7777 &middot; 3 contacts</div>
+          <div class="tui-status">noise_xx_25519_chachapoly_blake2s &middot; sas verified &middot; relay 127.0.0.1:7000 &middot; 3 contacts</div>
         </div>
         <img class="demo-gif" src="demo.gif" alt="Screen recording of a cinder terminal session: a sidebar lists contacts, the chat pane shows an encrypted conversation with delivery ticks, and an agent drives the same session over JSON-RPC." loading="lazy" onerror="this.remove()">
       </div>
@@ -168,7 +168,7 @@
         <h3><svg class="fi" viewBox="0 0 24 24" aria-hidden="true"><path d="M2.5 13l4 4L15 8.5" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/><path d="M9.5 14.5l4 4L22 10" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>SAS verification</h3>
         <p>Compare a 7-emoji short authentication string out-of-band and an
         invite-link MITM has nowhere to hide. If a key ever changes, sending
-        blocks loudly until you dismiss it. Never a silent rebind.</p>
+        blocks loudly until you re-verify the new key. Never a silent rebind.</p>
       </div>
       <div class="card" data-reveal>
         <h3><svg class="fi" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 13.5l2-7.5h14l2 7.5V18a1.5 1.5 0 0 1-1.5 1.5h-15A1.5 1.5 0 0 1 3 18v-4.5z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/><path d="M3 13.5h5l1.5 2.5h5L16 13.5h5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></svg>offline mailboxes</h3>
@@ -272,7 +272,7 @@
       <li data-reveal>
         <span class="step-n mono" aria-hidden="true">01</span>
         <div><h3>install</h3>
-        <p><code>cargo install cinder</code> — one static binary: TUI, agent RPC, daemon.</p></div>
+        <p><code>cargo install --locked --git https://github.com/nikolas-sapa/cinder cinder cinder-relay</code> — client plus relay.</p></div>
       </li>
       <li data-reveal>
         <span class="step-n mono" aria-hidden="true">02</span>
@@ -283,7 +283,8 @@
       <li data-reveal>
         <span class="step-n mono" aria-hidden="true">03</span>
         <div><h3>connect a contact</h3>
-        <p>They run <code>cinder add &lt;your-link&gt;</code>. The rendezvous token is
+        <p>They run <code>cinder add &lt;your-link&gt;</code>; you accept the contact
+        request over <code>cinder rpc</code> or the daemon. The rendezvous token is
         single-use; both sides land as <em>unverified</em> until you compare SAS.</p></div>
       </li>
       <li data-reveal>

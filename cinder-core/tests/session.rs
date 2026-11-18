@@ -202,9 +202,10 @@ fn initiator_wrong_pin_aborts_before_msg3() {
     b.accept_handshake(a.produce_handshake().unwrap()).unwrap();
     a.accept_handshake(b.produce_handshake().unwrap()).unwrap();
     match a.verify_peer_id(&c_id.peer_id()) {
-        Err(Error::PeerIdMismatch { expected, actual }) => {
+        Err(Error::PeerIdMismatch { expected, actual, actual_static }) => {
             assert_eq!(expected, c_id.peer_id());
             assert_eq!(actual, b_id.peer_id());
+            assert_eq!(actual_static, b_id.public());
         }
         other => panic!("expected PeerIdMismatch, got {other:?}"),
     }

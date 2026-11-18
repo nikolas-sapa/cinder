@@ -72,7 +72,11 @@ fn window_pagination_no_overlap() {
     let mut dedup_check = seen.clone();
     dedup_check.sort();
     dedup_check.dedup();
-    assert_eq!(dedup_check.len(), 500, "message appeared twice across pages");
+    assert_eq!(
+        dedup_check.len(),
+        500,
+        "message appeared twice across pages"
+    );
     assert_eq!(seen, expected, "newest-first order");
 }
 
@@ -189,9 +193,7 @@ fn event_log_bounded_replay_with_gap() {
     assert_eq!(page.events.first().unwrap().seq, oldest);
     assert_eq!(page.events.last().unwrap().seq, latest);
     assert!(
-        page.events
-            .windows(2)
-            .all(|w| w[1].seq == w[0].seq + 1),
+        page.events.windows(2).all(|w| w[1].seq == w[0].seq + 1),
         "replayed seqs must be contiguous"
     );
 
@@ -232,9 +234,7 @@ fn encryption_at_rest_and_reopen() {
         }
         let bytes = std::fs::read(&p).unwrap();
         assert!(
-            !bytes
-                .windows(needle.len())
-                .any(|w| w == needle.as_bytes()),
+            !bytes.windows(needle.len()).any(|w| w == needle.as_bytes()),
             "plaintext needle found in {name}"
         );
     }
@@ -351,8 +351,14 @@ fn fts_search() {
     let dir = TempDir::new().unwrap();
     let s = open(&dir);
     s.upsert_chat("chat:a", &PEER, None, false).unwrap();
-    s.insert_message(&msg("msg:1", "chat:a", Dir::In, "rendezvous at the port", 1000))
-        .unwrap();
+    s.insert_message(&msg(
+        "msg:1",
+        "chat:a",
+        Dir::In,
+        "rendezvous at the port",
+        1000,
+    ))
+    .unwrap();
     s.insert_message(&msg("msg:2", "chat:a", Dir::In, "unrelated text", 2000))
         .unwrap();
     s.insert_message(&msg("msg:3", "chat:a", Dir::In, "rendezvous moved", 3000))
@@ -361,11 +367,10 @@ fn fts_search() {
     let hits = s.search("rendezvous", Some("chat:a"), 10).unwrap();
     assert_eq!(hits.len(), 2);
     assert_eq!(hits[0].msg_id, "msg:3", "newest first");
-    assert!(
-        s.search("rendezvous", None, 10)
-            .unwrap()
-            .iter()
-            .all(|m| m.chat_id == "chat:a")
-    );
+    assert!(s
+        .search("rendezvous", None, 10)
+        .unwrap()
+        .iter()
+        .all(|m| m.chat_id == "chat:a"));
     assert!(s.search("nonexistent", None, 10).unwrap().is_empty());
 }

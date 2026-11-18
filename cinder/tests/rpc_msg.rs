@@ -22,7 +22,11 @@ async fn p4_client_msg_id_idempotent() {
     assert_eq!(r2["msg_id"], r1["msg_id"]);
     assert_eq!(r2["chat_id"], r1["chat_id"]);
     assert_eq!(r2["deduped"], true);
-    assert_eq!(h.core.sends.lock().unwrap().len(), 1, "deduped retry must not re-enqueue");
+    assert_eq!(
+        h.core.sends.lock().unwrap().len(),
+        1,
+        "deduped retry must not re-enqueue"
+    );
 
     // a different key is a new send
     let r3 = call(&mut h, 12, "msg.send", json!({"to": "contact:9f3b12", "body": "rendezvous at the old port, 0400", "client_msg_id": "agent-0002"})).await;
@@ -45,7 +49,12 @@ async fn dedup_survives_reconnect() {
     let core = h.core.clone();
     drop(h.sess);
     let (sess2, rx2) = engine.connect(Transport::Stdio);
-    let mut h2 = Harness { engine, core, sess: sess2, rx: rx2 };
+    let mut h2 = Harness {
+        engine,
+        core,
+        sess: sess2,
+        rx: rx2,
+    };
     hello(&mut h2).await;
     let r2 = call(&mut h2, 1, "msg.send", p).await;
     assert_eq!(r2["msg_id"], r1["msg_id"]);
@@ -58,15 +67,33 @@ async fn dedup_survives_reconnect() {
 async fn dedup_conflict_on_different_payload() {
     let mut h = harness();
     hello(&mut h).await;
-    call(&mut h, 1, "msg.send", json!({"to": "contact:9f3b12", "body": "first", "client_msg_id": "dup"})).await;
+    call(
+        &mut h,
+        1,
+        "msg.send",
+        json!({"to": "contact:9f3b12", "body": "first", "client_msg_id": "dup"}),
+    )
+    .await;
 
-    let e = call_err(&mut h, 2, "msg.send", json!({"to": "contact:9f3b12", "body": "DIFFERENT", "client_msg_id": "dup"})).await;
+    let e = call_err(
+        &mut h,
+        2,
+        "msg.send",
+        json!({"to": "contact:9f3b12", "body": "DIFFERENT", "client_msg_id": "dup"}),
+    )
+    .await;
     assert_eq!(e["code"], -32018);
     assert_eq!(e["data"]["kind"], "conflict");
     assert_eq!(e["data"]["retryable"], false);
     assert_eq!(h.core.sends.lock().unwrap().len(), 1);
 
-    let e = call_err(&mut h, 3, "msg.send", json!({"to": "chat:other99", "body": "first", "client_msg_id": "dup"})).await;
+    let e = call_err(
+        &mut h,
+        3,
+        "msg.send",
+        json!({"to": "chat:other99", "body": "first", "client_msg_id": "dup"}),
+    )
+    .await;
     assert_eq!(e["code"], -32018);
     assert_eq!(h.core.sends.lock().unwrap().len(), 1);
 }
@@ -76,11 +103,29 @@ async fn dedup_conflict_on_different_payload() {
 async fn dedup_only_on_acceptance() {
     let mut h = harness();
     hello(&mut h).await;
-    h.core.fail("msg.send", common::rpc::protocol::RpcError::new(common::rpc::protocol::ErrorKind::PeerOffline, "no mailbox path"));
-    let e = call_err(&mut h, 1, "msg.send", json!({"to": "contact:x", "body": "b", "client_msg_id": "k9"})).await;
+    h.core.fail(
+        "msg.send",
+        common::rpc::protocol::RpcError::new(
+            common::rpc::protocol::ErrorKind::PeerOffline,
+            "no mailbox path",
+        ),
+    );
+    let e = call_err(
+        &mut h,
+        1,
+        "msg.send",
+        json!({"to": "contact:x", "body": "b", "client_msg_id": "k9"}),
+    )
+    .await;
     assert_eq!(e["code"], -32011);
 
-    let r = call(&mut h, 2, "msg.send", json!({"to": "contact:x", "body": "b", "client_msg_id": "k9"})).await;
+    let r = call(
+        &mut h,
+        2,
+        "msg.send",
+        json!({"to": "contact:x", "body": "b", "client_msg_id": "k9"}),
+    )
+    .await;
     assert_eq!(r["deduped"], false);
     assert_eq!(h.core.sends.lock().unwrap().len(), 1);
 }
@@ -94,12 +139,36 @@ async fn dedup_table_bounded() {
     let mut h = harness_with(cfg);
     hello(&mut h).await;
 
-    let r1 = call(&mut h, 1, "msg.send", json!({"to": "chat:x", "body": "1", "client_msg_id": "k1"})).await;
-    call(&mut h, 2, "msg.send", json!({"to": "chat:x", "body": "2", "client_msg_id": "k2"})).await;
-    call(&mut h, 3, "msg.send", json!({"to": "chat:x", "body": "3", "client_msg_id": "k3"})).await;
+    let r1 = call(
+        &mut h,
+        1,
+        "msg.send",
+        json!({"to": "chat:x", "body": "1", "client_msg_id": "k1"}),
+    )
+    .await;
+    call(
+        &mut h,
+        2,
+        "msg.send",
+        json!({"to": "chat:x", "body": "2", "client_msg_id": "k2"}),
+    )
+    .await;
+    call(
+        &mut h,
+        3,
+        "msg.send",
+        json!({"to": "chat:x", "body": "3", "client_msg_id": "k3"}),
+    )
+    .await;
 
     // k1 evicted: a retry is treated as a fresh send
-    let r = call(&mut h, 4, "msg.send", json!({"to": "chat:x", "body": "1", "client_msg_id": "k1"})).await;
+    let r = call(
+        &mut h,
+        4,
+        "msg.send",
+        json!({"to": "chat:x", "body": "1", "client_msg_id": "k1"}),
+    )
+    .await;
     assert_eq!(r["deduped"], false);
     assert_ne!(r["msg_id"], r1["msg_id"]);
     assert_eq!(h.core.sends.lock().unwrap().len(), 4);
@@ -112,9 +181,21 @@ async fn dedup_ttl_expiry() {
     cfg.dedup_ttl = Duration::from_millis(20);
     let mut h = harness_with(cfg);
     hello(&mut h).await;
-    call(&mut h, 1, "msg.send", json!({"to": "chat:x", "body": "b", "client_msg_id": "ttl"})).await;
+    call(
+        &mut h,
+        1,
+        "msg.send",
+        json!({"to": "chat:x", "body": "b", "client_msg_id": "ttl"}),
+    )
+    .await;
     tokio::time::sleep(Duration::from_millis(40)).await;
-    let r = call(&mut h, 2, "msg.send", json!({"to": "chat:x", "body": "b", "client_msg_id": "ttl"})).await;
+    let r = call(
+        &mut h,
+        2,
+        "msg.send",
+        json!({"to": "chat:x", "body": "b", "client_msg_id": "ttl"}),
+    )
+    .await;
     assert_eq!(r["deduped"], false);
     assert_eq!(h.core.sends.lock().unwrap().len(), 2);
 }
@@ -125,12 +206,30 @@ async fn client_op_id_dedup() {
     let mut h = harness();
     hello(&mut h).await;
 
-    let r1 = call(&mut h, 1, "msg.edit", json!({"msg_id": "msg:e1", "body": "v2", "client_op_id": "op-1"})).await;
-    let r2 = call(&mut h, 2, "msg.edit", json!({"msg_id": "msg:e1", "body": "v2", "client_op_id": "op-1"})).await;
+    let r1 = call(
+        &mut h,
+        1,
+        "msg.edit",
+        json!({"msg_id": "msg:e1", "body": "v2", "client_op_id": "op-1"}),
+    )
+    .await;
+    let r2 = call(
+        &mut h,
+        2,
+        "msg.edit",
+        json!({"msg_id": "msg:e1", "body": "v2", "client_op_id": "op-1"}),
+    )
+    .await;
     assert_eq!(r1, r2, "op replay returns the stored result");
     assert_eq!(h.core.edits.lock().unwrap().len(), 1);
 
-    let e = call_err(&mut h, 3, "msg.edit", json!({"msg_id": "msg:e1", "body": "v3", "client_op_id": "op-1"})).await;
+    let e = call_err(
+        &mut h,
+        3,
+        "msg.edit",
+        json!({"msg_id": "msg:e1", "body": "v3", "client_op_id": "op-1"}),
+    )
+    .await;
     assert_eq!(e["code"], -32018);
     assert_eq!(h.core.edits.lock().unwrap().len(), 1);
 }
@@ -140,10 +239,22 @@ async fn client_op_id_dedup() {
 async fn send_accepts_and_core_events_flow() {
     let mut h = harness();
     hello(&mut h).await;
-    let r = call(&mut h, 1, "events.subscribe", json!({"kinds": ["msg_state"]})).await;
+    let r = call(
+        &mut h,
+        1,
+        "events.subscribe",
+        json!({"kinds": ["msg_state"]}),
+    )
+    .await;
     let _backlog = frame(&mut h.rx).await; // session.backlog marker first
 
-    let r = call(&mut h, 2, "msg.send", json!({"to": "contact:9f3b12", "body": "hi", "client_msg_id": "cm-7"})).await;
+    let r = call(
+        &mut h,
+        2,
+        "msg.send",
+        json!({"to": "contact:9f3b12", "body": "hi", "client_msg_id": "cm-7"}),
+    )
+    .await;
     let msg_id = r["msg_id"].clone();
 
     h.core.emit("msg_state", Some(CHAT), json!({"msg_id": msg_id, "client_msg_id": "cm-7", "chat_id": CHAT, "state": "delivered", "reason": null}));

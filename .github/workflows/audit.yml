@@ -25,6 +25,8 @@ jobs:
       - uses: actions/checkout@v4
       # Reads .cargo/audit.toml for ignores (policy: zero ignores).
       - uses: rustsec/audit-check@v2
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
 
   deny-advisories:
     name: cargo deny check advisories

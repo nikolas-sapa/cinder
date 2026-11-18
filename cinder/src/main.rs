@@ -1,8 +1,8 @@
 #![deny(unsafe_code)]
 
+mod core;
 #[allow(unsafe_code)]
 mod hardening;
-mod core;
 mod rpc;
 mod store;
 mod tui;
@@ -164,7 +164,9 @@ async fn cmd_id(cli: &Cli, qr: bool) -> Result<()> {
     let uri = match core.invite_link(24 * 3600).await {
         Ok((link, _)) => link,
         Err(_) => {
-            eprintln!("cinder id: relay unreachable; printing static URI (no rendezvous, no relay)");
+            eprintln!(
+                "cinder id: relay unreachable; printing static URI (no rendezvous, no relay)"
+            );
             core.identity().uri_static()
         }
     };
@@ -198,11 +200,13 @@ async fn cmd_add(cli: &Cli, uri: &str) -> Result<()> {
     if !core.wait_connected(CONNECT_WAIT).await {
         anyhow::bail!("relay {addr} unreachable");
     }
-    let peer = core
-        .clone()
-        .start_add(uri, None)
-        .await
-        .map_err(|e| anyhow!("{}: {}", e.kind.as_str(), e.hint.as_deref().unwrap_or(&e.message)))?;
+    let peer = core.clone().start_add(uri, None).await.map_err(|e| {
+        anyhow!(
+            "{}: {}",
+            e.kind.as_str(),
+            e.hint.as_deref().unwrap_or(&e.message)
+        )
+    })?;
     if core.wait_meta(&peer, MetaState::Active, ADD_WAIT).await {
         println!("connected {}", contact_str(&peer));
         core.begin_shutdown();
@@ -229,7 +233,10 @@ async fn cmd_rpc(cli: &Cli) -> Result<()> {
 async fn cmd_daemon(cli: &Cli) -> Result<()> {
     let (core, _dir) = open_core(cli, None).await?;
     let engine = build_engine(&core).await?;
-    eprintln!("cinder daemon on {}", DaemonConfig::default().socket_path.display());
+    eprintln!(
+        "cinder daemon on {}",
+        DaemonConfig::default().socket_path.display()
+    );
     run_daemon(engine, DaemonConfig::default()).await?;
     core.begin_shutdown();
     Ok(())

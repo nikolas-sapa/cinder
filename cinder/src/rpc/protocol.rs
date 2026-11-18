@@ -78,7 +78,11 @@ impl ErrorKind {
     pub fn retryable(self) -> bool {
         matches!(
             self,
-            Self::Internal | Self::NotConnected | Self::PeerOffline | Self::MailboxFull | Self::RateLimited
+            Self::Internal
+                | Self::NotConnected
+                | Self::PeerOffline
+                | Self::MailboxFull
+                | Self::RateLimited
         )
     }
 
@@ -131,7 +135,9 @@ impl RpcError {
     }
 
     pub fn with_extra(mut self, key: &str, value: Value) -> Self {
-        self.extra.get_or_insert_with(Map::new).insert(key.to_string(), value);
+        self.extra
+            .get_or_insert_with(Map::new)
+            .insert(key.to_string(), value);
         self
     }
 
@@ -182,7 +188,10 @@ impl RpcError {
     }
 
     pub fn unimplemented() -> Self {
-        let mut e = Self::new(ErrorKind::Unimplemented, "method reserved but not implemented in this build");
+        let mut e = Self::new(
+            ErrorKind::Unimplemented,
+            "method reserved but not implemented in this build",
+        );
         e.message = "Method not implemented".into();
         e
     }
@@ -205,7 +214,13 @@ impl RpcError {
 
 impl std::fmt::Display for RpcError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "rpc error {} ({}): {}", self.code, self.kind.as_str(), self.message)
+        write!(
+            f,
+            "rpc error {} ({}): {}",
+            self.code,
+            self.kind.as_str(),
+            self.message
+        )
     }
 }
 

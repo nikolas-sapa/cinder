@@ -46,7 +46,10 @@ pub fn peer_uid(stream: &tokio::net::UnixStream) -> io::Result<Uid> {
 
 #[cfg(not(any(target_os = "macos", target_os = "linux")))]
 pub fn peer_uid(_stream: &tokio::net::UnixStream) -> io::Result<Uid> {
-    Err(io::Error::new(io::ErrorKind::Unsupported, "peer credentials unavailable on this platform"))
+    Err(io::Error::new(
+        io::ErrorKind::Unsupported,
+        "peer credentials unavailable on this platform",
+    ))
 }
 
 #[cfg(unix)]

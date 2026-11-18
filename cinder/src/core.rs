@@ -148,14 +148,30 @@ fn token_hash(t: &Token) -> TokenHash {
 /// outer `Transport` frame.
 #[derive(Debug, Serialize, Deserialize)]
 pub(crate) enum AppMsg {
-    Text { msg_id: String, body: String },
-    Edit { msg_id: String, body: String },
-    Delete { msg_id: String },
-    React { msg_id: String, emoji: Option<String> },
+    Text {
+        msg_id: String,
+        body: String,
+    },
+    Edit {
+        msg_id: String,
+        body: String,
+    },
+    Delete {
+        msg_id: String,
+    },
+    React {
+        msg_id: String,
+        emoji: Option<String>,
+    },
     /// Mailbox capability grant (§8): our mailbox + raw deposit token.
-    Grant { mailbox_id: [u8; 32], deposit_token: [u8; 32] },
+    Grant {
+        mailbox_id: [u8; 32],
+        deposit_token: [u8; 32],
+    },
     /// In-band delivery acknowledgment (§11): flips sent->delivered.
-    Ack { msg_ids: Vec<String> },
+    Ack {
+        msg_ids: Vec<String>,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -330,7 +346,12 @@ impl LinkHub {
     /// Fail every in-flight handshake waiter and request slot with `ev`.
     /// Used when the link dies or the relay reports a connection-fatal code.
     fn fail_all(&self, ev: &ClientEvent) {
-        for tx in self.hs_waiters.lock().unwrap_or_else(|e| e.into_inner()).values() {
+        for tx in self
+            .hs_waiters
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .values()
+        {
             let _ = tx.try_send(ev.clone());
         }
         let mut reqs = self.reqs.lock().unwrap_or_else(|e| e.into_inner());
@@ -381,7 +402,10 @@ impl DemuxLink {
     }
 
     fn register(&mut self, hs_id: HsId) {
-        self.waiters.lock().unwrap_or_else(|e| e.into_inner()).insert(hs_id, self.me.clone());
+        self.waiters
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(hs_id, self.me.clone());
         self.registered.push(hs_id);
     }
 }
@@ -440,9 +464,9 @@ impl Link for DemuxLink {
 
     async fn recv(&mut self) -> std::result::Result<ClientEvent, NetErr> {
         match self.rx.recv().await {
-            Some(ClientEvent::Error { code, detail }) => Err(NetErr::Protocol(format!(
-                "relay error {code:?}: {detail}"
-            ))),
+            Some(ClientEvent::Error { code, detail }) => {
+                Err(NetErr::Protocol(format!("relay error {code:?}: {detail}")))
+            }
             Some(ev) => Ok(ev),
             None => Err(link_down()),
         }
@@ -495,8 +519,7 @@ impl Core {
         let (store, contacts) = tokio::task::spawn_blocking(move || {
             let sec = secret.expose_secret();
             let store = Store::open(&dir, sec).map_err(|e| anyhow!("store: {e}"))?;
-            let contacts =
-                ContactStore::open(&dir, sec).map_err(|e| anyhow!("contacts: {e}"))?;
+            let contacts = ContactStore::open(&dir, sec).map_err(|e| anyhow!("contacts: {e}"))?;
             Ok::<_, anyhow::Error>((store, contacts))
         })
         .await??;
@@ -508,9 +531,7 @@ impl Core {
                 s.meta(META_KEY)
                     .ok()
                     .flatten()
-                    .and_then(|raw| {
-                        serde_json::from_str::<HashMap<String, ContactMeta>>(&raw).ok()
-                    })
+                    .and_then(|raw| serde_json::from_str::<HashMap<String, ContactMeta>>(&raw).ok())
                     .unwrap_or_default()
                     .into_iter()
                     .filter_map(|(k, v)| b32_decode_32(&k).map(|b| (PeerId::from_bytes(b), v)))
@@ -627,7 +648,10 @@ impl Core {
     }
 
     pub fn relay_host(&self) -> Option<String> {
-        self.relay_host.lock().unwrap_or_else(|e| e.into_inner()).clone()
+        self.relay_host
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
     }
 
     pub fn conn_state(&self) -> tb::ConnState {
@@ -684,10 +708,7 @@ impl Core {
 
     #[cfg(test)]
     pub fn test_substate(&self, peer: &PeerId) -> Option<String> {
-        self.sh()
-            .meta
-            .get(peer)
-            .and_then(|m| m.substate.clone())
+        self.sh().meta.get(peer).and_then(|m| m.substate.clone())
     }
 
     #[cfg(test)]
@@ -724,7 +745,11 @@ impl Core {
 
     #[cfg(test)]
     pub fn test_pending_len(&self, peer: &PeerId) -> usize {
-        self.sh().pending_out.get(peer).map(|q| q.len()).unwrap_or(0)
+        self.sh()
+            .pending_out
+            .get(peer)
+            .map(|q| q.len())
+            .unwrap_or(0)
     }
 
     #[cfg(test)]
@@ -736,7 +761,12 @@ impl Core {
         if let Some(ev) = ui_event(kind, &payload) {
             let _ = self.ui_tx.send(ev);
         }
-        if let Some(s) = self.event_sink.read().unwrap_or_else(|e| e.into_inner()).clone() {
+        if let Some(s) = self
+            .event_sink
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+        {
             s.emit(kind, chat_id, payload);
         }
     }
@@ -858,7 +888,13 @@ impl Core {
     }
 
     async fn pump(self: &Arc<Self>, mut link: RelayTransport) {
-        let mut cmd_rx = match self.link.cmd_rx.lock().unwrap_or_else(|e| e.into_inner()).take() {
+        let mut cmd_rx = match self
+            .link
+            .cmd_rx
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .take()
+        {
             Some(rx) => rx,
             None => return,
         };
@@ -885,23 +921,31 @@ impl Core {
                 }
             }
         }
-        self.link.cmd_rx.lock().unwrap_or_else(|e| e.into_inner()).replace(cmd_rx);
+        self.link
+            .cmd_rx
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .replace(cmd_rx);
     }
 
     async fn route(self: &Arc<Self>, ev: ClientEvent) {
         match ev {
             ClientEvent::Handshake { from, hs_id, body } => {
                 let body = normalize_handshake(body);
-                let waiter = self.link.hs_waiters.lock().unwrap_or_else(|e| e.into_inner()).get(&hs_id).cloned();
+                let waiter = self
+                    .link
+                    .hs_waiters
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .get(&hs_id)
+                    .cloned();
                 if let Some(tx) = waiter {
-                    let _ = tx
-                        .send(ClientEvent::Handshake { from, hs_id, body })
-                        .await;
+                    let _ = tx.send(ClientEvent::Handshake { from, hs_id, body }).await;
                 } else if matches!(body, HandshakeMsg::Msg1(_)) {
-                    let _ = self
-                        .link
-                        .inbound_tx
-                        .try_send(ClientEvent::Handshake { from, hs_id, body });
+                    let _ =
+                        self.link
+                            .inbound_tx
+                            .try_send(ClientEvent::Handshake { from, hs_id, body });
                 }
             }
             ClientEvent::Transport {
@@ -910,32 +954,70 @@ impl Core {
                 body,
             } => self.handle_transport(from, session_id, body).await,
             ClientEvent::InviteCreated { .. } => {
-                if let Some(tx) = self.link.reqs.lock().unwrap_or_else(|e| e.into_inner()).invite.take() {
+                if let Some(tx) = self
+                    .link
+                    .reqs
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .invite
+                    .take()
+                {
                     let _ = tx.send(ev);
                 }
             }
             ClientEvent::MailboxOpened { .. } => {
-                if let Some(tx) = self.link.reqs.lock().unwrap_or_else(|e| e.into_inner()).mbox_open.take() {
+                if let Some(tx) = self
+                    .link
+                    .reqs
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .mbox_open
+                    .take()
+                {
                     let _ = tx.send(ev);
                 }
             }
             ClientEvent::MailboxDeposited { .. } => {
-                if let Some(tx) = self.link.reqs.lock().unwrap_or_else(|e| e.into_inner()).deposit.take() {
+                if let Some(tx) = self
+                    .link
+                    .reqs
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .deposit
+                    .take()
+                {
                     let _ = tx.send(ev);
                 }
             }
             ClientEvent::MailboxMessages { more, .. } => {
-                let tx = self.link.reqs.lock().unwrap_or_else(|e| e.into_inner()).fetch.clone();
+                let tx = self
+                    .link
+                    .reqs
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .fetch
+                    .clone();
                 if let Some(tx) = tx {
                     let done = !more;
                     let _ = tx.send(ev).await;
                     if done {
-                        self.link.reqs.lock().unwrap_or_else(|e| e.into_inner()).fetch = None;
+                        self.link
+                            .reqs
+                            .lock()
+                            .unwrap_or_else(|e| e.into_inner())
+                            .fetch = None;
                     }
                 }
             }
             ClientEvent::Ok => {
-                if let Some(tx) = self.link.reqs.lock().unwrap_or_else(|e| e.into_inner()).ok.take() {
+                if let Some(tx) = self
+                    .link
+                    .reqs
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .ok
+                    .take()
+                {
                     let _ = tx.send(ev);
                 }
             }
@@ -1130,9 +1212,7 @@ impl Core {
             .await
             .map_err(|_| anyhow!("relay link down"))?;
         match tokio::time::timeout(REQ_TIMEOUT, rx).await {
-            Ok(Ok(ClientEvent::Error { code, detail })) => {
-                Err(RelayError(code, detail).into())
-            }
+            Ok(Ok(ClientEvent::Error { code, detail })) => Err(RelayError(code, detail).into()),
             Ok(Ok(ev)) => Ok(ev),
             _ => Err(anyhow!("relay request failed")),
         }
@@ -1199,7 +1279,7 @@ impl Core {
         let mbox = self
             .shared
             .lock()
-                    .unwrap_or_else(|e| e.into_inner())
+            .unwrap_or_else(|e| e.into_inner())
             .own_mailbox
             .as_ref()
             .map(|m| (m.id, m.fetch_token));
@@ -1213,7 +1293,11 @@ impl Core {
         {
             let _g = self.op_lock.lock().await;
             let (tx, mut rx) = mpsc::channel(8);
-            self.link.reqs.lock().unwrap_or_else(|e| e.into_inner()).fetch = Some(tx);
+            self.link
+                .reqs
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .fetch = Some(tx);
             if self
                 .link
                 .cmd_tx
@@ -1225,7 +1309,11 @@ impl Core {
                 .await
                 .is_err()
             {
-                self.link.reqs.lock().unwrap_or_else(|e| e.into_inner()).fetch = None;
+                self.link
+                    .reqs
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .fetch = None;
                 return Err(anyhow!("link down"));
             }
             loop {
@@ -1260,7 +1348,11 @@ impl Core {
             }
             // Release the fetch slot on every exit path so a later relay
             // Error can't be routed to a dead channel.
-            self.link.reqs.lock().unwrap_or_else(|e| e.into_inner()).fetch = None;
+            self.link
+                .reqs
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .fetch = None;
         }
         if !ack_ids.is_empty() {
             let _ = self
@@ -1281,7 +1373,7 @@ impl Core {
         let peers: Vec<PeerId> = self
             .shared
             .lock()
-                    .unwrap_or_else(|e| e.into_inner())
+            .unwrap_or_else(|e| e.into_inner())
             .meta
             .iter()
             .filter(|(_, m)| m.state == MetaState::Active)
@@ -1310,7 +1402,12 @@ impl Core {
             // The replaced session's inbound id is dead: tombstone it so
             // late-arriving old-generation frames drop instead of binding
             // (and fatally failing) against the new session.
-            if let Some(rs) = old.remote_sid.lock().unwrap_or_else(|e| e.into_inner()).take() {
+            if let Some(rs) = old
+                .remote_sid
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .take()
+            {
                 sh.sid_index.remove(&rs);
                 Self::tombstone(&mut sh, rs);
             }
@@ -1334,7 +1431,12 @@ impl Core {
     fn drop_session(&self, peer: &PeerId) {
         let mut sh = self.sh();
         if let Some(ps) = sh.sessions.remove(peer) {
-            if let Some(rs) = ps.remote_sid.lock().unwrap_or_else(|e| e.into_inner()).take() {
+            if let Some(rs) = ps
+                .remote_sid
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .take()
+            {
                 sh.sid_index.remove(&rs);
                 Self::tombstone(&mut sh, rs);
             }
@@ -1348,13 +1450,23 @@ impl Core {
         let closed = sh
             .sessions
             .get(peer)
-            .map(|ps| ps.session.lock().unwrap_or_else(|e| e.into_inner()).is_closed())
+            .map(|ps| {
+                ps.session
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .is_closed()
+            })
             .unwrap_or(false);
         if !closed {
             return sh.sessions.get(peer).cloned();
         }
         if let Some(ps) = sh.sessions.remove(peer) {
-            if let Some(rs) = ps.remote_sid.lock().unwrap_or_else(|e| e.into_inner()).take() {
+            if let Some(rs) = ps
+                .remote_sid
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .take()
+            {
                 sh.sid_index.remove(&rs);
                 Self::tombstone(&mut sh, rs);
             }
@@ -1365,7 +1477,7 @@ impl Core {
     fn send_lock(&self, peer: &PeerId) -> Arc<tokio::sync::Mutex<()>> {
         self.send_locks
             .lock()
-                    .unwrap_or_else(|e| e.into_inner())
+            .unwrap_or_else(|e| e.into_inner())
             .entry(*peer)
             .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(())))
             .clone()
@@ -1502,7 +1614,7 @@ impl Core {
         let our_grant = self
             .shared
             .lock()
-                    .unwrap_or_else(|e| e.into_inner())
+            .unwrap_or_else(|e| e.into_inner())
             .own_mailbox
             .as_ref()
             .map(|m| (*m.id.as_bytes(), *m.deposit_token.as_bytes()));
@@ -1690,7 +1802,7 @@ impl Core {
         let grant = {
             self.shared
                 .lock()
-                    .unwrap_or_else(|e| e.into_inner())
+                .unwrap_or_else(|e| e.into_inner())
                 .meta
                 .get(&peer)
                 .and_then(|m| m.grant.clone())
@@ -1835,8 +1947,7 @@ impl Core {
 
     async fn outbound_handshake(self: &Arc<Self>, peer: PeerId, invite: Option<InviteToken>) {
         let mut dl = DemuxLink::new(self.link.cmd_tx.clone(), self.link.hs_waiters.clone());
-        let result =
-            handshake_flow::initiator(&self.identity, &mut dl, peer, &peer, invite).await;
+        let result = handshake_flow::initiator(&self.identity, &mut dl, peer, &peer, invite).await;
         self.sh().hs_inflight.remove(&peer);
         match result {
             Ok(session) => {
@@ -1917,8 +2028,7 @@ impl Core {
                 sh.meta
                     .get(&p)
                     .map(|m| {
-                        let retry_due =
-                            m.retry_after_ms.map(|t| t <= now_ms()).unwrap_or(false);
+                        let retry_due = m.retry_after_ms.map(|t| t <= now_ms()).unwrap_or(false);
                         let queued = sh
                             .pending_out
                             .get(&p)
@@ -1979,11 +2089,13 @@ impl Core {
         let mut dl = DemuxLink::new(self.link.cmd_tx.clone(), self.link.hs_waiters.clone());
         dl.seed(first);
         let contacts = self.contacts.clone();
-        let result = handshake_flow::responder(
-            &self.identity,
-            &mut dl,
-            move |learned: &PeerId| contacts.lock().unwrap_or_else(|e| e.into_inner()).get(learned).map(|_| *learned),
-        )
+        let result = handshake_flow::responder(&self.identity, &mut dl, move |learned: &PeerId| {
+            contacts
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .get(learned)
+                .map(|_| *learned)
+        })
         .await;
         match result {
             Ok(session) => {
@@ -2022,8 +2134,15 @@ impl Core {
                     .sessions
                     .get(&from)
                     .map(|ps| {
-                        !ps.session.lock().unwrap_or_else(|e| e.into_inner()).is_closed()
-                            && ps.remote_sid.lock().unwrap_or_else(|e| e.into_inner()).is_none()
+                        !ps.session
+                            .lock()
+                            .unwrap_or_else(|e| e.into_inner())
+                            .is_closed()
+                            && ps
+                                .remote_sid
+                                .lock()
+                                .unwrap_or_else(|e| e.into_inner())
+                                .is_none()
                     })
                     .unwrap_or(false);
                 if unbound_live && sh.meta.contains_key(&from) {
@@ -2072,7 +2191,12 @@ impl Core {
                         return;
                     }
                     Some(ps) => {
-                        if ps.remote_sid.lock().unwrap_or_else(|e| e.into_inner()).is_some() {
+                        if ps
+                            .remote_sid
+                            .lock()
+                            .unwrap_or_else(|e| e.into_inner())
+                            .is_some()
+                        {
                             // Bound to a different sid. Two cases: a stale
                             // superseded stream (tombstone + drop), or a frame
                             // from a handshake that COMPLETED peer-side while
@@ -2276,10 +2400,7 @@ impl Core {
                     })
                     .await;
                 if r.is_ok() {
-                    if let Ok(Some(m)) = self
-                        .sblk(move |s| s.get_message(&msg_id))
-                        .await
-                    {
+                    if let Ok(Some(m)) = self.sblk(move |s| s.get_message(&msg_id)).await {
                         self.emit(
                             "message.received",
                             Some(&m.chat_id),
@@ -2300,10 +2421,7 @@ impl Core {
                     })
                     .await;
                 if r.is_ok() {
-                    if let Ok(Some(m)) = self
-                        .sblk(move |s| s.get_message(&msg_id))
-                        .await
-                    {
+                    if let Ok(Some(m)) = self.sblk(move |s| s.get_message(&msg_id)).await {
                         self.emit(
                             "message.received",
                             Some(&m.chat_id),
@@ -2338,10 +2456,7 @@ impl Core {
                             .await;
                     }
                 }
-                if let Ok(Some(m)) = self
-                    .sblk(move |s| s.get_message(&msg_id))
-                    .await
-                {
+                if let Ok(Some(m)) = self.sblk(move |s| s.get_message(&msg_id)).await {
                     self.emit(
                         "message.received",
                         Some(&m.chat_id),
@@ -2388,9 +2503,9 @@ impl Core {
     }
 
     fn peer_of_contact_id(&self, contact_id: &str) -> Result<PeerId, RpcError> {
-        let rest = contact_id.strip_prefix("contact:").ok_or_else(|| {
-            RpcError::new(ErrorKind::InvalidParams, "expected a contact: id")
-        })?;
+        let rest = contact_id
+            .strip_prefix("contact:")
+            .ok_or_else(|| RpcError::new(ErrorKind::InvalidParams, "expected a contact: id"))?;
         let bytes = b32_decode_32(rest)
             .ok_or_else(|| RpcError::new(ErrorKind::InvalidParams, "malformed contact_id"))?;
         Ok(PeerId::from_bytes(bytes))
@@ -2434,17 +2549,18 @@ impl Core {
         let (live, offline_gate) = {
             let sh = self.sh();
             let known_offline = sh.presence.get(&peer).map(|o| !*o).unwrap_or(false);
-            let has_grant = sh
-                .meta
-                .get(&peer)
-                .and_then(|m| m.grant.as_ref())
-                .is_some();
+            let has_grant = sh.meta.get(&peer).and_then(|m| m.grant.as_ref()).is_some();
             // Inlined from `session()`: `shared` is already locked here —
             // re-locking a std::sync::Mutex on the same thread deadlocks.
             let live = sh
                 .sessions
                 .get(&peer)
-                .map(|ps| !ps.session.lock().unwrap_or_else(|e| e.into_inner()).is_closed())
+                .map(|ps| {
+                    !ps.session
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .is_closed()
+                })
                 .unwrap_or(false);
             (live, known_offline && !has_grant)
         };
@@ -2579,13 +2695,7 @@ impl Core {
         }
         let token = InviteToken::random();
         let ev = self
-            .request(
-                ClientMsg::InviteCreate {
-                    token,
-                    ttl_secs,
-                },
-                ReqSlot::Invite,
-            )
+            .request(ClientMsg::InviteCreate { token, ttl_secs }, ReqSlot::Invite)
             .await
             .map_err(|e| RpcError::new(ErrorKind::NotConnected, e.to_string()))?;
         let ClientEvent::InviteCreated { expires_at, .. } = ev else {
@@ -2594,7 +2704,7 @@ impl Core {
         let id = new_invite_id();
         self.shared
             .lock()
-                    .unwrap_or_else(|e| e.into_inner())
+            .unwrap_or_else(|e| e.into_inner())
             .invites_open
             .push((token, id.clone()));
         let host = self.relay_host().unwrap_or_default();
@@ -2711,9 +2821,7 @@ fn store_rpc(e: StoreError) -> RpcError {
             "client_msg_id replayed with a different payload",
         ),
         StoreError::NotFound(id) => RpcError::new(ErrorKind::NotFound, format!("{id}")),
-        StoreError::InvalidCursor => {
-            RpcError::new(ErrorKind::InvalidParams, "invalid cursor")
-        }
+        StoreError::InvalidCursor => RpcError::new(ErrorKind::InvalidParams, "invalid cursor"),
         StoreError::InvalidTransition { .. } => {
             RpcError::new(ErrorKind::Conflict, "invalid message state transition")
         }
@@ -2807,7 +2915,10 @@ impl CinderCore for Core {
             ));
         }
         if m.deleted {
-            return Err(RpcError::new(ErrorKind::Conflict, "message already deleted"));
+            return Err(RpcError::new(
+                ErrorKind::Conflict,
+                "message already deleted",
+            ));
         }
         let peer = peer_of_chat(&m.chat_id)?;
         self.check_send_allowed(&peer).await?;
@@ -3008,9 +3119,7 @@ impl CinderCore for Core {
             Some(c) => c
                 .strip_prefix("cur:off:")
                 .and_then(|n| n.parse::<usize>().ok())
-                .ok_or_else(|| {
-                    RpcError::new(ErrorKind::InvalidParams, "invalid cursor")
-                })?,
+                .ok_or_else(|| RpcError::new(ErrorKind::InvalidParams, "invalid cursor"))?,
         };
         let chats = self
             .sblk(move |s| s.list_chats_sorted((offset + limit + 1) as u32))
@@ -3033,8 +3142,8 @@ impl CinderCore for Core {
                 trusts.get(&peer),
             ));
         }
-        let next_cursor = (offset + out.len() < chats.len())
-            .then(|| format!("cur:off:{}", offset + out.len()));
+        let next_cursor =
+            (offset + out.len() < chats.len()).then(|| format!("cur:off:{}", offset + out.len()));
         Ok(json!({"chats": out, "next_cursor": next_cursor}))
     }
 
@@ -3056,10 +3165,7 @@ impl CinderCore for Core {
             let _ = self.sblk(move |s| s.mark_read_upto(&cid, ts)).await;
         }
         let own = self.peer_id_str.clone();
-        let items: Vec<Value> = msgs
-            .iter()
-            .map(|m| message_json(m, &peer, &own))
-            .collect();
+        let items: Vec<Value> = msgs.iter().map(|m| message_json(m, &peer, &own)).collect();
         Ok(json!({
             "chat_id": p.chat_id,
             "messages": items,
@@ -3110,11 +3216,7 @@ impl CinderCore for Core {
                 )
             })
             .collect();
-        items.sort_by(|a, b| {
-            a["created_at"]
-                .as_str()
-                .cmp(&b["created_at"].as_str())
-        });
+        items.sort_by(|a, b| a["created_at"].as_str().cmp(&b["created_at"].as_str()));
         Ok(json!({"contacts": items}))
     }
 
@@ -3123,7 +3225,7 @@ impl CinderCore for Core {
         let substate = self
             .shared
             .lock()
-                    .unwrap_or_else(|e| e.into_inner())
+            .unwrap_or_else(|e| e.into_inner())
             .meta
             .get(&peer)
             .and_then(|m| m.substate.clone());
@@ -3210,7 +3312,7 @@ impl CinderCore for Core {
         let id = self
             .shared
             .lock()
-                    .unwrap_or_else(|e| e.into_inner())
+            .unwrap_or_else(|e| e.into_inner())
             .invites_open
             .last()
             .map(|(_, id)| id.clone())
@@ -3284,11 +3386,7 @@ impl CinderCore for Core {
             .values()
             .filter(|m| m.state == MetaState::PendingIn)
             .count() as u64;
-        let queued: u64 = sh
-            .pending_out
-            .values()
-            .map(|q| q.len() as u64)
-            .sum();
+        let queued: u64 = sh.pending_out.values().map(|q| q.len() as u64).sum();
         Ok(json!({
             "unread_chats": unread,
             "pending_contact_requests": pending_in,
@@ -3312,9 +3410,7 @@ impl Core {
         HashMap<PeerId, TrustState>,
         HashMap<PeerId, String>,
     ) {
-        let metas: HashMap<PeerId, ContactMeta> = {
-            self.sh().meta.clone()
-        };
+        let metas: HashMap<PeerId, ContactMeta> = { self.sh().meta.clone() };
         let peers: Vec<PeerId> = chats
             .iter()
             .map(|c| PeerId::from_bytes(c.peer_id))
@@ -3340,9 +3436,9 @@ impl Core {
 }
 
 fn peer_of_chat(chat_id: &str) -> Result<PeerId, RpcError> {
-    let rest = chat_id.strip_prefix("chat:").ok_or_else(|| {
-        RpcError::new(ErrorKind::InvalidParams, "expected a chat: id")
-    })?;
+    let rest = chat_id
+        .strip_prefix("chat:")
+        .ok_or_else(|| RpcError::new(ErrorKind::InvalidParams, "expected a chat: id"))?;
     let bytes = b32_decode_32(rest)
         .ok_or_else(|| RpcError::new(ErrorKind::InvalidParams, "malformed chat_id"))?;
     Ok(PeerId::from_bytes(bytes))
@@ -3375,7 +3471,12 @@ impl tb::Backend for TuiBackend {
     async fn list_chats(&mut self) -> Result<Vec<tb::ChatSummary>> {
         let core = self.core.clone();
         let chats = core.sblk(|s| s.list_chats_sorted(500)).await?;
-        let metas: HashMap<PeerId, ContactMeta> = core.shared.lock().unwrap_or_else(|e| e.into_inner()).meta.clone();
+        let metas: HashMap<PeerId, ContactMeta> = core
+            .shared
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .meta
+            .clone();
         let peers: Vec<PeerId> = chats
             .iter()
             .map(|c| PeerId::from_bytes(c.peer_id))
@@ -3458,9 +3559,7 @@ impl tb::Backend for TuiBackend {
                     text: m.body,
                     state: match m.state {
                         Some(MsgState::Delivered) => tb::MsgState::Delivered,
-                        Some(MsgState::Failed) | Some(MsgState::Expired) => {
-                            tb::MsgState::Failed
-                        }
+                        Some(MsgState::Failed) | Some(MsgState::Expired) => tb::MsgState::Failed,
                         Some(MsgState::Sent) => tb::MsgState::Sent,
                         _ => tb::MsgState::Queued,
                     },
@@ -3475,9 +3574,18 @@ impl tb::Backend for TuiBackend {
     async fn send(&mut self, chat_id: &str, body: &str) -> Result<tb::SendAck> {
         let peer = peer_of_chat(chat_id).map_err(|e| anyhow!("{e:?}"))?;
         let cmid = format!("tui:{}", b32(HsId::random().as_bytes()));
-        let (msg_id, _) = self.core.clone().send_text(peer, body, &cmid).await.map_err(|e| {
-            anyhow!("{}: {}", e.kind.as_str(), e.hint.as_deref().unwrap_or(&e.message))
-        })?;
+        let (msg_id, _) = self
+            .core
+            .clone()
+            .send_text(peer, body, &cmid)
+            .await
+            .map_err(|e| {
+                anyhow!(
+                    "{}: {}",
+                    e.kind.as_str(),
+                    e.hint.as_deref().unwrap_or(&e.message)
+                )
+            })?;
         Ok(tb::SendAck {
             msg_id,
             client_msg_id: cmid,
@@ -3485,7 +3593,13 @@ impl tb::Backend for TuiBackend {
     }
 
     async fn contacts(&mut self) -> Result<Vec<tb::Contact>> {
-        let metas: HashMap<PeerId, ContactMeta> = self.core.shared.lock().unwrap_or_else(|e| e.into_inner()).meta.clone();
+        let metas: HashMap<PeerId, ContactMeta> = self
+            .core
+            .shared
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .meta
+            .clone();
         let peers: Vec<PeerId> = metas.keys().cloned().collect();
         let (names, trusts) = self
             .core
@@ -3509,10 +3623,7 @@ impl tb::Backend for TuiBackend {
             .map(|(peer, m)| tb::Contact {
                 contact_id: contact_str(peer),
                 peer_id: peer_str(peer),
-                display_name: m
-                    .display_name
-                    .clone()
-                    .or_else(|| names.get(peer).cloned()),
+                display_name: m.display_name.clone().or_else(|| names.get(peer).cloned()),
                 state: match m.state {
                     MetaState::PendingOut => tb::ContactState::PendingOut,
                     MetaState::PendingIn => tb::ContactState::PendingIn,
@@ -3533,12 +3644,13 @@ impl tb::Backend for TuiBackend {
     }
 
     async fn add_contact(&mut self, uri: &str) -> Result<String> {
-        let peer = self
-            .core
-            .clone()
-            .start_add(uri, None)
-            .await
-            .map_err(|e| anyhow!("{}: {}", e.kind.as_str(), e.hint.as_deref().unwrap_or(&e.message)))?;
+        let peer = self.core.clone().start_add(uri, None).await.map_err(|e| {
+            anyhow!(
+                "{}: {}",
+                e.kind.as_str(),
+                e.hint.as_deref().unwrap_or(&e.message)
+            )
+        })?;
         Ok(contact_str(&peer))
     }
 
@@ -3549,15 +3661,24 @@ impl tb::Backend for TuiBackend {
         };
         CinderCore::ident_verify(self.core.as_ref(), params)
             .await
-            .map_err(|e| anyhow!("{}: {}", e.kind.as_str(), e.hint.as_deref().unwrap_or(&e.message)))?;
+            .map_err(|e| {
+                anyhow!(
+                    "{}: {}",
+                    e.kind.as_str(),
+                    e.hint.as_deref().unwrap_or(&e.message)
+                )
+            })?;
         Ok(())
     }
 
     async fn sas_hint(&mut self, contact_id: &str) -> Result<String> {
-        let peer = self
-            .core
-            .peer_of_contact_id(contact_id)
-            .map_err(|e| anyhow!("{}: {}", e.kind.as_str(), e.hint.as_deref().unwrap_or(&e.message)))?;
+        let peer = self.core.peer_of_contact_id(contact_id).map_err(|e| {
+            anyhow!(
+                "{}: {}",
+                e.kind.as_str(),
+                e.hint.as_deref().unwrap_or(&e.message)
+            )
+        })?;
         let sh = self.core.shared.lock().unwrap_or_else(|e| e.into_inner());
         Ok(sh
             .meta

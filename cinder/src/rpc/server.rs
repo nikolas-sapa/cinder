@@ -17,7 +17,10 @@ pub struct DaemonConfig {
 
 impl Default for DaemonConfig {
     fn default() -> Self {
-        Self { socket_path: default_socket_path(), expected_uid: None }
+        Self {
+            socket_path: default_socket_path(),
+            expected_uid: None,
+        }
     }
 }
 

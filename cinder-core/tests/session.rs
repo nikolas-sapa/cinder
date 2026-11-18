@@ -137,11 +137,8 @@ async fn spawn_relay() -> SocketAddr {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     tokio::spawn(async move {
-        let _ = cinder_relay::server::serve(
-            listener,
-            cinder_relay::server::RelayConfig::default(),
-        )
-        .await;
+        let _ = cinder_relay::server::serve(listener, cinder_relay::server::RelayConfig::default())
+            .await;
     });
     addr
 }
@@ -202,7 +199,11 @@ fn initiator_wrong_pin_aborts_before_msg3() {
     b.accept_handshake(a.produce_handshake().unwrap()).unwrap();
     a.accept_handshake(b.produce_handshake().unwrap()).unwrap();
     match a.verify_peer_id(&c_id.peer_id()) {
-        Err(Error::PeerIdMismatch { expected, actual, actual_static }) => {
+        Err(Error::PeerIdMismatch {
+            expected,
+            actual,
+            actual_static,
+        }) => {
             assert_eq!(expected, c_id.peer_id());
             assert_eq!(actual, b_id.peer_id());
             assert_eq!(actual_static, b_id.public());
@@ -311,11 +312,11 @@ fn sas_hand_vectors() {
     // Inlined copy of the session's emoji table — the point of a hand-vector
     // test is that the algorithm is pinned, not the table location.
     const EMOJI: [&str; 64] = [
-        "🐶", "🐱", "🐭", "🐹", "🐰", "🦊", "🐻", "🐼", "🐨", "🐯", "🦁", "🐮", "🐷", "🐸",
-        "🐵", "🐔", "🐧", "🐦", "🐤", "🦆", "🦅", "🦉", "🦇", "🐺", "🐗", "🐴", "🦄", "🐝",
-        "🐛", "🦋", "🐌", "🐞", "🐜", "🐢", "🐍", "🦎", "🐙", "🦑", "🦐", "🦀", "🐡", "🐠",
-        "🐟", "🐬", "🐳", "🐋", "🦈", "🐊", "🐅", "🐆", "🦓", "🦍", "🐘", "🦛", "🦏", "🐪",
-        "🐫", "🦒", "🦘", "🐃", "🐂", "🐄", "🐎", "🐖",
+        "🐶", "🐱", "🐭", "🐹", "🐰", "🦊", "🐻", "🐼", "🐨", "🐯", "🦁", "🐮", "🐷", "🐸", "🐵",
+        "🐔", "🐧", "🐦", "🐤", "🦆", "🦅", "🦉", "🦇", "🐺", "🐗", "🐴", "🦄", "🐝", "🐛", "🦋",
+        "🐌", "🐞", "🐜", "🐢", "🐍", "🦎", "🐙", "🦑", "🦐", "🦀", "🐡", "🐠", "🐟", "🐬", "🐳",
+        "🐋", "🦈", "🐊", "🐅", "🐆", "🦓", "🦍", "🐘", "🦛", "🦏", "🐪", "🐫", "🦒", "🦘", "🐃",
+        "🐂", "🐄", "🐎", "🐖",
     ];
     // Fixtures: (handshake_hash, pk_a, pk_b).
     let fixtures: [([u8; 32], [u8; 32], [u8; 32]); 5] = [
@@ -395,7 +396,9 @@ fn decrypt_failure_is_fatal_exactly_once() {
 #[test]
 fn no_decrypt_after_close_100_frames() {
     let (_, _, mut a, mut b) = fresh_pair();
-    let cts: Vec<Vec<u8>> = (0..100).map(|i| a.encrypt(format!("m{i}").as_bytes()).unwrap()).collect();
+    let cts: Vec<Vec<u8>> = (0..100)
+        .map(|i| a.encrypt(format!("m{i}").as_bytes()).unwrap())
+        .collect();
     let mut bad = cts[0].clone();
     bad[0] ^= 1;
     assert!(b.decrypt(&bad).is_err());
@@ -450,7 +453,10 @@ fn plaintext_cap_enforced() {
     let (_, _, mut a, _) = fresh_pair();
     assert!(a.encrypt(&vec![0u8; caps::MAX_PLAINTEXT]).is_ok());
     assert!(a.encrypt(&vec![0u8; caps::MAX_PLAINTEXT + 1]).is_err());
-    assert!(!a.is_closed(), "oversize plaintext is a caller error, not fatal");
+    assert!(
+        !a.is_closed(),
+        "oversize plaintext is a caller error, not fatal"
+    );
 }
 
 // ---- identity ↔ session / key-change ------------------------------------------
@@ -673,12 +679,19 @@ fn rekey_200_msgs_zero_desync_monotonic_nonces() {
             assert!(b.decrypt(&c).unwrap().is_empty());
         }
         let n = a.sending_nonce().unwrap();
-        assert!(n > last_a_nonce, "nonce regressed at msg {i}: {n} <= {last_a_nonce}");
+        assert!(
+            n > last_a_nonce,
+            "nonce regressed at msg {i}: {n} <= {last_a_nonce}"
+        );
         last_a_nonce = n;
         send_one(&mut b, &mut a, b"ack");
     }
     // 12 outbound boundaries + 12 inbound controls per side.
-    assert_eq!(a.rekey_count(), 24, "200 msgs / 16-per-window, both directions");
+    assert_eq!(
+        a.rekey_count(),
+        24,
+        "200 msgs / 16-per-window, both directions"
+    );
     assert_eq!(b.rekey_count(), 24);
     assert_eq!(a.sent_count(), 200);
     assert_eq!(b.received_count(), 200);
@@ -725,9 +738,13 @@ async fn drivers_complete_handshake_over_mem_link() {
     assert!(matches!(b.state(), SessionState::Trusted(_)));
 
     let ct = a.encrypt(b"via mem link").unwrap();
-    la.send_transport(b_peer, a.session_id().unwrap(), ct).await.unwrap();
+    la.send_transport(b_peer, a.session_id().unwrap(), ct)
+        .await
+        .unwrap();
     match lb.recv().await.unwrap() {
-        ClientEvent::Transport { body, session_id, .. } => {
+        ClientEvent::Transport {
+            body, session_id, ..
+        } => {
             assert_eq!(session_id, a.session_id().unwrap());
             assert_eq!(b.decrypt(&body).unwrap(), b"via mem link");
         }
@@ -799,7 +816,11 @@ async fn e2e_xx_over_real_relay() {
     let sid = a.session_id().unwrap();
     ta.send_transport(b_peer, sid, ct).await.unwrap();
     match tb.recv().await.unwrap() {
-        ClientEvent::Transport { from, session_id, body } => {
+        ClientEvent::Transport {
+            from,
+            session_id,
+            body,
+        } => {
             assert_eq!(from, a_peer);
             assert_eq!(session_id, sid);
             assert_eq!(b.decrypt(&body).unwrap(), b"e2e over relay");

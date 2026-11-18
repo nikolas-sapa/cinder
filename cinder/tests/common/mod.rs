@@ -3,11 +3,11 @@
 #[path = "../../src/rpc/mod.rs"]
 pub mod rpc;
 
-use async_trait::async_trait;
 use self::rpc::core::*;
 use self::rpc::dispatch::{Engine, EngineConfig, Session, Transport};
 use self::rpc::events::OutMsg;
 use self::rpc::protocol::{ErrorKind, RpcError};
+use async_trait::async_trait;
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -51,7 +51,14 @@ impl MockCore {
     pub fn basic() -> Self {
         let msgs = (1..=7)
             .rev()
-            .map(|i| msg(&format!("msg:m{i:02}"), if i % 2 == 0 { "in" } else { "out" }, &format!("text-{i}"), "2026-11-18T16:00:00Z"))
+            .map(|i| {
+                msg(
+                    &format!("msg:m{i:02}"),
+                    if i % 2 == 0 { "in" } else { "out" },
+                    &format!("text-{i}"),
+                    "2026-11-18T16:00:00Z",
+                )
+            })
             .collect();
         Self {
             sends: Mutex::new(Vec::new()),
@@ -61,7 +68,9 @@ impl MockCore {
             msg_counter: Mutex::new(0),
             messages: Mutex::new(msgs),
             shutdowns: Mutex::new(Vec::new()),
-            summary: Mutex::new(json!({"unread_chats": 0, "pending_contact_requests": 0, "queued_outbound": 0})),
+            summary: Mutex::new(
+                json!({"unread_chats": 0, "pending_contact_requests": 0, "queued_outbound": 0}),
+            ),
             errors: Mutex::new(HashMap::new()),
             sink: Mutex::new(None),
         }
@@ -72,7 +81,12 @@ impl MockCore {
     }
 
     pub fn emit(&self, kind: &str, chat_id: Option<&str>, payload: Value) {
-        self.sink.lock().unwrap().as_ref().expect("attach an EventSink first").emit(kind, chat_id, payload);
+        self.sink
+            .lock()
+            .unwrap()
+            .as_ref()
+            .expect("attach an EventSink first")
+            .emit(kind, chat_id, payload);
     }
 
     pub fn fail(&self, method: &str, err: RpcError) {
@@ -109,20 +123,29 @@ impl CinderCore for MockCore {
 
     async fn msg_send(&self, p: MsgSendParams) -> Result<Value, RpcError> {
         self.check("msg.send")?;
-        self.sends.lock().unwrap().push((p.to.clone(), p.body.clone(), p.client_msg_id.clone()));
+        self.sends
+            .lock()
+            .unwrap()
+            .push((p.to.clone(), p.body.clone(), p.client_msg_id.clone()));
         Ok(json!({"msg_id": self.next_msg_id(), "chat_id": Self::resolve_chat(&p.to)}))
     }
 
     async fn msg_edit(&self, p: MsgEditParams) -> Result<Value, RpcError> {
         self.check("msg.edit")?;
-        self.edits.lock().unwrap().push(json!({"msg_id": p.msg_id, "body": p.body}));
+        self.edits
+            .lock()
+            .unwrap()
+            .push(json!({"msg_id": p.msg_id, "body": p.body}));
         Ok(json!({"msg_id": p.msg_id, "chat_id": CHAT, "revision": 1, "state": "queued"}))
     }
 
     async fn msg_delete(&self, p: MsgDeleteParams) -> Result<Value, RpcError> {
         self.check("msg.delete")?;
         let scope = p.scope.clone().unwrap_or_else(|| "local".into());
-        self.deletes.lock().unwrap().push(json!({"msg_id": p.msg_id, "scope": scope}));
+        self.deletes
+            .lock()
+            .unwrap()
+            .push(json!({"msg_id": p.msg_id, "scope": scope}));
         Ok(json!({
             "msg_id": p.msg_id,
             "deleted": true,
@@ -133,7 +156,10 @@ impl CinderCore for MockCore {
 
     async fn msg_react(&self, p: MsgReactParams) -> Result<Value, RpcError> {
         self.check("msg.react")?;
-        self.reactions_calls.lock().unwrap().push(json!({"msg_id": p.msg_id, "emoji": p.emoji}));
+        self.reactions_calls
+            .lock()
+            .unwrap()
+            .push(json!({"msg_id": p.msg_id, "emoji": p.emoji}));
         let reactions = match &p.emoji {
             Some(e) => json!([{"emoji": e, "from": PEER, "mine": true}]),
             None => json!([]),
@@ -164,8 +190,13 @@ impl CinderCore for MockCore {
             None => 0usize,
             Some(cur) => {
                 let parts: Vec<&str> = cur.splitn(3, ':').collect();
-                if parts.len() != 3 || parts[0] != "cur" || parts[1] != p.chat_id.trim_start_matches("chat:") {
-                    return Err(RpcError::invalid_params("cursor is bound to a different chat or malformed"));
+                if parts.len() != 3
+                    || parts[0] != "cur"
+                    || parts[1] != p.chat_id.trim_start_matches("chat:")
+                {
+                    return Err(RpcError::invalid_params(
+                        "cursor is bound to a different chat or malformed",
+                    ));
                 }
                 match parts[2].parse::<usize>() {
                     Ok(i) if i <= all.len() => i,
@@ -182,7 +213,11 @@ impl CinderCore for MockCore {
         let page: Vec<Value> = all.iter().skip(start).take(limit).cloned().collect();
         let has_more = start + page.len() < all.len();
         let next_before = if has_more {
-            json!(format!("cur:{}:{}", p.chat_id.trim_start_matches("chat:"), start + page.len()))
+            json!(format!(
+                "cur:{}:{}",
+                p.chat_id.trim_start_matches("chat:"),
+                start + page.len()
+            ))
         } else {
             Value::Null
         };
@@ -239,7 +274,9 @@ impl CinderCore for MockCore {
 
     async fn ident_verify(&self, p: IdentVerifyParams) -> Result<Value, RpcError> {
         self.check("ident.verify")?;
-        Ok(json!({"contact_id": p.contact_id, "trust": "verified", "verified_at": "2026-11-18T16:06:11Z"}))
+        Ok(
+            json!({"contact_id": p.contact_id, "trust": "verified", "verified_at": "2026-11-18T16:06:11Z"}),
+        )
     }
 
     async fn backlog_summary(&self) -> Result<Value, RpcError> {
@@ -264,7 +301,12 @@ pub fn harness_with(cfg: EngineConfig) -> Harness {
     let engine = Engine::new(core.clone(), cfg);
     core.attach(engine.events.clone());
     let (sess, rx) = engine.connect(Transport::Stdio);
-    Harness { engine, core, sess, rx }
+    Harness {
+        engine,
+        core,
+        sess,
+        rx,
+    }
 }
 
 pub fn harness() -> Harness {
@@ -303,7 +345,10 @@ pub async fn call(h: &mut Harness, id: u64, method: &str, params: Value) -> Valu
     line(h, &req(id, method, params)).await;
     let f = frame(&mut h.rx).await;
     assert_eq!(f["id"], id, "expected response to id {id}, got {f}");
-    assert!(f.get("error").is_none(), "unexpected error for {method}: {f}");
+    assert!(
+        f.get("error").is_none(),
+        "unexpected error for {method}: {f}"
+    );
     f["result"].clone()
 }
 
@@ -312,7 +357,10 @@ pub async fn call_err(h: &mut Harness, id: u64, method: &str, params: Value) -> 
     line(h, &req(id, method, params)).await;
     let f = frame(&mut h.rx).await;
     assert_eq!(f["id"], id, "expected response to id {id}, got {f}");
-    assert!(f.get("error").is_some(), "expected error for {method}, got {f}");
+    assert!(
+        f.get("error").is_some(),
+        "expected error for {method}, got {f}"
+    );
     f["error"].clone()
 }
 

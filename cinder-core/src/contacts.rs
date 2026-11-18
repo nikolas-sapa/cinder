@@ -108,8 +108,7 @@ impl ContactStore {
     }
 
     fn load(&mut self, text: &str) -> Result<(), Error> {
-        let file: StoreFile =
-            serde_json::from_str(text).map_err(|_| Error::ContactsIntegrity)?;
+        let file: StoreFile = serde_json::from_str(text).map_err(|_| Error::ContactsIntegrity)?;
         let mac = data_encoding::BASE64
             .decode(file.hmac.as_bytes())
             .map_err(|_| Error::ContactsIntegrity)?;

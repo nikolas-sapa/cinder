@@ -11,11 +11,7 @@ fn is_bidi(c: char) -> bool {
 }
 
 fn is_zero_width(c: char) -> bool {
-    matches!(c,
-        '\u{200B}'
-        | '\u{FEFF}'
-        | '\u{2060}'
-        | '\u{180E}')
+    matches!(c, '\u{200B}' | '\u{FEFF}' | '\u{2060}' | '\u{180E}')
 }
 
 fn is_c1(c: char) -> bool {
@@ -113,7 +109,10 @@ mod tests {
     #[test]
     fn osc_hyperlink_stripped() {
         assert_eq!(sanitize("\x1b]8;;http://evil\x07link"), "link");
-        assert_eq!(sanitize("\x1b]8;;http://evil\x1b\\link\x1b]8;;\x1b\\"), "link");
+        assert_eq!(
+            sanitize("\x1b]8;;http://evil\x1b\\link\x1b]8;;\x1b\\"),
+            "link"
+        );
     }
 
     #[test]
@@ -161,6 +160,9 @@ mod tests {
         assert_eq!(sanitize("line1\nline2"), "line1\nline2");
         assert_eq!(sanitize("a\tb"), "a    b");
         assert_eq!(sanitize("ümläut ñ "), "ümläut ñ ");
-        assert_eq!(sanitize("zwj 👨\u{200d}👩\u{200d}👧 kept"), "zwj 👨\u{200d}👩\u{200d}👧 kept");
+        assert_eq!(
+            sanitize("zwj 👨\u{200d}👩\u{200d}👧 kept"),
+            "zwj 👨\u{200d}👩\u{200d}👧 kept"
+        );
     }
 }

@@ -16,8 +16,14 @@ use crate::proto::{
 /// CLAIMED peer-ids — routing metadata only, never a trust input (§6).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ClientEvent {
-    ServerHello { version: u16, now_unix: u64 },
-    InviteCreated { token: InviteToken, expires_at: u64 },
+    ServerHello {
+        version: u16,
+        now_unix: u64,
+    },
+    InviteCreated {
+        token: InviteToken,
+        expires_at: u64,
+    },
     Handshake {
         from: PeerId,
         hs_id: HsId,
@@ -32,15 +38,25 @@ pub enum ClientEvent {
         mailbox_id: MailboxId,
         expires_at: u64,
     },
-    MailboxDeposited { msg_id: u64 },
+    MailboxDeposited {
+        msg_id: u64,
+    },
     MailboxMessages {
         msgs: Vec<StoredEnvelope>,
         more: bool,
     },
     Ok,
-    PeerStatus { peer: PeerId, online: bool },
-    Pong { nonce: u64 },
-    Error { code: ErrorCode, detail: String },
+    PeerStatus {
+        peer: PeerId,
+        online: bool,
+    },
+    Pong {
+        nonce: u64,
+    },
+    Error {
+        code: ErrorCode,
+        detail: String,
+    },
 }
 
 impl From<ServerMsg> for ClientEvent {
@@ -148,9 +164,7 @@ impl RelayTransport {
             }
             Some(Err(e)) => return Err(e.into()),
             None => {
-                return Err(Error::Transport(
-                    "connection closed during hello".into(),
-                ));
+                return Err(Error::Transport("connection closed during hello".into()));
             }
         }
         reader
@@ -205,7 +219,8 @@ impl Link for RelayTransport {
         hs_id: HsId,
         msg1: Vec<u8>,
     ) -> Result<(), Error> {
-        self.send(ClientMsg::InviteAccept { token, hs_id, msg1 }).await
+        self.send(ClientMsg::InviteAccept { token, hs_id, msg1 })
+            .await
     }
 
     async fn send_transport(

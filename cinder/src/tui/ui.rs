@@ -59,7 +59,11 @@ pub fn wrap_text(s: &str, width: usize) -> Vec<String> {
 fn chat_title(name: Option<&str>, peer_id: &str) -> String {
     match name {
         Some(n) if !n.is_empty() => sanitize(n),
-        _ => peer_id.trim_start_matches("peer:").chars().take(10).collect(),
+        _ => peer_id
+            .trim_start_matches("peer:")
+            .chars()
+            .take(10)
+            .collect(),
     }
 }
 
@@ -148,8 +152,7 @@ fn draw_chat(f: &mut Frame, app: &mut App, area: Rect) {
 
     let Some(chat) = app.active_chat() else {
         f.render_widget(
-            Paragraph::new("no chat selected")
-                .block(Block::default().borders(Borders::ALL)),
+            Paragraph::new("no chat selected").block(Block::default().borders(Borders::ALL)),
             area,
         );
         return;
@@ -163,7 +166,11 @@ fn draw_chat(f: &mut Frame, app: &mut App, area: Rect) {
             Trust::Unverified => "○",
             Trust::KeyChanged => "✕ key changed — /verify to re-trust",
         },
-        chat.peer_id.trim_start_matches("peer:").chars().take(12).collect::<String>(),
+        chat.peer_id
+            .trim_start_matches("peer:")
+            .chars()
+            .take(12)
+            .collect::<String>(),
     );
 
     let mut lines: Vec<Line> = Vec::new();
@@ -320,7 +327,11 @@ fn draw_fuzzy(f: &mut Frame, app: &App, query: &str, sel: usize) {
         .map(|c| {
             let u = app.unread.get(&c.chat_id).copied().unwrap_or(0);
             if u > 0 {
-                format!("{} ({})", chat_title(c.display_name.as_deref(), &c.peer_id), u)
+                format!(
+                    "{} ({})",
+                    chat_title(c.display_name.as_deref(), &c.peer_id),
+                    u
+                )
             } else {
                 chat_title(c.display_name.as_deref(), &c.peer_id)
             }

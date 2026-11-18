@@ -57,8 +57,8 @@ jobs:
       - name: install vhs ${{ env.VHS_VERSION }}
         run: |
           curl -sSfL "https://github.com/charmbracelet/vhs/releases/download/v${VHS_VERSION}/vhs_${VHS_VERSION}_Linux_x86_64.tar.gz" \
-            | tar -xz vhs
-          sudo install -m 0755 vhs /usr/local/bin/vhs
+            | tar -xz "vhs_${VHS_VERSION}_Linux_x86_64/vhs"
+          sudo install -m 0755 "vhs_${VHS_VERSION}_Linux_x86_64/vhs" /usr/local/bin/vhs
           vhs --version
 
       - name: record demo.tape

@@ -449,7 +449,9 @@ impl Session {
 
     fn capture_remote(&mut self) {
         let Some(hs) = &self.hs else { return };
-        let Some(rs) = hs.get_remote_static() else { return };
+        let Some(rs) = hs.get_remote_static() else {
+            return;
+        };
         let mut raw = [0u8; 32];
         raw.copy_from_slice(rs);
         self.remote_static = Some(raw);
@@ -538,7 +540,11 @@ pub struct Sas([u8; 32]);
 
 impl Sas {
     pub fn derive(handshake_hash: &[u8; 32], pk_a: &[u8; 32], pk_b: &[u8; 32]) -> Self {
-        let (lo, hi) = if pk_a <= pk_b { (pk_a, pk_b) } else { (pk_b, pk_a) };
+        let (lo, hi) = if pk_a <= pk_b {
+            (pk_a, pk_b)
+        } else {
+            (pk_b, pk_a)
+        };
         let mut h = Sha256::new();
         h.update(handshake_hash);
         h.update(lo);
@@ -582,9 +588,8 @@ impl fmt::Display for Sas {
 }
 
 const SAS_EMOJI: [&str; 64] = [
-    "🐶", "🐱", "🐭", "🐹", "🐰", "🦊", "🐻", "🐼", "🐨", "🐯", "🦁", "🐮", "🐷", "🐸", "🐵",
-    "🐔", "🐧", "🐦", "🐤", "🦆", "🦅", "🦉", "🦇", "🐺", "🐗", "🐴", "🦄", "🐝", "🐛", "🦋",
-    "🐌", "🐞", "🐜", "🐢", "🐍", "🦎", "🐙", "🦑", "🦐", "🦀", "🐡", "🐠", "🐟", "🐬", "🐳",
-    "🐋", "🦈", "🐊", "🐅", "🐆", "🦓", "🦍", "🐘", "🦛", "🦏", "🐪", "🐫", "🦒", "🦘", "🐃",
-    "🐂", "🐄", "🐎", "🐖",
+    "🐶", "🐱", "🐭", "🐹", "🐰", "🦊", "🐻", "🐼", "🐨", "🐯", "🦁", "🐮", "🐷", "🐸", "🐵", "🐔",
+    "🐧", "🐦", "🐤", "🦆", "🦅", "🦉", "🦇", "🐺", "🐗", "🐴", "🦄", "🐝", "🐛", "🦋", "🐌", "🐞",
+    "🐜", "🐢", "🐍", "🦎", "🐙", "🦑", "🦐", "🦀", "🐡", "🐠", "🐟", "🐬", "🐳", "🐋", "🦈", "🐊",
+    "🐅", "🐆", "🦓", "🦍", "🐘", "🦛", "🦏", "🐪", "🐫", "🦒", "🦘", "🐃", "🐂", "🐄", "🐎", "🐖",
 ];

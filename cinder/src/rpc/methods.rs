@@ -38,7 +38,12 @@ pub enum DedupHit {
 
 impl DedupTable {
     pub fn new(ttl: Duration, cap: usize) -> Self {
-        Self { map: HashMap::new(), order: VecDeque::new(), ttl, cap: cap.max(1) }
+        Self {
+            map: HashMap::new(),
+            order: VecDeque::new(),
+            ttl,
+            cap: cap.max(1),
+        }
     }
 
     fn evict(&mut self) {
@@ -72,10 +77,19 @@ impl DedupTable {
             return;
         }
         while self.map.len() >= self.cap {
-            let Some((old, _)) = self.order.pop_front() else { break };
+            let Some((old, _)) = self.order.pop_front() else {
+                break;
+            };
             self.map.remove(&old);
         }
-        self.map.insert(key.clone(), DedupRec { fingerprint, result, at: Instant::now() });
+        self.map.insert(
+            key.clone(),
+            DedupRec {
+                fingerprint,
+                result,
+                at: Instant::now(),
+            },
+        );
         self.order.push_back((key, Instant::now()));
     }
 }
@@ -84,28 +98,40 @@ fn parse_params<T: DeserializeOwned>(params: Option<Value>) -> Result<T, RpcErro
     let raw = match params {
         None | Some(Value::Null) => json!({}),
         Some(v) if v.is_object() => v,
-        Some(_) => return Err(RpcError::invalid_params("params must be an object (named params only)")),
+        Some(_) => {
+            return Err(RpcError::invalid_params(
+                "params must be an object (named params only)",
+            ))
+        }
     };
     serde_json::from_value(raw)
         .map_err(|e| RpcError::invalid_params(format!("bad params: {}", short_serde_err(&e))))
 }
 
 fn short_serde_err(e: &serde_json::Error) -> String {
-    e.to_string().split(" at line ").next().unwrap_or("invalid").to_string()
+    e.to_string()
+        .split(" at line ")
+        .next()
+        .unwrap_or("invalid")
+        .to_string()
 }
 
 fn req_str<'a>(m: &'a Map<String, Value>, field: &str) -> Result<&'a str, RpcError> {
     m.get(field)
         .and_then(Value::as_str)
         .filter(|s| !s.is_empty())
-        .ok_or_else(|| RpcError::invalid_params(format!("missing or invalid required param '{field}'")))
+        .ok_or_else(|| {
+            RpcError::invalid_params(format!("missing or invalid required param '{field}'"))
+        })
 }
 
 fn check_prefix(value: &str, prefixes: &[&str], field: &str) -> Result<(), RpcError> {
     if prefixes.iter().any(|p| value.starts_with(p)) {
         Ok(())
     } else {
-        Err(RpcError::invalid_params(format!("'{field}' must start with one of {prefixes:?}")))
+        Err(RpcError::invalid_params(format!(
+            "'{field}' must start with one of {prefixes:?}"
+        )))
     }
 }
 
@@ -113,11 +139,18 @@ fn check_limit(eng: &Engine, limit: u32, field: &str) -> Result<(), RpcError> {
     if (1..=eng.cfg.history_limit_max).contains(&limit) {
         Ok(())
     } else {
-        Err(RpcError::invalid_params(format!("'{field}' out of range 1..={}", eng.cfg.history_limit_max)))
+        Err(RpcError::invalid_params(format!(
+            "'{field}' out of range 1..={}",
+            eng.cfg.history_limit_max
+        )))
     }
 }
 
-async fn session_hello(eng: &Engine, sess: &mut Session, params: Option<Value>) -> Result<Value, RpcError> {
+async fn session_hello(
+    eng: &Engine,
+    sess: &mut Session,
+    params: Option<Value>,
+) -> Result<Value, RpcError> {
     let obj = match params {
         None | Some(Value::Null) => Map::new(),
         Some(v) if v.is_object() => v.as_object().unwrap().clone(),
@@ -130,16 +163,30 @@ async fn session_hello(eng: &Engine, sess: &mut Session, params: Option<Value>) 
             for item in a {
                 match item.as_u64() {
                     Some(x) => v.push(x),
-                    None => return Err(RpcError::invalid_params("protocol_version must be int or int[]")),
+                    None => {
+                        return Err(RpcError::invalid_params(
+                            "protocol_version must be int or int[]",
+                        ))
+                    }
                 }
             }
             v
         }
-        Some(_) => return Err(RpcError::invalid_params("protocol_version must be int or int[]")),
-        None => return Err(RpcError::invalid_params("missing required param 'protocol_version'")),
+        Some(_) => {
+            return Err(RpcError::invalid_params(
+                "protocol_version must be int or int[]",
+            ))
+        }
+        None => {
+            return Err(RpcError::invalid_params(
+                "missing required param 'protocol_version'",
+            ))
+        }
     };
     if offered.is_empty() {
-        return Err(RpcError::invalid_params("protocol_version must be int or int[]"));
+        return Err(RpcError::invalid_params(
+            "protocol_version must be int or int[]",
+        ));
     }
     let negotiated = eng
         .cfg
@@ -149,22 +196,25 @@ async fn session_hello(eng: &Engine, sess: &mut Session, params: Option<Value>) 
         .max()
         .copied()
         .ok_or_else(|| {
-            RpcError::new(ErrorKind::Conflict, format!(
-                "no common protocol_version; supported: {:?}",
-                eng.cfg.supported_versions
-            ))
+            RpcError::new(
+                ErrorKind::Conflict,
+                format!(
+                    "no common protocol_version; supported: {:?}",
+                    eng.cfg.supported_versions
+                ),
+            )
             .with_code(INVALID_PARAMS)
         })?;
 
     let mut scopes: HashSet<String> = HashSet::new();
     if let Some(req) = obj.get("capabilities_requested") {
-        let arr = req
-            .as_array()
-            .ok_or_else(|| RpcError::invalid_params("capabilities_requested must be a string array"))?;
+        let arr = req.as_array().ok_or_else(|| {
+            RpcError::invalid_params("capabilities_requested must be a string array")
+        })?;
         for s in arr {
-            let s = s
-                .as_str()
-                .ok_or_else(|| RpcError::invalid_params("capabilities_requested must be a string array"))?;
+            let s = s.as_str().ok_or_else(|| {
+                RpcError::invalid_params("capabilities_requested must be a string array")
+            })?;
             if s == "*" {
                 scopes.insert("*".into());
             } else if KNOWN_SCOPES.contains(&s) {
@@ -184,7 +234,11 @@ async fn session_hello(eng: &Engine, sess: &mut Session, params: Option<Value>) 
     let granted: Vec<String> = if scopes.contains("*") {
         vec!["*".into()]
     } else {
-        KNOWN_SCOPES.iter().filter(|s| scopes.contains(**s)).map(|s| s.to_string()).collect()
+        KNOWN_SCOPES
+            .iter()
+            .filter(|s| scopes.contains(**s))
+            .map(|s| s.to_string())
+            .collect()
     };
     sess.helloed = true;
     sess.scopes = granted.iter().cloned().collect();
@@ -221,7 +275,9 @@ async fn msg_send(eng: &Engine, params: Option<Value>) -> Result<Value, RpcError
     let fingerprint = json!({"m": "msg.send", "to": p.to, "body": p.body}).to_string();
     match eng.dedup_lookup(&p.client_msg_id, &fingerprint) {
         DedupHit::Replay(mut result) => {
-            result.as_object_mut().map(|o| o.insert("deduped".into(), json!(true)));
+            result
+                .as_object_mut()
+                .map(|o| o.insert("deduped".into(), json!(true)));
             return Ok(result);
         }
         DedupHit::Conflict => {
@@ -232,7 +288,14 @@ async fn msg_send(eng: &Engine, params: Option<Value>) -> Result<Value, RpcError
         }
         DedupHit::Miss => {}
     }
-    let core_res = eng.core().msg_send(MsgSendParams { to: p.to.clone(), body: p.body.clone(), client_msg_id: p.client_msg_id.clone() }).await?;
+    let core_res = eng
+        .core()
+        .msg_send(MsgSendParams {
+            to: p.to.clone(),
+            body: p.body.clone(),
+            client_msg_id: p.client_msg_id.clone(),
+        })
+        .await?;
     let msg_id = core_res
         .get("msg_id")
         .and_then(Value::as_str)
@@ -260,7 +323,9 @@ where
     F: FnOnce() -> Fut,
     Fut: std::future::Future<Output = Result<Value, RpcError>>,
 {
-    let Some(key) = op_key else { return call().await };
+    let Some(key) = op_key else {
+        return call().await;
+    };
     let fp = fingerprint.to_string();
     match eng.dedup_lookup(&key, &fp) {
         DedupHit::Replay(result) => return Ok(result),
@@ -300,7 +365,9 @@ async fn msg_delete(eng: &Engine, params: Option<Value>) -> Result<Value, RpcErr
     check_prefix(&p.msg_id, &["msg:"], "msg_id")?;
     let scope = p.scope.clone().unwrap_or_else(|| "local".into());
     if scope != "local" && scope != "everyone" {
-        return Err(RpcError::invalid_params("scope must be \"local\" or \"everyone\""));
+        return Err(RpcError::invalid_params(
+            "scope must be \"local\" or \"everyone\"",
+        ));
     }
     dedup_wrap(
         eng,
@@ -319,13 +386,17 @@ async fn msg_react(eng: &Engine, params: Option<Value>) -> Result<Value, RpcErro
     };
     // emoji is required AND may be null — serde Option can't tell missing from null
     if !raw.contains_key("emoji") {
-        return Err(RpcError::invalid_params("missing required param 'emoji' (string or null)"));
+        return Err(RpcError::invalid_params(
+            "missing required param 'emoji' (string or null)",
+        ));
     }
     let p: MsgReactParams = parse_params(params)?;
     check_prefix(&p.msg_id, &["msg:"], "msg_id")?;
     if let Some(e) = &p.emoji {
         if e.is_empty() {
-            return Err(RpcError::invalid_params("emoji must be a non-empty string or null"));
+            return Err(RpcError::invalid_params(
+                "emoji must be a non-empty string or null",
+            ));
         }
         if e.len() > 32 {
             return Err(RpcError::invalid_params("emoji exceeds 32 bytes"));
@@ -361,7 +432,9 @@ async fn contact_list(eng: &Engine, params: Option<Value>) -> Result<Value, RpcE
     let p: ContactListParams = parse_params(params)?;
     if let Some(s) = &p.state {
         if !["active", "pending_in", "pending_out", "declined", "blocked"].contains(&s.as_str()) {
-            return Err(RpcError::invalid_params("state must be active|pending_in|pending_out|declined|blocked"));
+            return Err(RpcError::invalid_params(
+                "state must be active|pending_in|pending_out|declined|blocked",
+            ));
         }
     }
     eng.core().contact_list(p).await
@@ -372,7 +445,9 @@ fn check_link(link: &str) -> Result<(), RpcError> {
         return Err(RpcError::invalid_params("link must be a cinder:// URI (cinder://<base32-pubkey>@<relay-host>[:port][?rendezvous=<token>])"));
     }
     if !link["cinder://".len()..].contains('@') {
-        return Err(RpcError::invalid_params("malformed cinder:// link: missing <pubkey>@<relay-host>"));
+        return Err(RpcError::invalid_params(
+            "malformed cinder:// link: missing <pubkey>@<relay-host>",
+        ));
     }
     Ok(())
 }
@@ -399,7 +474,9 @@ async fn invite_create(eng: &Engine, params: Option<Value>) -> Result<Value, Rpc
     let mut p: InviteCreateParams = parse_params(params)?;
     if let Some(ttl) = p.ttl_sec {
         if ttl < INVITE_MIN_TTL_SEC {
-            return Err(RpcError::invalid_params(format!("ttl_sec must be >= {INVITE_MIN_TTL_SEC}")));
+            return Err(RpcError::invalid_params(format!(
+                "ttl_sec must be >= {INVITE_MIN_TTL_SEC}"
+            )));
         }
         if ttl > INVITE_MAX_TTL_SEC {
             p.ttl_sec = Some(INVITE_MAX_TTL_SEC);
@@ -412,7 +489,9 @@ async fn invite_accept(eng: &Engine, params: Option<Value>) -> Result<Value, Rpc
     let p: InviteAcceptParams = parse_params(params)?;
     check_link(&p.link)?;
     if !p.link.contains("rendezvous=") {
-        return Err(RpcError::invalid_params("link has no rendezvous param; use contact.add for static addresses"));
+        return Err(RpcError::invalid_params(
+            "link has no rendezvous param; use contact.add for static addresses",
+        ));
     }
     eng.core().invite_accept(p).await
 }
@@ -426,7 +505,11 @@ async fn ident_verify(eng: &Engine, params: Option<Value>) -> Result<Value, RpcE
     eng.core().ident_verify(p).await
 }
 
-async fn events_subscribe(eng: &Arc<Engine>, sess: &mut Session, params: Option<Value>) -> Result<Value, RpcError> {
+async fn events_subscribe(
+    eng: &Arc<Engine>,
+    sess: &mut Session,
+    params: Option<Value>,
+) -> Result<Value, RpcError> {
     let obj = match params {
         None | Some(Value::Null) => Map::new(),
         Some(v) if v.is_object() => v.as_object().unwrap().clone(),
@@ -435,12 +518,18 @@ async fn events_subscribe(eng: &Arc<Engine>, sess: &mut Session, params: Option<
 
     let mut kinds: Option<HashSet<String>> = None;
     if let Some(v) = obj.get("kinds") {
-        let arr = v.as_array().ok_or_else(|| RpcError::invalid_params("kinds must be a string array"))?;
+        let arr = v
+            .as_array()
+            .ok_or_else(|| RpcError::invalid_params("kinds must be a string array"))?;
         let mut set = HashSet::new();
         for k in arr {
-            let k = k.as_str().ok_or_else(|| RpcError::invalid_params("kinds must be a string array"))?;
+            let k = k
+                .as_str()
+                .ok_or_else(|| RpcError::invalid_params("kinds must be a string array"))?;
             if !describe::event_known(k) {
-                return Err(RpcError::invalid_params(format!("unknown event kind '{k}'; call rpc.describe for the catalog")));
+                return Err(RpcError::invalid_params(format!(
+                    "unknown event kind '{k}'; call rpc.describe for the catalog"
+                )));
             }
             set.insert(k.to_string());
         }
@@ -449,34 +538,54 @@ async fn events_subscribe(eng: &Arc<Engine>, sess: &mut Session, params: Option<
 
     let mut chats: Option<HashSet<String>> = None;
     if let Some(v) = obj.get("chats") {
-        let arr = v.as_array().ok_or_else(|| RpcError::invalid_params("chats must be an array of chat: ids"))?;
+        let arr = v
+            .as_array()
+            .ok_or_else(|| RpcError::invalid_params("chats must be an array of chat: ids"))?;
         let mut set = HashSet::new();
         for c in arr {
-            let c = c.as_str().ok_or_else(|| RpcError::invalid_params("chats must be an array of chat: ids"))?;
+            let c = c
+                .as_str()
+                .ok_or_else(|| RpcError::invalid_params("chats must be an array of chat: ids"))?;
             check_prefix(c, &["chat:"], "chats[]")?;
             set.insert(c.to_string());
         }
         chats = Some(set);
     }
 
-    let since = match obj.get("since") {
-        None | Some(Value::Null) => None,
-        Some(Value::Number(n)) => {
-            if n.is_i64() && n.as_i64().unwrap() < 0 {
-                return Err(RpcError::new(ErrorKind::NotFound, "since negative; nothing to resume from"));
+    let since =
+        match obj.get("since") {
+            None | Some(Value::Null) => None,
+            Some(Value::Number(n)) => {
+                if n.is_i64() && n.as_i64().unwrap() < 0 {
+                    return Err(RpcError::new(
+                        ErrorKind::NotFound,
+                        "since negative; nothing to resume from",
+                    ));
+                }
+                Some(n.as_u64().ok_or_else(|| {
+                    RpcError::invalid_params("since must be a non-negative integer")
+                })?)
             }
-            Some(n.as_u64().ok_or_else(|| RpcError::invalid_params("since must be a non-negative integer"))?)
-        }
-        Some(_) => return Err(RpcError::invalid_params("since must be a non-negative integer")),
-    };
+            Some(_) => {
+                return Err(RpcError::invalid_params(
+                    "since must be a non-negative integer",
+                ))
+            }
+        };
 
     let latest = eng.events.latest_seq();
     if let Some(s) = since {
         if s > latest && latest > 0 {
-            return Err(RpcError::new(ErrorKind::NotFound, "since exceeds latest_seq; nothing to resume from"));
+            return Err(RpcError::new(
+                ErrorKind::NotFound,
+                "since exceeds latest_seq; nothing to resume from",
+            ));
         }
         if s > 0 && latest == 0 {
-            return Err(RpcError::new(ErrorKind::NotFound, "replay log empty; nothing to resume from"));
+            return Err(RpcError::new(
+                ErrorKind::NotFound,
+                "replay log empty; nothing to resume from",
+            ));
         }
     }
 
@@ -545,20 +654,33 @@ async fn events_subscribe(eng: &Arc<Engine>, sess: &mut Session, params: Option<
     Ok(result)
 }
 
-fn events_unsubscribe(eng: &Engine, sess: &mut Session, params: Option<Value>) -> Result<Value, RpcError> {
+fn events_unsubscribe(
+    eng: &Engine,
+    sess: &mut Session,
+    params: Option<Value>,
+) -> Result<Value, RpcError> {
     let p: Value = params.unwrap_or(Value::Null);
-    let obj = p.as_object().ok_or_else(|| RpcError::invalid_params("params must be an object"))?;
+    let obj = p
+        .as_object()
+        .ok_or_else(|| RpcError::invalid_params("params must be an object"))?;
     let sub_id = req_str(obj, "subscription_id")?;
     check_prefix(sub_id, &["sub:"], "subscription_id")?;
     if eng.events.unsubscribe(sess.conn_id, sub_id) {
         sess.subscriptions.remove(sub_id);
         Ok(json!({"subscription_id": sub_id, "closed": true}))
     } else {
-        Err(RpcError::new(ErrorKind::NotFound, "no such subscription_id on this connection"))
+        Err(RpcError::new(
+            ErrorKind::NotFound,
+            "no such subscription_id on this connection",
+        ))
     }
 }
 
-async fn shutdown_request(eng: &Arc<Engine>, sess: &mut Session, params: Option<Value>) -> Result<Value, RpcError> {
+async fn shutdown_request(
+    eng: &Arc<Engine>,
+    sess: &mut Session,
+    params: Option<Value>,
+) -> Result<Value, RpcError> {
     let obj = match params {
         None | Some(Value::Null) => Map::new(),
         Some(v) if v.is_object() => v.as_object().unwrap().clone(),
@@ -570,7 +692,11 @@ async fn shutdown_request(eng: &Arc<Engine>, sess: &mut Session, params: Option<
             .as_u64()
             .map(|v| v.min(MAX_GRACE_MS))
             .ok_or_else(|| RpcError::invalid_params("grace_ms must be a non-negative integer"))?,
-        Some(_) => return Err(RpcError::invalid_params("grace_ms must be a non-negative integer")),
+        Some(_) => {
+            return Err(RpcError::invalid_params(
+                "grace_ms must be a non-negative integer",
+            ))
+        }
     };
     eng.core().shutdown(grace_ms).await?;
     eng.begin_shutdown(grace_ms);
@@ -598,8 +724,13 @@ async fn shutdown_request(eng: &Arc<Engine>, sess: &mut Session, params: Option<
 /// Emit the hello-time backlog notice when the core reports queued outbound
 /// work (AGENT-API §5.7).
 pub async fn post_hello_backlog(eng: &Arc<Engine>, conn_id: u64) {
-    let Ok(summary) = eng.core().backlog_summary().await else { return };
-    let queued = summary.get("queued_outbound").and_then(Value::as_u64).unwrap_or(0);
+    let Ok(summary) = eng.core().backlog_summary().await else {
+        return;
+    };
+    let queued = summary
+        .get("queued_outbound")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
     if queued == 0 {
         return;
     }

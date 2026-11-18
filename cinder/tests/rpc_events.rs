@@ -41,12 +41,19 @@ async fn p5_subscribe_replays_since() {
         }
         seqs.push(ev_seq(&f) as i64);
     }
-    assert_eq!(seqs, vec![3, 4, 5, -1], "replayed 3,4,5 then backlog: {seqs:?}");
+    assert_eq!(
+        seqs,
+        vec![3, 4, 5, -1],
+        "replayed 3,4,5 then backlog: {seqs:?}"
+    );
 
     // exactly one backlog marker, with summary + counts
     let frames = drain(&mut h.rx).await;
     for f in &frames {
-        assert_ne!(f["method"], "session.backlog", "backlog emitted exactly once");
+        assert_ne!(
+            f["method"], "session.backlog",
+            "backlog emitted exactly once"
+        );
     }
 }
 
@@ -65,7 +72,10 @@ async fn p6_gap_marker_on_expiry() {
     assert_eq!(r["latest_seq"], 10);
 
     let first = frame(&mut h.rx).await;
-    assert_eq!(first["method"], "event.gap", "gap marker must precede replayed events");
+    assert_eq!(
+        first["method"], "event.gap",
+        "gap marker must precede replayed events"
+    );
     assert_eq!(first["params"]["requested_since"], 2);
     assert_eq!(first["params"]["oldest_available"], 7);
     assert_eq!(first["params"]["lost"], "unknown");
@@ -98,11 +108,17 @@ async fn p11_trusted_false_on_inbound() {
     );
     let ev = frame(&mut h.rx).await;
     assert_eq!(ev["method"], "message.received");
-    assert_eq!(ev["params"]["message"]["body"]["trusted"], false, "inbound body.trusted must be false");
+    assert_eq!(
+        ev["params"]["message"]["body"]["trusted"], false,
+        "inbound body.trusted must be false"
+    );
     // and the schema's trusted field carries the injection-hygiene description
     let d = call(&mut h, 2, "rpc.describe", json!({})).await;
     let s = d["events"]["message.received"]["params"].to_string();
-    assert!(s.contains("UNTRUSTED"), "schema must mark inbound text untrusted");
+    assert!(
+        s.contains("UNTRUSTED"),
+        "schema must mark inbound text untrusted"
+    );
 }
 
 // kind + chat filters gate which events land on this subscription.
@@ -110,20 +126,41 @@ async fn p11_trusted_false_on_inbound() {
 async fn subscription_filters() {
     let mut h = harness();
     hello(&mut h).await;
-    let _r = call(&mut h, 1, "events.subscribe", json!({"kinds": ["msg_state"], "chats": ["chat:onlyme"]})).await;
+    let _r = call(
+        &mut h,
+        1,
+        "events.subscribe",
+        json!({"kinds": ["msg_state"], "chats": ["chat:onlyme"]}),
+    )
+    .await;
     frame(&mut h.rx).await; // backlog
 
     // wrong kind -> dropped for this sub
-    h.core.emit("message.received", Some(CHAT), json!({"chat_id": CHAT, "message": {}}));
+    h.core.emit(
+        "message.received",
+        Some(CHAT),
+        json!({"chat_id": CHAT, "message": {}}),
+    );
     // right kind, wrong chat -> dropped
-    h.core.emit("msg_state", Some(CHAT), json!({"chat_id": CHAT, "msg_id": "m", "client_msg_id": "c", "state": "sent"}));
+    h.core.emit(
+        "msg_state",
+        Some(CHAT),
+        json!({"chat_id": CHAT, "msg_id": "m", "client_msg_id": "c", "state": "sent"}),
+    );
     // right kind, right chat -> delivered
-    h.core.emit("msg_state", Some("chat:onlyme"), json!({"chat_id": "chat:onlyme", "msg_id": "m", "client_msg_id": "c", "state": "sent"}));
+    h.core.emit(
+        "msg_state",
+        Some("chat:onlyme"),
+        json!({"chat_id": "chat:onlyme", "msg_id": "m", "client_msg_id": "c", "state": "sent"}),
+    );
 
     let ev = frame(&mut h.rx).await;
     assert_eq!(ev["method"], "msg_state");
     assert_eq!(ev["params"]["chat_id"], "chat:onlyme");
-    assert!(maybe_frame(&mut h.rx, 150).await.is_none(), "filtered events must not arrive");
+    assert!(
+        maybe_frame(&mut h.rx, 150).await.is_none(),
+        "filtered events must not arrive"
+    );
 }
 
 // No since -> live-only, still gets exactly one backlog marker first.
@@ -154,9 +191,19 @@ async fn unsubscribe_stops_and_resume_works() {
     let sub = r["subscription_id"].as_str().unwrap().to_string();
     frame(&mut h.rx).await; // backlog
 
-    let r = call(&mut h, 2, "events.unsubscribe", json!({"subscription_id": sub})).await;
+    let r = call(
+        &mut h,
+        2,
+        "events.unsubscribe",
+        json!({"subscription_id": sub}),
+    )
+    .await;
     assert_eq!(r["closed"], true);
-    h.core.emit("message.received", Some(CHAT), json!({"chat_id": CHAT, "message": {}}));
+    h.core.emit(
+        "message.received",
+        Some(CHAT),
+        json!({"chat_id": CHAT, "message": {}}),
+    );
     assert!(maybe_frame(&mut h.rx, 150).await.is_none());
 
     // resume from seq 0 -> replays the event emitted while unsubscribed
@@ -234,7 +281,11 @@ async fn live_events_during_replay_buffer_behind_backlog() {
     line(&mut h, &req(1, "events.subscribe", json!({"since": 0}))).await;
     let resp = frame(&mut h.rx).await;
     assert_eq!(resp["id"], 1);
-    h.core.emit("msg_state", Some(CHAT), json!({"chat_id": CHAT, "msg_id": "msg:live", "client_msg_id": "c", "state": "sent"}));
+    h.core.emit(
+        "msg_state",
+        Some(CHAT),
+        json!({"chat_id": CHAT, "msg_id": "msg:live", "client_msg_id": "c", "state": "sent"}),
+    );
 
     // wire order: replay 1..5, backlog marker, then the buffered live event
     for expect in 1..=5u64 {
@@ -246,5 +297,9 @@ async fn live_events_during_replay_buffer_behind_backlog() {
     assert_eq!(back["method"], "session.backlog");
     let live = frame(&mut h.rx).await;
     assert_eq!(live["method"], "msg_state");
-    assert_eq!(ev_seq(&live), 6, "buffered live event keeps seq order behind backlog");
+    assert_eq!(
+        ev_seq(&live),
+        6,
+        "buffered live event keeps seq order behind backlog"
+    );
 }

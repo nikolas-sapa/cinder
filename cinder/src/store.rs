@@ -32,7 +32,10 @@ pub enum StoreError {
     #[error("not found: {0}")]
     NotFound(String),
     #[error("invalid state transition: {from:?} -> {to:?}")]
-    InvalidTransition { from: Option<MsgState>, to: MsgState },
+    InvalidTransition {
+        from: Option<MsgState>,
+        to: MsgState,
+    },
     #[error("client_msg_id replayed with different payload")]
     Conflict,
     #[error("internal: {0}")]
@@ -138,10 +141,7 @@ impl MsgState {
     }
 
     fn is_terminal(self) -> bool {
-        matches!(
-            self,
-            MsgState::Read | MsgState::Failed | MsgState::Expired
-        )
+        matches!(self, MsgState::Read | MsgState::Failed | MsgState::Expired)
     }
 
     fn can_reach(self, to: MsgState) -> bool {
@@ -256,8 +256,7 @@ fn decode_cursor(s: &str) -> Result<Cursor> {
     let json = BASE64URL_NOPAD
         .decode(body.as_bytes())
         .map_err(|_| StoreError::InvalidCursor)?;
-    let cur: Cursor =
-        serde_json::from_slice(&json).map_err(|_| StoreError::InvalidCursor)?;
+    let cur: Cursor = serde_json::from_slice(&json).map_err(|_| StoreError::InvalidCursor)?;
     if cur.c.is_empty() || cur.m.is_empty() {
         return Err(StoreError::InvalidCursor);
     }
@@ -347,8 +346,7 @@ impl Store {
 
     fn migrate(&self) -> Result<()> {
         let conn = self.conn()?;
-        let version: i64 =
-            conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
+        let version: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
         if version >= SCHEMA_VERSION {
             return Ok(());
         }
@@ -451,9 +449,7 @@ impl Store {
     pub fn meta(&self, key: &str) -> Result<Option<String>> {
         Ok(self
             .conn()?
-            .query_row("SELECT val FROM meta WHERE key = ?1", [key], |r| {
-                r.get(0)
-            })
+            .query_row("SELECT val FROM meta WHERE key = ?1", [key], |r| r.get(0))
             .optional()?)
     }
 
@@ -501,32 +497,28 @@ impl Store {
         drop(stmt);
         chats
             .into_iter()
-            .map(|(chat_id, peer, title, created, activity, unread, verified, read_upto)| {
-                let peer_id: [u8; 32] = peer
-                    .try_into()
-                    .map_err(|_| StoreError::Internal("peer_id len"))?;
-                Ok(Chat {
-                    last_message: self
-                        .last_message_locked(&conn, &chat_id)?
-                        .map(Box::new),
-                    chat_id,
-                    peer_id,
-                    title,
-                    created_at: created,
-                    last_activity: activity,
-                    unread,
-                    verified: verified != 0,
-                    read_upto,
-                })
-            })
+            .map(
+                |(chat_id, peer, title, created, activity, unread, verified, read_upto)| {
+                    let peer_id: [u8; 32] = peer
+                        .try_into()
+                        .map_err(|_| StoreError::Internal("peer_id len"))?;
+                    Ok(Chat {
+                        last_message: self.last_message_locked(&conn, &chat_id)?.map(Box::new),
+                        chat_id,
+                        peer_id,
+                        title,
+                        created_at: created,
+                        last_activity: activity,
+                        unread,
+                        verified: verified != 0,
+                        read_upto,
+                    })
+                },
+            )
             .collect()
     }
 
-    fn last_message_locked(
-        &self,
-        conn: &Connection,
-        chat_id: &str,
-    ) -> Result<Option<Message>> {
+    fn last_message_locked(&self, conn: &Connection, chat_id: &str) -> Result<Option<Message>> {
         let row = conn
             .query_row(
                 "SELECT msg_id, dir, kind, body, state, client_msg_id, ts,
@@ -551,15 +543,11 @@ impl Store {
                 },
             )
             .optional()?;
-        row.map(|t| self.tuple_to_message(conn, chat_id, t)).transpose()
+        row.map(|t| self.tuple_to_message(conn, chat_id, t))
+            .transpose()
     }
 
-    fn tuple_to_message(
-        &self,
-        conn: &Connection,
-        chat_id: &str,
-        t: MsgRow,
-    ) -> Result<Message> {
+    fn tuple_to_message(&self, conn: &Connection, chat_id: &str, t: MsgRow) -> Result<Message> {
         let (msg_id, dir, kind, body, state, client_msg_id, ts, revision, edited_at, deleted) = t;
         Ok(Message {
             reactions: self.reactions_locked(conn, &msg_id)?,
@@ -577,11 +565,7 @@ impl Store {
         })
     }
 
-    fn reactions_locked(
-        &self,
-        conn: &Connection,
-        msg_id: &str,
-    ) -> Result<Vec<Reaction>> {
+    fn reactions_locked(&self, conn: &Connection, msg_id: &str) -> Result<Vec<Reaction>> {
         let mut stmt = conn.prepare(
             "SELECT emoji, reactor, ts FROM reactions WHERE msg_id = ?1
              ORDER BY ts ASC",
@@ -647,20 +631,15 @@ impl Store {
                      ORDER BY ts DESC, msg_id DESC LIMIT ?4",
                 )?;
                 let rows = stmt
-                    .query_map(
-                        params![chat_id, c.t, c.m, limit + 1],
-                        Self::msg_tuple_row,
-                    )?
+                    .query_map(params![chat_id, c.t, c.m, limit + 1], Self::msg_tuple_row)?
                     .collect::<std::result::Result<Vec<_>, _>>()?;
                 rows
             }
         };
         let has_more = tuples.len() as i64 > limit;
-        let page: Vec<MsgRow> =
-            tuples.into_iter().take(limit as usize).collect();
+        let page: Vec<MsgRow> = tuples.into_iter().take(limit as usize).collect();
         let next = if has_more {
-            page.last()
-                .map(|t| encode_cursor(chat_id, t.6, &t.0))
+            page.last().map(|t| encode_cursor(chat_id, t.6, &t.0))
         } else {
             None
         };
@@ -679,9 +658,7 @@ impl Store {
              ORDER BY ts DESC, msg_id DESC LIMIT ?4",
         )?;
         let rows = stmt
-            .query_map(params![chat_id, 0i64, "", 50i64], |r| {
-                r.get::<_, String>(3)
-            })?
+            .query_map(params![chat_id, 0i64, "", 50i64], |r| r.get::<_, String>(3))?
             .collect::<std::result::Result<Vec<_>, _>>()?;
         Ok(rows.join("\n"))
     }
@@ -724,9 +701,7 @@ impl Store {
                         |r| Ok((r.get(0)?, r.get(1)?)),
                     )
                     .optional()?;
-                if stored
-                    .as_ref()
-                    .map(|(b, c)| (b.as_str(), c.as_str()))
+                if stored.as_ref().map(|(b, c)| (b.as_str(), c.as_str()))
                     != Some((msg.body.as_str(), msg.chat_id.as_str()))
                 {
                     return Err(StoreError::Conflict);
@@ -734,10 +709,7 @@ impl Store {
                 tx.commit()?;
                 return Ok((existing, true));
             }
-            tx.execute(
-                "DELETE FROM dedup WHERE ts < ?1",
-                [now_ms() - DEDUP_TTL_MS],
-            )?;
+            tx.execute("DELETE FROM dedup WHERE ts < ?1", [now_ms() - DEDUP_TTL_MS])?;
         }
 
         let affected = tx.execute(
@@ -804,10 +776,7 @@ impl Store {
     /// emitted in v1 (no read receipts exist on the wire).
     pub fn update_state(&self, msg_id: &str, to: MsgState) -> Result<()> {
         if to == MsgState::Read {
-            return Err(StoreError::InvalidTransition {
-                from: None,
-                to,
-            });
+            return Err(StoreError::InvalidTransition { from: None, to });
         }
         let conn = self.conn()?;
         let tx = conn.unchecked_transaction()?;
@@ -819,10 +788,7 @@ impl Store {
             )
             .optional()?;
         let raw = raw.ok_or_else(|| StoreError::NotFound(msg_id.to_string()))?;
-        let from = raw
-            .as_deref()
-            .map(MsgState::parse)
-            .transpose()?;
+        let from = raw.as_deref().map(MsgState::parse).transpose()?;
         let ok = match from {
             Some(f) => f.can_reach(to),
             None => to == MsgState::Queued,
@@ -845,9 +811,8 @@ impl Store {
 
     pub fn state_history(&self, msg_id: &str) -> Result<Vec<(MsgState, i64)>> {
         let conn = self.conn()?;
-        let mut stmt = conn.prepare(
-            "SELECT state, ts FROM msg_states WHERE msg_id = ?1 ORDER BY id",
-        )?;
+        let mut stmt =
+            conn.prepare("SELECT state, ts FROM msg_states WHERE msg_id = ?1 ORDER BY id")?;
         let rows = stmt
             .query_map([msg_id], |r| {
                 Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?))
@@ -999,12 +964,7 @@ impl Store {
         Ok(())
     }
 
-    pub fn add_reaction(
-        &self,
-        msg_id: &str,
-        emoji: &str,
-        reactor: &[u8; 32],
-    ) -> Result<()> {
+    pub fn add_reaction(&self, msg_id: &str, emoji: &str, reactor: &[u8; 32]) -> Result<()> {
         self.conn()?.execute(
             "INSERT INTO reactions(msg_id, emoji, reactor, ts) VALUES(?1, ?2, ?3, ?4)
              ON CONFLICT(msg_id, emoji, reactor) DO UPDATE SET ts = excluded.ts",
@@ -1036,18 +996,12 @@ impl Store {
 
     /// Appends to the bounded replay log. `seq` is AUTOINCREMENT — monotonic
     /// and never reused even after pruning (gap semantics preserved).
-    pub fn append_event(
-        &self,
-        kind: &str,
-        chat_id: Option<&str>,
-        payload: &Value,
-    ) -> Result<u64> {
+    pub fn append_event(&self, kind: &str, chat_id: Option<&str>, payload: &Value) -> Result<u64> {
         let conn = self.conn()?;
         let tx = conn.unchecked_transaction()?;
-        let prev: i64 = tx
-            .query_row("SELECT COALESCE(MAX(seq), 0) FROM event_log", [], |r| {
-                r.get(0)
-            })?;
+        let prev: i64 = tx.query_row("SELECT COALESCE(MAX(seq), 0) FROM event_log", [], |r| {
+            r.get(0)
+        })?;
         tx.execute(
             "INSERT INTO event_log(kind, chat_id, payload, ts) VALUES(?1, ?2, ?3, ?4)",
             params![kind, chat_id, payload.to_string(), now_ms()],
@@ -1058,10 +1012,9 @@ impl Store {
             "DELETE FROM event_log WHERE seq <= ?1",
             [seq.saturating_sub(EVENT_LOG_KEEP)],
         )?;
-        let oldest: i64 = tx
-            .query_row("SELECT COALESCE(MIN(seq), 0) FROM event_log", [], |r| {
-                r.get(0)
-            })?;
+        let oldest: i64 = tx.query_row("SELECT COALESCE(MIN(seq), 0) FROM event_log", [], |r| {
+            r.get(0)
+        })?;
         tx.execute(
             "INSERT INTO meta(key, val) VALUES('oldest_event_seq', ?1)
              ON CONFLICT(key) DO UPDATE SET val = excluded.val",
@@ -1074,21 +1027,17 @@ impl Store {
     pub fn oldest_seq(&self) -> Result<u64> {
         Ok(self
             .conn()?
-            .query_row(
-                "SELECT COALESCE(MIN(seq), 0) FROM event_log",
-                [],
-                |r| r.get::<_, i64>(0),
-            )? as u64)
+            .query_row("SELECT COALESCE(MIN(seq), 0) FROM event_log", [], |r| {
+                r.get::<_, i64>(0)
+            })? as u64)
     }
 
     pub fn latest_seq(&self) -> Result<u64> {
         Ok(self
             .conn()?
-            .query_row(
-                "SELECT COALESCE(MAX(seq), 0) FROM event_log",
-                [],
-                |r| r.get::<_, i64>(0),
-            )? as u64)
+            .query_row("SELECT COALESCE(MAX(seq), 0) FROM event_log", [], |r| {
+                r.get::<_, i64>(0)
+            })? as u64)
     }
 
     /// Replay `[since+1 .. latest_seq]`, oldest-first, capped at `limit`.
@@ -1097,16 +1046,14 @@ impl Store {
     /// or `since == u64::MAX` semantics error → `InvalidCursor` (RPC -32017).
     pub fn events_since(&self, since: u64, limit: u32) -> Result<EventsPage> {
         let conn = self.conn()?;
-        let latest: i64 = conn.query_row(
-            "SELECT COALESCE(MAX(seq), 0) FROM event_log",
-            [],
-            |r| r.get(0),
-        )?;
-        let oldest: i64 = conn.query_row(
-            "SELECT COALESCE(MIN(seq), 0) FROM event_log",
-            [],
-            |r| r.get(0),
-        )?;
+        let latest: i64 =
+            conn.query_row("SELECT COALESCE(MAX(seq), 0) FROM event_log", [], |r| {
+                r.get(0)
+            })?;
+        let oldest: i64 =
+            conn.query_row("SELECT COALESCE(MIN(seq), 0) FROM event_log", [], |r| {
+                r.get(0)
+            })?;
         let since_i = since as i64;
         if since > latest as u64 {
             return Err(StoreError::InvalidCursor);
@@ -1164,12 +1111,7 @@ impl Store {
     }
 
     /// FTS5 search over message bodies, newest-first, limit-bounded.
-    pub fn search(
-        &self,
-        query: &str,
-        chat_id: Option<&str>,
-        limit: u32,
-    ) -> Result<Vec<Message>> {
+    pub fn search(&self, query: &str, chat_id: Option<&str>, limit: u32) -> Result<Vec<Message>> {
         let conn = self.conn()?;
         let sql = "SELECT m.msg_id, m.dir, m.kind, m.body, m.state,
                           m.client_msg_id, m.ts, m.revision, m.edited_at,
@@ -1190,13 +1132,11 @@ impl Store {
                 rows
             }
             None => {
-                let mut stmt =
-                    conn.prepare(&format!("{sql} ORDER BY m.ts DESC LIMIT ?2"))?;
+                let mut stmt = conn.prepare(&format!("{sql} ORDER BY m.ts DESC LIMIT ?2"))?;
                 let rows = stmt
-                    .query_map(
-                        params![query, limit.clamp(1, MAX_WINDOW) as i64],
-                        |r| Ok((r.get::<_, String>(10)?, Self::msg_tuple_row(r)?)),
-                    )?
+                    .query_map(params![query, limit.clamp(1, MAX_WINDOW) as i64], |r| {
+                        Ok((r.get::<_, String>(10)?, Self::msg_tuple_row(r)?))
+                    })?
                     .collect::<std::result::Result<Vec<_>, _>>()?;
                 rows
             }

@@ -170,9 +170,27 @@ impl MockBackend {
         let (event_tx, event_rx) = mpsc::channel(256);
         let now = now_ts();
         let peers = [
-            ("peer:oyv4kqz3n5m2w7j1h8", "eidolon", Trust::Verified, 35, 2u32),
-            ("peer:x9w2kvn4m7q1c8d3f5g", "murmur", Trust::Unverified, 20, 0),
-            ("peer:z4mkp8r2t6y0b3n7q9w", "nightjar", Trust::KeyChanged, 7, 5),
+            (
+                "peer:oyv4kqz3n5m2w7j1h8",
+                "eidolon",
+                Trust::Verified,
+                35,
+                2u32,
+            ),
+            (
+                "peer:x9w2kvn4m7q1c8d3f5g",
+                "murmur",
+                Trust::Unverified,
+                20,
+                0,
+            ),
+            (
+                "peer:z4mkp8r2t6y0b3n7q9w",
+                "nightjar",
+                Trust::KeyChanged,
+                7,
+                5,
+            ),
         ];
         let mut chats = Vec::new();
         let mut contacts = Vec::new();
@@ -183,11 +201,8 @@ impl MockBackend {
             let mut msgs = Vec::with_capacity(*count);
             for j in 0..*count {
                 let out = (i + j) % 3 == 0;
-                let mut text = format!(
-                    "{} ({})",
-                    DEMO_LINES[(i * 7 + j) % DEMO_LINES.len()],
-                    j + 1
-                );
+                let mut text =
+                    format!("{} ({})", DEMO_LINES[(i * 7 + j) % DEMO_LINES.len()], j + 1);
                 if i == 0 && j == count - 1 {
                     text.push_str(" \x1b]8;;https://example.invalid\x07link\x1b[2J");
                 }

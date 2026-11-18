@@ -4,18 +4,18 @@
 // These modules are compiled here directly so this suite is independent of
 // lib.rs wiring order; they are also reachable via cinder_core::* once the
 // modules are exported.
+#[path = "../src/contacts.rs"]
+mod contacts;
 #[path = "../src/error.rs"]
 mod error;
 #[path = "../src/frame.rs"]
 mod frame;
-#[path = "../src/proto.rs"]
-mod proto;
-#[path = "../src/keystore.rs"]
-mod keystore;
 #[path = "../src/identity.rs"]
 mod identity;
-#[path = "../src/contacts.rs"]
-mod contacts;
+#[path = "../src/keystore.rs"]
+mod keystore;
+#[path = "../src/proto.rs"]
+mod proto;
 
 use std::fs;
 
@@ -40,8 +40,7 @@ fn hex32(s: &str) -> [u8; 32] {
 fn peer_id_is_sha256_of_static_pubkey() {
     // Hand-computed: sha256(b"\x00\x01..\x1f") via independent implementation.
     let public: [u8; 32] = std::array::from_fn(|i| i as u8);
-    let expected =
-        hex32("630dcd2966c4336691125448bbb25b4ff412a49c732db2c8abc1b8581bd710dd");
+    let expected = hex32("630dcd2966c4336691125448bbb25b4ff412a49c732db2c8abc1b8581bd710dd");
     let mut blob = vec![0xabu8; 32];
     blob.extend_from_slice(&public);
     let id = Identity::from_stored_blob(&blob).unwrap();

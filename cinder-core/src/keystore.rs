@@ -101,9 +101,7 @@ impl KeyStore for AgeFileStore {
         ));
         let mut reader = decryptor
             .decrypt(std::iter::once(&identity as &dyn age::Identity))
-            .map_err(|_| {
-                Error::KeyUnavailable("passphrase incorrect or file corrupt".into())
-            })?;
+            .map_err(|_| Error::KeyUnavailable("passphrase incorrect or file corrupt".into()))?;
         let mut plaintext = Vec::with_capacity(blob.len());
         reader.read_to_end(&mut plaintext)?;
         Ok(Some(plaintext.into()))

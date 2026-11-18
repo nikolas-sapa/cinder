@@ -95,7 +95,9 @@ pub struct Engine {
 impl Engine {
     pub fn new(core: Arc<dyn CinderCore>, cfg: EngineConfig) -> Arc<Self> {
         let events = Arc::new(EventManager::new(
-            Box::new(crate::rpc::events::InMemoryReplayLog::new(cfg.replay_log_max_events)),
+            Box::new(crate::rpc::events::InMemoryReplayLog::new(
+                cfg.replay_log_max_events,
+            )),
             cfg.send_queue_frames,
         ));
         Arc::new(Self {
@@ -108,7 +110,11 @@ impl Engine {
         })
     }
 
-    pub fn with_events(core: Arc<dyn CinderCore>, cfg: EngineConfig, events: Arc<EventManager>) -> Arc<Self> {
+    pub fn with_events(
+        core: Arc<dyn CinderCore>,
+        cfg: EngineConfig,
+        events: Arc<EventManager>,
+    ) -> Arc<Self> {
         Arc::new(Self {
             dedup: Mutex::new(DedupTable::new(cfg.dedup_ttl, cfg.dedup_max_entries)),
             core,
@@ -150,7 +156,9 @@ impl Engine {
         let (tx, rx) = mpsc::channel(self.cfg.send_queue_frames.max(1));
         let dead = Arc::new(AtomicBool::new(false));
         let wake = Arc::new(Notify::new());
-        let conn_id = self.events.register_conn(tx.clone(), dead.clone(), wake.clone());
+        let conn_id = self
+            .events
+            .register_conn(tx.clone(), dead.clone(), wake.clone());
         (
             Session {
                 engine: self.clone(),
@@ -214,12 +222,18 @@ impl Session {
             } else {
                 "expected a JSON-RPC 2.0 request object"
             };
-            self.send_frame(error_response(Value::Null, &RpcError::invalid_request(hint)));
+            self.send_frame(error_response(
+                Value::Null,
+                &RpcError::invalid_request(hint),
+            ));
             return Verdict::Continue;
         };
 
         let id = obj.get("id").cloned();
-        let method_ok = obj.get("method").map(|m| m.is_string() && !m.as_str().unwrap_or_default().is_empty()).unwrap_or(false);
+        let method_ok = obj
+            .get("method")
+            .map(|m| m.is_string() && !m.as_str().unwrap_or_default().is_empty())
+            .unwrap_or(false);
         let version_ok = obj.get("jsonrpc").map(|j| j == "2.0").unwrap_or(false);
         if !version_ok || !method_ok || obj.contains_key("result") || obj.contains_key("error") {
             let hint = if !version_ok {
@@ -230,7 +244,10 @@ impl Session {
                 "responses are not accepted from clients"
             };
             // §2.2: errors from non-Request input always carry "id":null.
-            self.send_frame(error_response(Value::Null, &RpcError::invalid_request(hint)));
+            self.send_frame(error_response(
+                Value::Null,
+                &RpcError::invalid_request(hint),
+            ));
             return Verdict::Continue;
         }
         let method = obj["method"].as_str().unwrap().to_string();
@@ -303,7 +320,10 @@ impl Session {
         if def.scope != "" && !self.scopes.contains("*") && !self.scopes.contains(def.scope) {
             return Err(RpcError::new(
                 ErrorKind::UnauthorizedScope,
-                format!("scope '{}' required; reconnect with a broader grant", def.scope),
+                format!(
+                    "scope '{}' required; reconnect with a broader grant",
+                    def.scope
+                ),
             ));
         }
         methods::dispatch_method(&self.engine.clone(), self, method, params).await

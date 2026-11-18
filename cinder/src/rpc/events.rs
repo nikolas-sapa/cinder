@@ -9,7 +9,9 @@ use time::OffsetDateTime;
 use tokio::sync::{mpsc, Notify};
 
 pub fn now_ts() -> String {
-    OffsetDateTime::now_utc().format(&Rfc3339).unwrap_or_else(|_| "1970-01-01T00:00:00Z".into())
+    OffsetDateTime::now_utc()
+        .format(&Rfc3339)
+        .unwrap_or_else(|_| "1970-01-01T00:00:00Z".into())
 }
 
 #[derive(Debug, Clone)]
@@ -41,7 +43,11 @@ pub struct InMemoryReplayLog {
 
 impl InMemoryReplayLog {
     pub fn new(cap: usize) -> Self {
-        Self { cap: cap.max(1), events: VecDeque::new(), latest: 0 }
+        Self {
+            cap: cap.max(1),
+            events: VecDeque::new(),
+            latest: 0,
+        }
     }
 }
 
@@ -63,7 +69,11 @@ impl ReplayLog for InMemoryReplayLog {
     }
 
     fn since(&self, since: u64) -> Vec<EventRecord> {
-        self.events.iter().filter(|e| e.seq > since).cloned().collect()
+        self.events
+            .iter()
+            .filter(|e| e.seq > since)
+            .cloned()
+            .collect()
     }
 }
 
@@ -150,16 +160,31 @@ pub struct EventManager {
 impl EventManager {
     pub fn new(log: Box<dyn ReplayLog>, queue_cap: usize) -> Self {
         Self {
-            state: Mutex::new(ManagerState { log, conns: HashMap::new(), queue_cap }),
+            state: Mutex::new(ManagerState {
+                log,
+                conns: HashMap::new(),
+                queue_cap,
+            }),
             next_sub: AtomicU64::new(1),
             next_conn: AtomicU64::new(1),
         }
     }
 
-    pub fn register_conn(&self, tx: mpsc::Sender<OutMsg>, dead: Arc<AtomicBool>, wake: Arc<Notify>) -> u64 {
+    pub fn register_conn(
+        &self,
+        tx: mpsc::Sender<OutMsg>,
+        dead: Arc<AtomicBool>,
+        wake: Arc<Notify>,
+    ) -> u64 {
         let id = self.next_conn.fetch_add(1, Ordering::SeqCst);
         let handle = ConnHandle { tx, dead, wake };
-        self.state.lock().unwrap().conns.insert(id, ConnState { handle, subs: HashMap::new() });
+        self.state.lock().unwrap().conns.insert(
+            id,
+            ConnState {
+                handle,
+                subs: HashMap::new(),
+            },
+        );
         id
     }
 
@@ -175,7 +200,12 @@ impl EventManager {
     /// concurrent `emit` can never slip between the snapshot and registration.
     /// `since.is_none()` means live-only. Gap check happens in the caller for
     /// error reporting; here `gap` is precomputed.
-    pub fn subscribe(&self, conn_id: u64, filters: Filters, since: Option<u64>) -> Option<SubscribeOutcome> {
+    pub fn subscribe(
+        &self,
+        conn_id: u64,
+        filters: Filters,
+        since: Option<u64>,
+    ) -> Option<SubscribeOutcome> {
         let mut st = self.state.lock().unwrap();
         if !st.conns.contains_key(&conn_id) {
             return None;
@@ -211,7 +241,8 @@ impl EventManager {
                 if let Value::Object(extra) = rec.payload {
                     params.extend(extra);
                 }
-                replay_frames.push(event_notification(&rec.kind, Value::Object(params)).to_string());
+                replay_frames
+                    .push(event_notification(&rec.kind, Value::Object(params)).to_string());
             }
         }
         let replayed = replay_frames.len() - usize::from(gap);
@@ -222,7 +253,11 @@ impl EventManager {
             replaying: true,
             pending: VecDeque::new(),
         };
-        st.conns.get_mut(&conn_id).unwrap().subs.insert(id.clone(), sub);
+        st.conns
+            .get_mut(&conn_id)
+            .unwrap()
+            .subs
+            .insert(id.clone(), sub);
         Some(SubscribeOutcome {
             subscription_id: id,
             oldest_seq: oldest,
@@ -240,8 +275,12 @@ impl EventManager {
     /// empty once the sub is live and the buffer is drained.
     pub fn end_replay(&self, conn_id: u64, sub_id: &str) -> Vec<String> {
         let mut st = self.state.lock().unwrap();
-        let Some(conn) = st.conns.get_mut(&conn_id) else { return Vec::new() };
-        let Some(sub) = conn.subs.get_mut(sub_id) else { return Vec::new() };
+        let Some(conn) = st.conns.get_mut(&conn_id) else {
+            return Vec::new();
+        };
+        let Some(sub) = conn.subs.get_mut(sub_id) else {
+            return Vec::new();
+        };
         let drained: Vec<String> = sub.pending.drain(..).collect();
         if drained.is_empty() {
             sub.replaying = false;
@@ -251,7 +290,10 @@ impl EventManager {
 
     pub fn unsubscribe(&self, conn_id: u64, sub_id: &str) -> bool {
         let mut st = self.state.lock().unwrap();
-        st.conns.get_mut(&conn_id).map(|c| c.subs.remove(sub_id).is_some()).unwrap_or(false)
+        st.conns
+            .get_mut(&conn_id)
+            .map(|c| c.subs.remove(sub_id).is_some())
+            .unwrap_or(false)
     }
 
     /// Emit `session.backlog`-style control frames built by the caller into a

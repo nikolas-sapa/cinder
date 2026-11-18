@@ -82,7 +82,9 @@ async fn event_loop<B: Backend>(
 }
 
 async fn ensure_history<B: Backend>(backend: &mut B, app: &mut App) {
-    let Some(chat_id) = app.active_chat.clone() else { return };
+    let Some(chat_id) = app.active_chat.clone() else {
+        return;
+    };
     let need = match app.buffer(&chat_id) {
         Some(b) => !b.loaded && !b.fetching,
         None => true,
@@ -101,10 +103,15 @@ async fn ensure_history<B: Backend>(backend: &mut B, app: &mut App) {
 }
 
 async fn fetch_older<B: Backend>(backend: &mut B, app: &mut App) {
-    let Some(chat_id) = app.needs_older() else { return };
+    let Some(chat_id) = app.needs_older() else {
+        return;
+    };
     let cursor = app.buffer(&chat_id).and_then(|b| b.next_before.clone());
     app.buffer_mut(&chat_id).fetching = true;
-    match backend.history(&chat_id, cursor.as_deref(), HISTORY_PAGE).await {
+    match backend
+        .history(&chat_id, cursor.as_deref(), HISTORY_PAGE)
+        .await
+    {
         Ok(page) => app.insert_history(&chat_id, page),
         Err(e) => {
             app.buffer_mut(&chat_id).fetching = false;
@@ -198,8 +205,7 @@ async fn submit<B: Backend>(backend: &mut B, app: &mut App) -> Result<()> {
         return Ok(());
     };
     if chat.trust == Trust::KeyChanged {
-        app.status_line =
-            Some("key changed — /verify before sending".to_string());
+        app.status_line = Some("key changed — /verify before sending".to_string());
         return Ok(());
     }
     let chat_id = chat.chat_id.clone();
@@ -242,9 +248,7 @@ async fn run_command<B: Backend>(backend: &mut B, app: &mut App, line: &str) -> 
             match sas {
                 Some(s) => match backend.verify_contact(&contact_id, &s).await {
                     Ok(()) => {
-                        if let Some(c) =
-                            app.chats.iter_mut().find(|c| c.contact_id == contact_id)
-                        {
+                        if let Some(c) = app.chats.iter_mut().find(|c| c.contact_id == contact_id) {
                             c.trust = Trust::Verified;
                         }
                         app.status_line = Some("verified".to_string());
@@ -268,10 +272,10 @@ async fn run_command<B: Backend>(backend: &mut B, app: &mut App, line: &str) -> 
 }
 
 async fn show_finger<B: Backend>(backend: &mut B, app: &mut App, contact_id: &str) {
-    let Some(chat) = app.active_chat() else { return };
-    let name = sanitize(
-        chat.display_name.as_deref().unwrap_or(&chat.peer_id),
-    );
+    let Some(chat) = app.active_chat() else {
+        return;
+    };
+    let name = sanitize(chat.display_name.as_deref().unwrap_or(&chat.peer_id));
     let peer_id = chat.peer_id.clone();
     let trust = chat.trust;
     let sas = backend

@@ -38,7 +38,12 @@ async fn p8_stdout_purity() {
     cfg.send_queue_frames = 64;
     let engine = Engine::new(core.clone(), cfg);
     core.attach(engine.events.clone());
-    let task = tokio::spawn(serve_connection(engine, BufReader::new(srv_read), srv_write, Transport::Stdio));
+    let task = tokio::spawn(serve_connection(
+        engine,
+        BufReader::new(srv_read),
+        srv_write,
+        Transport::Stdio,
+    ));
 
     let script = [
         "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"session.hello\",\"params\":{\"protocol_version\":[1]}}",
@@ -62,7 +67,10 @@ async fn p8_stdout_purity() {
             cli_write.write_all(line.as_bytes()).await.unwrap();
             cli_write.write_all(b"\n").await.unwrap();
             cli_write.flush().await.unwrap();
-            tracing::warn!(iteration = i, "mid-session diagnostic that must stay off stdout");
+            tracing::warn!(
+                iteration = i,
+                "mid-session diagnostic that must stay off stdout"
+            );
             // read until we get the response for this id
             loop {
                 let mut buf = Vec::new();
@@ -72,7 +80,10 @@ async fn p8_stdout_purity() {
                 }
                 raw.extend_from_slice(&buf[..n]);
                 let v: Value = serde_json::from_slice(&buf[..n - 1]).unwrap_or_else(|e| {
-                    panic!("line {i}: byte sequence is not a JSON frame: {:?} ({e})", String::from_utf8_lossy(&buf))
+                    panic!(
+                        "line {i}: byte sequence is not a JSON frame: {:?} ({e})",
+                        String::from_utf8_lossy(&buf)
+                    )
                 });
                 if v.get("id").and_then(|id| id.as_u64()) == Some(i as u64 + 1) {
                     break;
@@ -93,7 +104,8 @@ async fn p8_stdout_purity() {
         if l.is_empty() {
             continue;
         }
-        let v: Value = serde_json::from_str(l).unwrap_or_else(|e| panic!("line {i} not a frame: {l:?} ({e})"));
+        let v: Value =
+            serde_json::from_str(l).unwrap_or_else(|e| panic!("line {i} not a frame: {l:?} ({e})"));
         assert!(
             v.get("jsonrpc") == Some(&Value::from("2.0")),
             "frame {i} missing jsonrpc marker: {l}"
@@ -101,7 +113,10 @@ async fn p8_stdout_purity() {
         count += 1;
     }
     assert!(count >= 7, "expected hello+describe+send+subscribe resp+backlog+shutdown resp+notice frames, got {count}");
-    assert!(!logbuf.lock().unwrap().is_empty(), "warn log was captured somewhere else");
+    assert!(
+        !logbuf.lock().unwrap().is_empty(),
+        "warn log was captured somewhere else"
+    );
     let binding = logbuf.lock().unwrap();
     let logs = String::from_utf8_lossy(&binding);
     assert!(logs.contains("mid-session diagnostic"));
@@ -117,7 +132,12 @@ async fn flush_per_frame() {
     let core = Arc::new(MockCore::basic());
     let engine = Engine::new(core.clone(), EngineConfig::default());
     core.attach(engine.events.clone());
-    let _task = tokio::spawn(serve_connection(engine, BufReader::new(srv_read), srv_write, Transport::Stdio));
+    let _task = tokio::spawn(serve_connection(
+        engine,
+        BufReader::new(srv_read),
+        srv_write,
+        Transport::Stdio,
+    ));
 
     cli_write
         .write_all(b"{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"rpc.describe\",\"params\":{}}\n")
@@ -126,8 +146,14 @@ async fn flush_per_frame() {
     // no further input, no explicit client flush needed beyond write_all
     let mut br = BufReader::new(cli_read);
     let mut line = String::new();
-    let n = tokio::time::timeout(std::time::Duration::from_secs(2), br.read_line(&mut line)).await.unwrap().unwrap();
-    assert!(n > 0, "frame must arrive without waiting for more input (flush per frame)");
+    let n = tokio::time::timeout(std::time::Duration::from_secs(2), br.read_line(&mut line))
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(
+        n > 0,
+        "frame must arrive without waiting for more input (flush per frame)"
+    );
     let v: Value = serde_json::from_str(line.trim()).unwrap();
     assert_eq!(v["id"], 1);
 }

@@ -177,11 +177,15 @@ impl App {
     }
 
     pub fn active_idx(&self) -> Option<usize> {
-        self.chats.iter().position(|c| Some(&c.chat_id) == self.active_chat.as_ref())
+        self.chats
+            .iter()
+            .position(|c| Some(&c.chat_id) == self.active_chat.as_ref())
     }
 
     pub fn active_chat(&self) -> Option<&ChatSummary> {
-        self.chats.iter().find(|c| Some(&c.chat_id) == self.active_chat.as_ref())
+        self.chats
+            .iter()
+            .find(|c| Some(&c.chat_id) == self.active_chat.as_ref())
     }
 
     pub fn buffer(&self, chat_id: &str) -> Option<&ChatBuffer> {
@@ -189,7 +193,9 @@ impl App {
     }
 
     pub fn buffer_mut(&mut self, chat_id: &str) -> &mut ChatBuffer {
-        self.buffers.entry(chat_id.to_string()).or_insert_with(ChatBuffer::new)
+        self.buffers
+            .entry(chat_id.to_string())
+            .or_insert_with(ChatBuffer::new)
     }
 
     pub fn activate(&mut self, chat_id: &str) {
@@ -219,7 +225,11 @@ impl App {
     }
 
     pub fn next_unread(&mut self) -> bool {
-        if let Some(c) = self.chats.iter().find(|c| self.unread.get(&c.chat_id).copied().unwrap_or(0) > 0) {
+        if let Some(c) = self
+            .chats
+            .iter()
+            .find(|c| self.unread.get(&c.chat_id).copied().unwrap_or(0) > 0)
+        {
             let id = c.chat_id.clone();
             self.activate(&id);
             true
@@ -259,10 +269,21 @@ impl App {
                     *self.unread.entry(chat_id).or_insert(0) += 1;
                 }
             }
-            Event::MsgState { msg_id, client_msg_id, chat_id, state } => {
+            Event::MsgState {
+                msg_id,
+                client_msg_id,
+                chat_id,
+                state,
+            } => {
                 self.on_msg_state(&chat_id, &msg_id, &client_msg_id, state);
             }
-            Event::ContactConnected { contact_id, peer_id, chat_id, display_name, trust } => {
+            Event::ContactConnected {
+                contact_id,
+                peer_id,
+                chat_id,
+                display_name,
+                trust,
+            } => {
                 if self.chats.iter().all(|c| c.chat_id != chat_id) {
                     self.chats.push(ChatSummary {
                         chat_id: chat_id.clone(),
@@ -282,7 +303,9 @@ impl App {
                 if let Some(c) = self.chats.iter_mut().find(|c| c.chat_id == chat_id) {
                     c.trust = Trust::KeyChanged;
                 }
-                self.status_line = Some("WARNING: contact key changed — sending blocked until /verify".to_string());
+                self.status_line = Some(
+                    "WARNING: contact key changed — sending blocked until /verify".to_string(),
+                );
             }
             Event::VerificationNeeded { contact_id, .. } => {
                 self.status_line = Some(format!("{contact_id} unverified — /finger to inspect"));
@@ -302,17 +325,28 @@ impl App {
     }
 
     fn sort_chats(&mut self) {
-        self.chats.sort_by(|a, b| b.last_activity.cmp(&a.last_activity));
+        self.chats
+            .sort_by(|a, b| b.last_activity.cmp(&a.last_activity));
     }
 
-    pub fn on_msg_state(&mut self, chat_id: &str, msg_id: &str, client_msg_id: &str, state: MsgState) {
+    pub fn on_msg_state(
+        &mut self,
+        chat_id: &str,
+        msg_id: &str,
+        client_msg_id: &str,
+        state: MsgState,
+    ) {
         let resolved = self
             .pending
             .get(client_msg_id)
             .cloned()
             .unwrap_or_else(|| msg_id.to_string());
         if let Some(buf) = self.buffers.get_mut(chat_id) {
-            if let Some(m) = buf.messages.iter_mut().find(|m| m.msg_id == resolved || m.msg_id == msg_id) {
+            if let Some(m) = buf
+                .messages
+                .iter_mut()
+                .find(|m| m.msg_id == resolved || m.msg_id == msg_id)
+            {
                 apply_state(&mut m.state, state);
             }
         }
@@ -331,7 +365,8 @@ impl App {
             state: MsgState::Queued,
             ts: now_ts(),
         };
-        self.pending.insert(client_msg_id.to_string(), msg_id.to_string());
+        self.pending
+            .insert(client_msg_id.to_string(), msg_id.to_string());
         self.buffer_mut(chat_id).messages.push(msg);
         let ts = now_ts();
         self.touch_chat(chat_id, ts, body);
@@ -357,7 +392,9 @@ impl App {
     }
 
     pub fn page_scroll(&mut self, up: bool) {
-        let Some(chat_id) = self.active_chat.clone() else { return };
+        let Some(chat_id) = self.active_chat.clone() else {
+            return;
+        };
         let view_h = self.chat_view_height as usize;
         let buf = self.buffer_mut(&chat_id);
         let page = view_h.saturating_sub(2).max(1);
@@ -375,7 +412,9 @@ impl App {
         if !buf.has_more || buf.fetching {
             return None;
         }
-        let max = buf.render_rows.saturating_sub(self.chat_view_height as usize);
+        let max = buf
+            .render_rows
+            .saturating_sub(self.chat_view_height as usize);
         ((buf.scroll as usize) + 4 >= max && max > 0).then(|| chat_id.clone())
     }
 
@@ -427,7 +466,11 @@ mod tests {
     }
 
     fn page(msgs: Vec<Message>) -> HistoryPage {
-        HistoryPage { messages: msgs, has_more: false, next_before: None }
+        HistoryPage {
+            messages: msgs,
+            has_more: false,
+            next_before: None,
+        }
     }
 
     fn msg(chat_id: &str, n: usize, dir: Dir) -> Message {
@@ -533,10 +576,16 @@ mod tests {
         assert_eq!(parse_command("/help"), Command::Help);
         assert_eq!(parse_command("/quit"), Command::Quit);
         assert_eq!(parse_command("/q"), Command::Quit);
-        assert_eq!(parse_command("/add cinder://x@y"), Command::Add("cinder://x@y".into()));
+        assert_eq!(
+            parse_command("/add cinder://x@y"),
+            Command::Add("cinder://x@y".into())
+        );
         assert!(matches!(parse_command("/add"), Command::Unknown(_)));
         assert_eq!(parse_command("/verify"), Command::Verify(None));
-        assert_eq!(parse_command("/verify 44-19"), Command::Verify(Some("44-19".into())));
+        assert_eq!(
+            parse_command("/verify 44-19"),
+            Command::Verify(Some("44-19".into()))
+        );
         assert_eq!(parse_command("/finger"), Command::Finger);
         assert_eq!(parse_command("/clear"), Command::Clear);
         assert_eq!(parse_command("/status"), Command::Status);
@@ -546,9 +595,7 @@ mod tests {
 
     #[test]
     fn fuzzy_ranking() {
-        assert!(
-            fuzzy_score("eid", "eidolon").unwrap() > fuzzy_score("eid", "veiled").unwrap()
-        );
+        assert!(fuzzy_score("eid", "eidolon").unwrap() > fuzzy_score("eid", "veiled").unwrap());
         assert_eq!(fuzzy_score("xyz", "eidolon"), None);
         assert!(fuzzy_score("", "anything").is_some());
         let mut a = app();

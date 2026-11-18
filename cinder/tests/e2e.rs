@@ -2,14 +2,14 @@
 //! the relay never sees plaintext, and a full `cinder rpc` subprocess
 //! round-trip.
 
+#[path = "../src/core.rs"]
+mod core;
 #[path = "../src/rpc/mod.rs"]
 mod rpc;
 #[path = "../src/store.rs"]
 mod store;
 #[path = "../src/tui/mod.rs"]
 mod tui;
-#[path = "../src/core.rs"]
-mod core;
 
 use std::io::{BufRead, BufReader, Write};
 use std::net::SocketAddr;
@@ -48,26 +48,39 @@ async fn spawn_relay() -> SocketAddr {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     tokio::spawn(async move {
-        let _ =
-            cinder_relay::server::serve(listener, cinder_relay::server::RelayConfig::default())
-                .await;
+        let _ = cinder_relay::server::serve(listener, cinder_relay::server::RelayConfig::default())
+            .await;
     });
     addr
 }
 
 async fn open_core(dir: &std::path::Path, relay: SocketAddr) -> Arc<Core> {
-    Core::open(dir, Some(relay_hostport(relay)), Identity::generate().unwrap())
-        .await
-        .expect("core open")
+    Core::open(
+        dir,
+        Some(relay_hostport(relay)),
+        Identity::generate().unwrap(),
+    )
+    .await
+    .expect("core open")
 }
 
 /// Connect two fresh identities through `relay` (invite out, accept in) and
 /// return both cores once both sides report `active`.
-async fn paired(relay: SocketAddr, dir_a: &std::path::Path, dir_b: &std::path::Path) -> (Arc<Core>, Arc<Core>) {
+async fn paired(
+    relay: SocketAddr,
+    dir_a: &std::path::Path,
+    dir_b: &std::path::Path,
+) -> (Arc<Core>, Arc<Core>) {
     let a = open_core(dir_a, relay).await;
     let b = open_core(dir_b, relay).await;
-    assert!(a.wait_connected(CONNECT_WAIT).await, "A never reached the relay");
-    assert!(b.wait_connected(CONNECT_WAIT).await, "B never reached the relay");
+    assert!(
+        a.wait_connected(CONNECT_WAIT).await,
+        "A never reached the relay"
+    );
+    assert!(
+        b.wait_connected(CONNECT_WAIT).await,
+        "B never reached the relay"
+    );
 
     let (link, _) = a.invite_link(3600).await.expect("invite.create");
     let peer_a = b
@@ -76,13 +89,15 @@ async fn paired(relay: SocketAddr, dir_a: &std::path::Path, dir_b: &std::path::P
         .await
         .expect("invite.accept");
     assert!(
-        b.wait_meta(&peer_a, MetaState::Active, HANDSHAKE_WAIT).await,
+        b.wait_meta(&peer_a, MetaState::Active, HANDSHAKE_WAIT)
+            .await,
         "B never went active with A"
     );
     // Inbound side lands pending_in + contact.request per spec; accept it.
     let peer_b = b.identity().peer_id();
     assert!(
-        a.wait_meta(&peer_b, MetaState::PendingIn, HANDSHAKE_WAIT).await,
+        a.wait_meta(&peer_b, MetaState::PendingIn, HANDSHAKE_WAIT)
+            .await,
         "A never saw B's inbound request"
     );
     a.contact_accept(ContactIdParams {
@@ -91,7 +106,8 @@ async fn paired(relay: SocketAddr, dir_a: &std::path::Path, dir_b: &std::path::P
     .await
     .expect("contact.accept");
     assert!(
-        a.wait_meta(&peer_b, MetaState::Active, HANDSHAKE_WAIT).await,
+        a.wait_meta(&peer_b, MetaState::Active, HANDSHAKE_WAIT)
+            .await,
         "A never went active with B"
     );
     (a, b)
@@ -268,14 +284,9 @@ async fn relay_never_sees_plaintext() {
     // Both directions exercised; give the tap a beat to flush captures.
     tokio::time::sleep(Duration::from_millis(300)).await;
     let seen = cap.lock().unwrap();
+    assert!(!seen.is_empty(), "tap captured nothing — no traffic flowed");
     assert!(
-        !seen.is_empty(),
-        "tap captured nothing — no traffic flowed"
-    );
-    assert!(
-        !seen
-            .windows(marker.len())
-            .any(|w| w == marker.as_bytes()),
+        !seen.windows(marker.len()).any(|w| w == marker.as_bytes()),
         "plaintext leaked onto the wire ({} captured bytes)",
         seen.len()
     );
@@ -417,22 +428,13 @@ fn rpc_subprocess_roundtrip() {
 
     // B (initiator) goes straight to contact.connected; A lands pending_in
     // and emits contact.request — accept it to complete the pair.
-    b.wait_for(
-        |v| v["method"] == "contact.connected",
-        HANDSHAKE_WAIT,
-    );
-    let req = a.wait_for(
-        |v| v["method"] == "contact.request",
-        HANDSHAKE_WAIT,
-    );
+    b.wait_for(|v| v["method"] == "contact.connected", HANDSHAKE_WAIT);
+    let req = a.wait_for(|v| v["method"] == "contact.request", HANDSHAKE_WAIT);
     let req_id = req["params"]["contact_id"].as_str().unwrap().to_string();
     a.send(json!({"jsonrpc":"2.0","id":6,"method":"contact.accept",
         "params":{"contact_id": req_id}}));
     a.wait_for(|v| v["id"] == 6 && v["result"].is_object(), HANDSHAKE_WAIT);
-    a.wait_for(
-        |v| v["method"] == "contact.connected",
-        HANDSHAKE_WAIT,
-    );
+    a.wait_for(|v| v["method"] == "contact.connected", HANDSHAKE_WAIT);
 
     // B → A send; A must see message.received with trusted:false.
     let marker = format!("rpc-e2e-{}", std::process::id());

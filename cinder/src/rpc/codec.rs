@@ -10,7 +10,8 @@ pub enum LineRead {
 }
 
 pub fn is_blank(line: &[u8]) -> bool {
-    line.iter().all(|b| matches!(b, b' ' | b'\t' | b'\r' | 0x0b | 0x0c))
+    line.iter()
+        .all(|b| matches!(b, b' ' | b'\t' | b'\r' | 0x0b | 0x0c))
 }
 
 pub struct LineReader<R> {
@@ -20,7 +21,10 @@ pub struct LineReader<R> {
 
 impl<R: AsyncBufRead + Unpin> LineReader<R> {
     pub fn new(inner: R) -> Self {
-        Self { inner, cap: MAX_LINE_BYTES }
+        Self {
+            inner,
+            cap: MAX_LINE_BYTES,
+        }
     }
 
     pub fn with_cap(inner: R, cap: usize) -> Self {
@@ -59,7 +63,11 @@ impl<R: AsyncBufRead + Unpin> LineReader<R> {
             }
             self.inner.consume(consumed);
             if hit_newline {
-                return Ok(Some(if oversized { LineRead::Oversized } else { LineRead::Line(buf) }));
+                return Ok(Some(if oversized {
+                    LineRead::Oversized
+                } else {
+                    LineRead::Line(buf)
+                }));
             }
         }
     }

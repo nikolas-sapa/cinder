@@ -79,9 +79,7 @@ async fn wait_handshake(
     let fut = async {
         loop {
             match link.recv().await? {
-                ClientEvent::Handshake { hs_id, body, .. }
-                    if want.is_none_or(|w| w == hs_id) =>
-                {
+                ClientEvent::Handshake { hs_id, body, .. } if want.is_none_or(|w| w == hs_id) => {
                     return Ok(body);
                 }
                 ClientEvent::Error { code, detail } => {

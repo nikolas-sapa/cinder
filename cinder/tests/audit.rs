@@ -2,14 +2,14 @@
 //! mutation scoping, contact-add wedge, inbound gating, offline queue
 //! flush, react gating, and unread marking.
 
+#[path = "../src/core.rs"]
+mod core;
 #[path = "../src/rpc/mod.rs"]
 mod rpc;
 #[path = "../src/store.rs"]
 mod store;
 #[path = "../src/tui/mod.rs"]
 mod tui;
-#[path = "../src/core.rs"]
-mod core;
 
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -46,17 +46,20 @@ async fn spawn_relay() -> SocketAddr {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     tokio::spawn(async move {
-        let _ =
-            cinder_relay::server::serve(listener, cinder_relay::server::RelayConfig::default())
-                .await;
+        let _ = cinder_relay::server::serve(listener, cinder_relay::server::RelayConfig::default())
+            .await;
     });
     addr
 }
 
 async fn open_core(dir: &std::path::Path, relay: SocketAddr) -> Arc<Core> {
-    Core::open(dir, Some((relay, relay.to_string())), Identity::generate().unwrap())
-        .await
-        .expect("core open")
+    Core::open(
+        dir,
+        Some((relay, relay.to_string())),
+        Identity::generate().unwrap(),
+    )
+    .await
+    .expect("core open")
 }
 
 /// Restart path: reopen `dir` with the SAME identity blob (same static key →
@@ -78,18 +81,30 @@ async fn paired(
 ) -> (Arc<Core>, Arc<Core>) {
     let a = open_core(dir_a, relay).await;
     let b = open_core(dir_b, relay).await;
-    assert!(a.wait_connected(CONNECT_WAIT).await, "A never reached the relay");
-    assert!(b.wait_connected(CONNECT_WAIT).await, "B never reached the relay");
+    assert!(
+        a.wait_connected(CONNECT_WAIT).await,
+        "A never reached the relay"
+    );
+    assert!(
+        b.wait_connected(CONNECT_WAIT).await,
+        "B never reached the relay"
+    );
 
     let (link, _) = a.invite_link(3600).await.expect("invite.create");
-    let peer_a = b.clone().start_add(&link, None).await.expect("invite.accept");
+    let peer_a = b
+        .clone()
+        .start_add(&link, None)
+        .await
+        .expect("invite.accept");
     assert!(
-        b.wait_meta(&peer_a, MetaState::Active, HANDSHAKE_WAIT).await,
+        b.wait_meta(&peer_a, MetaState::Active, HANDSHAKE_WAIT)
+            .await,
         "B never went active with A"
     );
     let peer_b = b.identity().peer_id();
     assert!(
-        a.wait_meta(&peer_b, MetaState::PendingIn, HANDSHAKE_WAIT).await,
+        a.wait_meta(&peer_b, MetaState::PendingIn, HANDSHAKE_WAIT)
+            .await,
         "A never saw B's inbound request"
     );
     a.contact_accept(ContactIdParams {
@@ -98,7 +113,8 @@ async fn paired(
     .await
     .expect("contact.accept");
     assert!(
-        a.wait_meta(&peer_b, MetaState::Active, HANDSHAKE_WAIT).await,
+        a.wait_meta(&peer_b, MetaState::Active, HANDSHAKE_WAIT)
+            .await,
         "A never went active with B"
     );
     (a, b)
@@ -208,7 +224,8 @@ fn audit_peer_mutations_scoped() {
     .unwrap();
 
     // Legit: peer edits its own inbound message in its own chat.
-    s.apply_peer_edit("msg:in", "chat:a", "edited by peer").unwrap();
+    s.apply_peer_edit("msg:in", "chat:a", "edited by peer")
+        .unwrap();
     assert_eq!(
         s.get_message("msg:in").unwrap().unwrap().body,
         "edited by peer"
@@ -395,7 +412,10 @@ async fn audit_history_marks_read() {
         .find(|c| c["chat_id"] == chat_id)
         .and_then(|c| c["unread"].as_u64())
         .unwrap_or(0);
-    assert!(unread > 0, "precondition: chat must be unread before history");
+    assert!(
+        unread > 0,
+        "precondition: chat must be unread before history"
+    );
 
     a.chat_history(ChatHistoryParams {
         chat_id: chat_id.clone(),

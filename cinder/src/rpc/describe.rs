@@ -40,7 +40,17 @@ fn ts_prop() -> Value {
 
 fn message_schema() -> Value {
     obj(
-        &["msg_id", "chat_id", "dir", "from", "kind", "body", "ts", "revision", "reactions"],
+        &[
+            "msg_id",
+            "chat_id",
+            "dir",
+            "from",
+            "kind",
+            "body",
+            "ts",
+            "revision",
+            "reactions",
+        ],
         json!({
             "msg_id": id_prop("msg:", "message id"),
             "chat_id": id_prop("chat:", "conversation id"),
@@ -219,7 +229,17 @@ fn p_chat_list() -> Value {
 
 fn chat_schema() -> Value {
     obj(
-        &["chat_id", "kind", "contact_id", "peer_id", "display_name", "trust", "unread", "last_activity", "last_message"],
+        &[
+            "chat_id",
+            "kind",
+            "contact_id",
+            "peer_id",
+            "display_name",
+            "trust",
+            "unread",
+            "last_activity",
+            "last_message",
+        ],
         json!({
             "chat_id": id_prop("chat:", ""),
             "kind": {"enum": ["direct", "group"], "description": "v1 emits direct only; group reserved"},
@@ -272,7 +292,16 @@ fn p_contact_list() -> Value {
 
 fn contact_schema() -> Value {
     obj(
-        &["contact_id", "peer_id", "display_name", "state", "substate", "trust", "chat_id", "created_at"],
+        &[
+            "contact_id",
+            "peer_id",
+            "display_name",
+            "state",
+            "substate",
+            "trust",
+            "chat_id",
+            "created_at",
+        ],
         json!({
             "contact_id": id_prop("contact:", ""),
             "peer_id": id_prop("peer:", ""),
@@ -287,7 +316,10 @@ fn contact_schema() -> Value {
 }
 
 fn r_contact_list() -> Value {
-    obj(&["contacts"], json!({"contacts": {"type": "array", "items": contact_schema()}}))
+    obj(
+        &["contacts"],
+        json!({"contacts": {"type": "array", "items": contact_schema()}}),
+    )
 }
 
 fn p_contact_add() -> Value {
@@ -308,7 +340,10 @@ fn r_contact_add() -> Value {
 }
 
 fn p_contact_id() -> Value {
-    obj(&["contact_id"], json!({"contact_id": id_prop("contact:", "")}))
+    obj(
+        &["contact_id"],
+        json!({"contact_id": id_prop("contact:", "")}),
+    )
 }
 
 fn r_contact_accept() -> Value {
@@ -400,7 +435,10 @@ fn r_events_subscribe() -> Value {
 }
 
 fn p_events_unsubscribe() -> Value {
-    obj(&["subscription_id"], json!({"subscription_id": id_prop("sub:", "")}))
+    obj(
+        &["subscription_id"],
+        json!({"subscription_id": id_prop("sub:", "")}),
+    )
 }
 
 fn r_events_unsubscribe() -> Value {
@@ -418,7 +456,10 @@ fn p_shutdown() -> Value {
 }
 
 fn r_shutdown() -> Value {
-    obj(&["shutting_down", "grace_ms"], json!({"shutting_down": {"const": true}, "grace_ms": {"type": "integer"}}))
+    obj(
+        &["shutting_down", "grace_ms"],
+        json!({"shutting_down": {"const": true}, "grace_ms": {"type": "integer"}}),
+    )
 }
 
 pub const METHODS: &[MethodDef] = &[
@@ -443,7 +484,10 @@ pub const METHODS: &[MethodDef] = &[
 ];
 
 fn e_message_received() -> Value {
-    event_envelope(&["chat_id", "message"], json!({"chat_id": id_prop("chat:", ""), "message": message_schema()}))
+    event_envelope(
+        &["chat_id", "message"],
+        json!({"chat_id": id_prop("chat:", ""), "message": message_schema()}),
+    )
 }
 
 fn e_msg_state() -> Value {
@@ -487,7 +531,13 @@ fn e_contact_connected() -> Value {
 
 fn e_identity_changed() -> Value {
     event_envelope(
-        &["contact_id", "peer_id", "old_fingerprint", "new_fingerprint", "trust"],
+        &[
+            "contact_id",
+            "peer_id",
+            "old_fingerprint",
+            "new_fingerprint",
+            "trust",
+        ],
         json!({
             "contact_id": id_prop("contact:", ""),
             "peer_id": id_prop("peer:", ""),
@@ -587,7 +637,12 @@ pub fn describe(limits: Value) -> Value {
         .collect::<Map<String, Value>>();
     let events = EVENTS
         .iter()
-        .map(|e| (e.name.to_string(), json!({"description": e.description, "params": (e.params)()})))
+        .map(|e| {
+            (
+                e.name.to_string(),
+                json!({"description": e.description, "params": (e.params)()}),
+            )
+        })
         .collect::<Map<String, Value>>();
     let kinds = ERROR_KINDS
         .iter()

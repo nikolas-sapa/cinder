@@ -198,15 +198,17 @@ async fn wrong_uid_rejected() {
     }
 
     let (mut r, mut w) = daemon_client(&sock).await;
-    w.write_all(b"{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"session.hello\",\"params\":{\"protocol_version\":1}}\n").await.unwrap();
-    w.flush().await.unwrap();
+    // Peer may already be rejected before our write lands — reset is fine.
+    let _ = w.write_all(b"{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"session.hello\",\"params\":{\"protocol_version\":1}}\n").await;
+    let _ = w.flush().await;
     let mut buf = String::new();
-    let n = timeout(Duration::from_secs(3), r.read_line(&mut buf))
+    // Linux delivers ECONNRESET (close with unread data); macOS delivers EOF.
+    match timeout(Duration::from_secs(3), r.read_line(&mut buf))
         .await
         .unwrap()
-        .unwrap();
-    assert_eq!(
-        n, 0,
-        "mismatched-uid peer must be rejected (EOF, no frames)"
-    );
+    {
+        Ok(0) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::ConnectionReset => {}
+        other => panic!("mismatched-uid peer must be rejected with no frames, got {other:?}"),
+    }
 }

@@ -4,7 +4,10 @@ pub mod describe;
 pub mod dispatch;
 pub mod events;
 pub mod methods;
+// peercred does a getpeereid/SO_PEERCRED ioctl — the second allow-listed
+// unsafe site under `#![deny(unsafe_code)]` (BRIEF: hardening + peercred).
 #[cfg(unix)]
+#[allow(unsafe_code)]
 pub mod peercred;
 pub mod protocol;
 pub mod server;

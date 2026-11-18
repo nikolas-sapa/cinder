@@ -534,6 +534,18 @@ fn dead_session_rehandshakes_to_fresh_session_id() {
 
 // ---- rekey policy ---------------------------------------------------------------
 
+/// One send step: encrypt → deliver data → drain any rekey control. Control
+/// frames always travel AFTER the data frame that triggered them and BEFORE
+/// the next data frame — TCP order preserves the boundary.
+fn send_one(a: &mut Session, b: &mut Session, pt: &[u8]) {
+    let ct = a.encrypt(pt).unwrap();
+    let ctrl = a.maybe_rekey().unwrap();
+    b.decrypt(&ct).unwrap();
+    if let Some(c) = ctrl {
+        assert!(b.decrypt(&c).unwrap().is_empty(), "control unit consumed");
+    }
+}
+
 #[test]
 fn rekey_trigger_counts_messages_and_time() {
     let (_, _, mut a, _) = fresh_pair();
@@ -541,10 +553,13 @@ fn rekey_trigger_counts_messages_and_time() {
     for _ in 0..4 {
         a.encrypt(b"x").unwrap();
     }
+    assert_eq!(a.rekey_count(), 0, "rekey is caller-driven via maybe_rekey");
+    assert!(a.maybe_rekey().unwrap().is_some());
     assert_eq!(a.rekey_count(), 1);
     for _ in 0..4 {
         a.encrypt(b"x").unwrap();
     }
+    assert!(a.maybe_rekey().unwrap().is_some());
     assert_eq!(a.rekey_count(), 2);
     assert!(!a.rekey_needed());
 
@@ -554,8 +569,141 @@ fn rekey_trigger_counts_messages_and_time() {
         secs: 0,
     });
     assert!(t.rekey_needed(), "secs:0 window already elapsed");
-    assert!(t.maybe_rekey());
+    assert!(t.maybe_rekey().unwrap().is_some());
     assert_eq!(t.rekey_count(), 1);
+}
+
+// ---- M6: ratchet-lite rekey ---------------------------------------------------
+
+#[test]
+fn rekey_msg_threshold_rotates_keys() {
+    let (_, _, mut a, mut b) = fresh_pair();
+    a.set_rekey_policy(RekeyPolicy {
+        msgs: 4,
+        secs: u64::MAX,
+    });
+    // Parallel session on the same plaintexts with rekey disabled.
+    let (_, _, mut a2, mut b2) = fresh_pair();
+    a2.set_rekey_policy(RekeyPolicy {
+        msgs: u64::MAX,
+        secs: u64::MAX,
+    });
+
+    let msgs: [&[u8]; 4] = [b"m0", b"m1", b"m2", b"m3"];
+    for m in msgs {
+        send_one(&mut a, &mut b, m);
+        let ct2 = a2.encrypt(m).unwrap();
+        b2.decrypt(&ct2).unwrap();
+    }
+    assert_eq!(a.rekey_count(), 1, "boundary hit after 4 sends");
+    assert_eq!(b.rekey_count(), 1, "receiver applied rekey on control");
+
+    // Msg 5+ decrypt fine in both directions on the rekeyed session…
+    send_one(&mut a, &mut b, b"m4-post-rekey");
+    send_one(&mut b, &mut a, b"ack-post-rekey");
+
+    // …but the 5th wire frame of the rekeyed stream is NOT interchangeable
+    // with the no-rekey stream: rotated keys, different ciphertext.
+    let ct_rekeyed = a.encrypt(b"same-pt").unwrap();
+    let ct_plain = a2.encrypt(b"same-pt").unwrap();
+    assert_ne!(ct_rekeyed, ct_plain, "post-rekey ciphertext must differ");
+    // The no-rekey peer cannot read the rekeyed frame at all.
+    assert!(b2.decrypt(&ct_rekeyed).is_err());
+    assert_eq!(b2.state(), SessionState::Closed(CloseReason::DecryptFatal));
+}
+
+#[test]
+fn rekey_time_trigger_emits_control_and_peer_applies() {
+    let (_, _, mut a, mut b) = fresh_pair();
+    a.set_rekey_policy(RekeyPolicy {
+        msgs: u64::MAX,
+        secs: 0,
+    });
+    let ct = a.encrypt(b"before").unwrap();
+    let ctrl = a
+        .maybe_rekey()
+        .unwrap()
+        .expect("secs:0 fires on elapsed window");
+    b.decrypt(&ct).unwrap();
+    assert!(b.decrypt(&ctrl).unwrap().is_empty());
+    assert_eq!(a.rekey_count(), 1);
+    assert_eq!(b.rekey_count(), 1);
+    send_one(&mut a, &mut b, b"after");
+    send_one(&mut b, &mut a, b"back");
+}
+
+#[test]
+fn rekey_desync_is_fatal() {
+    let (_, _, mut a, mut b) = fresh_pair();
+    a.set_rekey_policy(RekeyPolicy {
+        msgs: 2,
+        secs: u64::MAX,
+    });
+    send_one(&mut a, &mut b, b"one");
+    let ct = a.encrypt(b"two").unwrap();
+    b.decrypt(&ct).unwrap();
+    // Boundary fires; the control frame is dropped — a rekeyed egress, b
+    // kept the old ingress key. Next frame MUST fail fatally (§11).
+    let dropped = a.maybe_rekey().unwrap().expect("boundary");
+    drop(dropped);
+    let ct = a.encrypt(b"post-rekey").unwrap();
+    assert!(b.decrypt(&ct).is_err());
+    assert_eq!(b.state(), SessionState::Closed(CloseReason::DecryptFatal));
+}
+
+#[test]
+fn rekey_200_msgs_zero_desync_monotonic_nonces() {
+    let (_, _, mut a, mut b) = fresh_pair();
+    a.set_rekey_policy(RekeyPolicy {
+        msgs: 16,
+        secs: u64::MAX,
+    });
+    b.set_rekey_policy(RekeyPolicy {
+        msgs: 16,
+        secs: u64::MAX,
+    });
+    let mut last_a_nonce = 0u64;
+    for i in 0..200u64 {
+        let pt = format!("m{i}");
+        let ct = a.encrypt(pt.as_bytes()).unwrap();
+        let ctrl = a.maybe_rekey().unwrap();
+        assert_eq!(b.decrypt(&ct).unwrap(), pt.as_bytes());
+        if let Some(c) = ctrl {
+            assert!(b.decrypt(&c).unwrap().is_empty());
+        }
+        let n = a.sending_nonce().unwrap();
+        assert!(n > last_a_nonce, "nonce regressed at msg {i}: {n} <= {last_a_nonce}");
+        last_a_nonce = n;
+        send_one(&mut b, &mut a, b"ack");
+    }
+    // 12 outbound boundaries + 12 inbound controls per side.
+    assert_eq!(a.rekey_count(), 24, "200 msgs / 16-per-window, both directions");
+    assert_eq!(b.rekey_count(), 24);
+    assert_eq!(a.sent_count(), 200);
+    assert_eq!(b.received_count(), 200);
+    assert!(!a.is_closed() && !b.is_closed());
+}
+
+#[test]
+fn rekey_preserves_pinned_identity_and_sas() {
+    let (_, _, mut a, mut b) = fresh_pair();
+    a.set_rekey_policy(RekeyPolicy {
+        msgs: 2,
+        secs: u64::MAX,
+    });
+    let sas_a = *a.sas().unwrap().digest();
+    let sas_b = *b.sas().unwrap().digest();
+    let peer_seen_by_a = a.remote_peer_id().unwrap();
+    let static_seen_by_a = a.remote_static().unwrap();
+
+    for i in 0..5u8 {
+        send_one(&mut a, &mut b, &[i]);
+    }
+    assert!(a.rekey_count() >= 2 && b.rekey_count() >= 2);
+    assert_eq!(a.sas().unwrap().digest(), &sas_a);
+    assert_eq!(b.sas().unwrap().digest(), &sas_b);
+    assert_eq!(a.remote_peer_id().unwrap(), peer_seen_by_a);
+    assert_eq!(a.remote_static().unwrap(), static_seen_by_a);
 }
 
 // ---- async drivers over mem link -----------------------------------------------

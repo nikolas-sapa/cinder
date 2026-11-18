@@ -858,6 +858,40 @@ impl Store {
             .collect()
     }
 
+    /// Single-message lookup by id. Needed by the rpc/core seams: `msg.edit`,
+    /// `msg.delete`, and `msg.react` must resolve a `msg_id` to its chat,
+    /// direction, and tombstone state before they can act.
+    pub fn get_message(&self, msg_id: &str) -> Result<Option<Message>> {
+        let conn = self.conn()?;
+        let row = conn
+            .query_row(
+                "SELECT chat_id, msg_id, dir, kind, body, state, client_msg_id,
+                        ts, revision, edited_at, deleted
+                 FROM messages WHERE msg_id = ?1",
+                [msg_id],
+                |r| {
+                    Ok((
+                        r.get::<_, String>(0)?,
+                        (
+                            r.get::<_, String>(1)?,
+                            r.get::<_, String>(2)?,
+                            r.get::<_, String>(3)?,
+                            r.get::<_, String>(4)?,
+                            r.get::<_, Option<String>>(5)?,
+                            r.get::<_, Option<String>>(6)?,
+                            r.get::<_, i64>(7)?,
+                            r.get::<_, i64>(8)?,
+                            r.get::<_, Option<i64>>(9)?,
+                            r.get::<_, i64>(10)?,
+                        ),
+                    ))
+                },
+            )
+            .optional()?;
+        row.map(|(chat_id, t)| self.tuple_to_message(&conn, &chat_id, t))
+            .transpose()
+    }
+
     pub fn edit_message(&self, msg_id: &str, new_body: &str) -> Result<()> {
         let affected = self.conn()?.execute(
             "UPDATE messages SET body = ?2, edited_at = ?3, revision = revision + 1

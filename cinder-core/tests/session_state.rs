@@ -55,7 +55,12 @@ proptest! {
             match op {
                 Op::Send => {
                     match a.encrypt(b"prop") {
-                        Ok(ct) => queue.push(ct),
+                        Ok(ct) => {
+                            queue.push(ct);
+                            if let Ok(Some(ctrl)) = a.maybe_rekey() {
+                                queue.push(ctrl);
+                            }
+                        }
                         Err(_) => prop_assert!(a.is_closed()),
                     }
                 }
@@ -65,7 +70,9 @@ proptest! {
                         match b.decrypt(&ct) {
                             Ok(pt) => {
                                 prop_assert!(!b.is_closed());
-                                prop_assert_eq!(pt, b"prop");
+                                // Empty plaintext = a rekey control unit
+                                // consumed; data always carries b"prop".
+                                prop_assert!(pt.is_empty() || pt.as_slice() == b"prop");
                                 if a.is_closed() || b.is_closed() {
                                     post_close_decrypt_successes += 1;
                                 }

@@ -279,6 +279,9 @@ impl Session {
         Ok(())
     }
 
+    /// §11: an empty plaintext is RESERVED — it encodes the rekey control
+    /// unit on the wire, so data encrypts reject it to keep the two
+    /// unambiguous to the receiver.
     pub fn encrypt(&mut self, plaintext: &[u8]) -> Result<Vec<u8>, Error> {
         match self.state {
             SessionState::Closed(_) => return Err(Error::SessionClosed),
@@ -286,6 +289,9 @@ impl Session {
                 return Err(Error::Protocol("session not established".into()))
             }
             SessionState::Trusted(_) => {}
+        }
+        if plaintext.is_empty() {
+            return Err(Error::Padding);
         }
         let padded = encode_plaintext(plaintext)?;
         let mut buf = vec![0u8; padded.len() + 16];
@@ -303,7 +309,6 @@ impl Session {
         buf.truncate(n);
         self.sent += 1;
         self.window_msgs += 1;
-        self.maybe_rekey();
         Ok(buf)
     }
 
@@ -332,6 +337,10 @@ impl Session {
         };
         buf.truncate(n);
         match decode_plaintext(&buf) {
+            Ok(&[]) => {
+                self.rekey(true)?;
+                Ok(Vec::new())
+            }
             Ok(pt) => {
                 self.received += 1;
                 Ok(pt.to_vec())
@@ -370,17 +379,64 @@ impl Session {
         self.policy = policy;
     }
 
-    /// §11 ratchet-lite trigger check. The real `rekey_manually` call is M6;
-    /// for now this records the trigger and resets the window.
-    pub fn maybe_rekey(&mut self) -> bool {
-        if self.rekey_needed() {
-            self.rekeys += 1;
-            self.window_msgs = 0;
-            self.window_start = Instant::now();
-            true
-        } else {
-            false
+    /// §11 ratchet-lite rekey. `incoming = false` performs the OUTBOUND
+    /// rekey: the returned control frame is sealed under the CURRENT egress
+    /// key, then `rekey_outgoing` rotates it — the frame MUST be transmitted
+    /// in order (after every frame produced so far, before the next
+    /// `encrypt` output). `incoming = true` applies `rekey_incoming`; the
+    /// call path is a control unit inside `decrypt`. Transport-level only:
+    /// no handshake, no re-verification (pinning applies at each NEW XX),
+    /// and no post-compromise healing — only a new handshake heals
+    /// (THREAT-MODEL §5).
+    pub fn rekey(&mut self, incoming: bool) -> Result<Vec<u8>, Error> {
+        match self.state {
+            SessionState::Closed(_) => return Err(Error::SessionClosed),
+            SessionState::Handshaking => {
+                return Err(Error::Protocol("session not established".into()))
+            }
+            SessionState::Trusted(_) => {}
         }
+        if incoming {
+            self.transport
+                .as_mut()
+                .expect("trusted implies transport")
+                .rekey_incoming();
+            self.rekeys += 1;
+            return Ok(Vec::new());
+        }
+        let padded = encode_plaintext(&[])?;
+        let mut buf = vec![0u8; padded.len() + 16];
+        let res = {
+            let ts = self.transport.as_mut().expect("trusted implies transport");
+            ts.write_message(&padded, &mut buf)
+        };
+        let n = match res {
+            Ok(n) => n,
+            Err(e) => {
+                self.fatal_close(CloseReason::DecryptFatal);
+                return Err(Error::Noise(e));
+            }
+        };
+        buf.truncate(n);
+        self.transport
+            .as_mut()
+            .expect("trusted implies transport")
+            .rekey_outgoing();
+        self.rekeys += 1;
+        self.window_msgs = 0;
+        self.window_start = Instant::now();
+        Ok(buf)
+    }
+
+    /// §11 trigger check, caller-driven. On a hit the returned control frame
+    /// is the last frame under the old egress key and MUST go on the wire
+    /// before the next `encrypt` output — TCP ordering carries the boundary
+    /// to the receiver, which applies `rekey_incoming` on the control unit.
+    pub fn maybe_rekey(&mut self) -> Result<Option<Vec<u8>>, Error> {
+        if !self.rekey_needed() {
+            return Ok(None);
+        }
+        self.rekey(false).map(Some)
     }
 
     pub fn rekey_needed(&self) -> bool {

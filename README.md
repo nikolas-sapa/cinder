@@ -12,8 +12,9 @@ JSON-RPC protocol, no bolted-on API, no privileged UI.
 
 ![cinder demo](docs/demo.gif)
 
-*`docs/demo.gif` regenerates from [`demo.tape`](demo.tape) via `vhs
-demo.tape` — regenerated in CI, never hand-edited.*
+*`docs/demo.gif` regenerates from [`demo.tape`](demo.tape): `vhs
+demo.tape` records `docs/demo.webm`, then two-pass ffmpeg → gif —
+regenerated in CI, never hand-edited.*
 
 ## Features
 

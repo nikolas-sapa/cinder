@@ -1,0 +1,33 @@
+[package]
+name = "cinder-core-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+bytes = "1"
+serde = "1"
+tokio-util = { version = "0.7", features = ["codec"] }
+
+[dependencies.cinder-core]
+path = "../cinder-core"
+
+[workspace]
+
+[[bin]]
+name = "frame_parser"
+path = "fuzz_targets/frame_parser.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "handshake_handler"
+path = "fuzz_targets/handshake_handler.rs"
+test = false
+doc = false
+bench = false

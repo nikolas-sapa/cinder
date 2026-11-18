@@ -61,6 +61,11 @@ EOF
 fi
 
 # --- 3) #[allow(unsafe_code)] confined to the allow-list ----------------------
+# Permitted forms:
+#   a) inside cinder/src/hardening.rs or cinder/src/*peercred.rs (any position)
+#   b) an outer #[allow(unsafe_code)] directly attached to the module
+#      declaration `mod hardening;` / `(pub )?mod peercred;` — the only legal
+#      way to permit unsafe inside a #![deny]-rooted crate.
 allow_hits=$(grep -rnE 'allow\(unsafe_code\)' \
                --include='*.rs' \
                cinder/src cinder-core/src cinder-relay/src 2>/dev/null \
@@ -68,8 +73,14 @@ allow_hits=$(grep -rnE 'allow\(unsafe_code\)' \
 if [ -n "$allow_hits" ]; then
     while IFS= read -r line; do
         [ -z "$line" ] && continue
-        case "$line" in
-            cinder/src/hardening.rs:*|cinder/src/*peercred.rs:*) : ;;
+        f="${line%%:*}"; rest="${line#*:}"; ln="${rest%%:*}"
+        case "$f" in
+            cinder/src/hardening.rs|cinder/src/*peercred.rs) continue ;;
+        esac
+        # is the very next source line a hardening/peercred module decl?
+        next=$(sed -n "$((ln + 1))p" "$f" 2>/dev/null | tr -d '[:space:]')
+        case "$next" in
+            modhardening\;*|modpeercred\;*|pubmodpeercred\;*) : ;;
             *) err "#[allow(unsafe_code)] outside allow-list: $line" ;;
         esac
     done <<EOF

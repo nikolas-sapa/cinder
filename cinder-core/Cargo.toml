@@ -3,6 +3,7 @@ name = "cinder-core"
 version = "0.1.0"
 edition.workspace = true
 license.workspace = true
+publish = false
 
 [dependencies]
 snow = "0.9.6"
@@ -17,6 +18,18 @@ data-encoding = "2"
 thiserror = "2"
 anyhow = "1"
 rand = "0.8"
+secrecy = "0.10.3"
+zeroize = { version = "1.9.2", features = ["derive"] }
+hmac = "0.12"
+hkdf = "0.12"
+keyring = "4.2.0"
+age = "0.12.1"
+rpassword = "7.5.5"
+tempfile = "3.27.0"
+subtle = "2.6.1"
+serde_json = "1.0.154"
 
 [dev-dependencies]
+proptest = "1.12.0"
 tokio-test = "0.4"
+cinder-relay = { path = "../cinder-relay" }

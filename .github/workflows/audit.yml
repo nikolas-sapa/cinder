@@ -1,0 +1,37 @@
+name: audit
+
+on:
+  schedule:
+    # Daily at 04:23 UTC.
+    - cron: "23 4 * * *"
+  push:
+    branches: [main]
+    paths: [Cargo.lock]
+  pull_request:
+    paths: [Cargo.lock]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  cargo-audit:
+    name: cargo audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # Reads .cargo/audit.toml for ignores (policy: zero ignores).
+      - uses: rustsec/audit-check@v2
+
+  deny-advisories:
+    name: cargo deny check advisories
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check advisories

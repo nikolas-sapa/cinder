@@ -1,0 +1,119 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: "1"
+
+jobs:
+  fmt:
+    name: fmt
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # rust-toolchain.toml pins stable + components (rustfmt, clippy).
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - run: cargo fmt --all -- --check
+
+  clippy:
+    name: clippy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo clippy --workspace --locked -- -D warnings
+
+  test:
+    name: test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test --workspace --locked
+
+  unsafe-gate:
+    name: unsafe + crypto guardrails
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: unsafe-code gate
+        run: ./ci/check-unsafe.sh
+      - name: crypto/dependency guardrail greps
+        run: ./ci/check-guardrails.sh
+
+  deny:
+    name: cargo deny (advisories, bans, licenses, sources)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: EmbarkStudios/cargo-deny-action@v2
+
+  geiger:
+    name: cargo geiger (soft)
+    runs-on: ubuntu-latest
+    # SOFT gate per policy: transitive deps legitimately contain unsafe.
+    # The script still hard-fails internally if a first-party forbid crate
+    # (cinder-core/cinder-relay) reports unsafe — surfacing as a non-blocking
+    # annotation here; check-unsafe.sh is the blocking gate.
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: install cargo-geiger
+        run: cargo install cargo-geiger --locked
+      - run: ./ci/check-geiger.sh
+
+  tui-lockstep:
+    name: ratatui/crossterm lockstep
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: ./ci/check-tui-lockstep.sh
+
+  fuzz-smoke:
+    name: fuzz smoke (60s/target)
+    runs-on: ubuntu-latest
+    # Enabled once the fuzz crate exists (M-fuzz). Green until then —
+    # hashFiles is only legal at step level, so the expensive steps gate
+    # themselves on fuzz/Cargo.toml rather than the job.
+    env:
+      # rust-toolchain.toml pins stable; fuzzing requires nightly.
+      RUSTUP_TOOLCHAIN: nightly
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@nightly
+      - uses: Swatinem/rust-cache@v2
+      - name: install cargo-fuzz
+        if: hashFiles('fuzz/Cargo.toml') != ''
+        run: cargo install cargo-fuzz --locked
+      - name: fuzz every target for 60s
+        if: hashFiles('fuzz/Cargo.toml') != ''
+        run: |
+          set -euo pipefail
+          for t in $(cargo fuzz list); do
+            echo "=== fuzz target: $t (60s) ==="
+            cargo fuzz run "$t" -- -max_total_time=60
+          done

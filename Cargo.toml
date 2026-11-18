@@ -5,3 +5,20 @@ members = ["cinder-core", "cinder-relay", "cinder"]
 [workspace.package]
 edition = "2021"
 license = "MIT"
+
+# cargo-dist release configuration — consumed by .github/workflows/release.yml.
+# The workflow is hand-maintained in the standard `dist init` layout;
+# regenerate it with `cargo dist init` once cargo-dist is installed locally.
+[workspace.metadata.dist]
+cargo-dist-version = "0.34.0"
+ci = "github"
+installers = ["shell", "powershell"]
+targets = [
+    "aarch64-apple-darwin",
+    "x86_64-apple-darwin",
+    "x86_64-unknown-linux-gnu",
+    "aarch64-unknown-linux-gnu",
+]
+install-path = "CARGO_HOME"
+pr-run-mode = "plan"
+precise-builds = true

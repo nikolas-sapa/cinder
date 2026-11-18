@@ -1,0 +1,135 @@
+# cargo-deny configuration — cinder workspace supply-chain policy.
+#
+# Wired in CI:
+#   .github/workflows/ci.yml     — `cargo deny check` (all four checks) per push/PR
+#   .github/workflows/audit.yml  — `cargo deny check advisories` daily + on lockfile change
+
+[graph]
+# Check the dependency graph across all platforms we ship for — a host-only
+# graph would miss platform-gated crates (linux-raw-sys, windows-sys, wasi).
+targets = [
+    "x86_64-unknown-linux-gnu",
+    "aarch64-unknown-linux-gnu",
+    "x86_64-apple-darwin",
+    "aarch64-apple-darwin",
+]
+all-features = true
+
+[advisories]
+# Default RustSec advisory DB.
+# cargo-deny >=0.21: vulnerability/unsound/notice advisories always emit
+# errors (the old lint-level keys were removed); unmaintained/unsound below
+# are SCOPE selectors — which crates a matching advisory fails on.
+db-urls = ["https://github.com/rustsec/advisory-db"]
+unmaintained = "workspace"   # error only when a DIRECT dep goes unmaintained
+unsound = "all"              # unsound advisory anywhere in the tree = error
+yanked = "deny"
+ignore = [
+    # Zero ignores policy. Any entry here needs a justification comment +
+    # tracking issue.
+    #
+    # RUSTSEC-2024-0344 (curve25519-dalek <4.1.3) MUST NOT be ignored —
+    # enforced by the bans floor below and by `cargo audit` in audit.yml.
+    #
+    # RUSTSEC-2025-0141 — bincode 1.x development ceased (maintainer
+    # incident, not an exploitable defect). bincode is mandated by BRIEF.md
+    # ("length-prefixed bincode frames") and 1.3.3 is the terminal release —
+    # no upgrade path exists. Revisit only if the wire format is re-spec'd.
+    { id = "RUSTSEC-2025-0141", reason = "bincode is brief-mandated; unmaintained notice only, no fix released" },
+    #
+    # RUSTSEC-2026-0387 — crypto-bigint 0.5.5 timing variability. Reached
+    # only via `age 0.12.1`'s NON-OPTIONAL p256/hpke deps; fix needs
+    # crypto-bigint >=0.7.6 which no p256 0.13.x allows (semver-locked).
+    # cinder invokes age scrypt+armor paths only — the p256/ECDSA code the
+    # advisory covers is never exercised. Remove when age bumps p256.
+    { id = "RUSTSEC-2026-0387", reason = "age dep; p256 paths unused (scrypt recipients only); no compatible fixed release" },
+]
+
+[bans]
+# Duplicates are mostly unavoidable (syn, windows-sys, thiserror legitimately
+# resolve twice) — warn globally, hard-fail only where it is policy:
+# the ratatui/crossterm lockstep pair and curve25519-dalek.
+multiple-versions = "warn"
+wildcards = "deny"
+# Workspace crates depend on each other via `{ path = "..." }` — an implicit
+# wildcard; that is not a registry wildcard.
+allow-wildcard-paths = true
+highlight = "simplest-path"
+
+deny = [
+    # --- TUI lockstep pair (GUARDRAIL) ---------------------------------------
+    # ratatui + crossterm must resolve to exactly ONE version each; the
+    # pair-compatibility check itself lives in ci/check-tui-lockstep.sh.
+    { name = "ratatui", deny-multiple-versions = true },
+    { name = "crossterm", deny-multiple-versions = true },
+
+    # --- curve25519-dalek: single version AND >=4.1.3 (RUSTSEC-2024-0344) -----
+    { name = "curve25519-dalek", deny-multiple-versions = true },
+    { name = "curve25519-dalek", version = "<4.1.3" },
+
+    # --- TLS never appears: Noise is the only crypto layer --------------------
+    # Local store uses bundled sqlcipher (sqlcipher-src), so no openssl crate
+    # — including openssl-src — has a place in this tree.
+    { name = "openssl" },
+    { name = "openssl-sys" },
+    { name = "openssl-src" },
+    { name = "native-tls" },
+    { name = "tokio-native-tls" },
+    { name = "rustls" },
+    { name = "tokio-rustls" },
+    { name = "ring" },
+
+    # --- Banned by brief -------------------------------------------------------
+    # libsignal: AGPL-licensed. vodozemac: documented v2 direction only.
+    # (cargo-deny matches crate names exactly — no globs — so the libsignal
+    # family is enumerated.)
+    { name = "libsignal-client" },
+    { name = "libsignal-core" },
+    { name = "libsignal-ffi" },
+    { name = "libsignal-protocol" },
+    { name = "libsignal-service" },
+    { name = "vodozemac" },
+]
+
+[licenses]
+# Allow-list derived from the ACTUAL licenses in Cargo.lock
+# (`cargo metadata`), not a guess:
+#   MIT / Apache-2.0            bulk of the tree
+#   Unicode-3.0, Unicode-DFS-2016  unicode-ident, finl_unicode, wezterm-bidi
+#   BSD-1/2/3-Clause            fiat-crypto, zerocopy, curve25519-dalek, subtle
+#   BSL-1.0                     ryu
+#   LLVM-exception              rustix, linux-raw-sys, wasi (via Apache-2.0 WITH)
+#   MPL-2.0                     option-ext (dirs), termina (ratatui backend)
+#   Unlicense                   aho-corasick, memchr
+#   WTFPL + blessing            sqlcipher-src (SQLite-derived blessing license)
+#   Zlib                        foldhash
+#   ISC / CC0-1.0               not present today, common+approved preemptively
+#
+# AGPL/GPL/LGPL deliberately absent — keeps libsignal walled off.
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-1-Clause",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "BSL-1.0",
+    "CC0-1.0",
+    "ISC",
+    "MPL-2.0",
+    "Unicode-3.0",
+    "Unicode-DFS-2016",
+    "Unlicense",
+    "WTFPL",
+    "Zlib",
+    "blessing",
+]
+# `Apache-2.0 WITH LLVM-exception` in `allow` already covers LLVM-exception
+# crates; no separate [licenses.exceptions] entries needed.
+confidence-threshold = 0.93
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+# No allow-git entries: every git dependency is denied outright.

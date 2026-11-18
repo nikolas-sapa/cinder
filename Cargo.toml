@@ -1,0 +1,7 @@
+[workspace]
+resolver = "2"
+members = ["cinder-core", "cinder-relay", "cinder"]
+
+[workspace.package]
+edition = "2021"
+license = "MIT"

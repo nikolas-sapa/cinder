@@ -64,9 +64,22 @@ jobs:
       - name: record demo.tape
         run: vhs demo.tape
 
+      # Two-pass palette encode stays memory-bounded; vhs's internal
+      # single-pass gif path OOMs on the ~5000-frame recording.
+      - name: webm → gif (two-pass palette)
+        run: |
+          ffmpeg -y -v error -i docs/demo.webm \
+            -vf "fps=15,palettegen=stats_mode=diff" /tmp/palette.png
+          ffmpeg -y -v error -i docs/demo.webm -i /tmp/palette.png \
+            -lavfi "fps=15 [x]; [x][1:v] paletteuse=dither=bayer:bayer_scale=4" \
+            docs/demo.gif
+          ls -la docs/demo.gif
+
       - uses: actions/upload-artifact@v4
         with:
           name: demo-gif
-          path: docs/demo.gif
+          path: |
+            docs/demo.gif
+            docs/demo.webm
           if-no-files-found: error
           retention-days: 30

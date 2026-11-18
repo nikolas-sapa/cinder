@@ -1,8 +1,8 @@
 # cinder — demo tape (charmbracelet/vhs)
 #
-# Regenerate:  vhs demo.tape   →   docs/demo.gif
-# CI-regenerable target: docs/demo.gif is produced from this file by
-# .github/workflows/demo.yml — never hand-edit the gif.
+# Regenerate:  vhs demo.tape   →   docs/demo.webm
+# CI-regenerable target: .github/workflows/demo.yml records this tape to
+# webm, then two-pass ffmpeg → docs/demo.gif — never hand-edit either.
 #
 # Requires on PATH: vhs, tmux, cinder, cinder-relay. vhs additionally
 # shells out to ttyd + ffmpeg — the workflow installs all of it.
@@ -35,7 +35,11 @@
 #     replayed security.verification_needed event into a tmux buffer and
 #     pasted into the input bar with `C-b ]`.
 
-Output docs/demo.gif
+# webm, not gif: vhs's single-pass gif encode buffers a full frame
+# branch through palettegen/paletteuse — ~5000 1080p frames exceeds the
+# 7 GiB CI runner and OOM-kills ffmpeg. The workflow converts webm→gif
+# with a bounded two-pass palette ffmpeg instead.
+Output docs/demo.webm
 
 Set Shell bash
 Set FontSize 14

@@ -14,12 +14,13 @@
 #
 #   * Two pane-local identities: without per-pane CINDER_DATA_DIR both
 #     panes load the SAME default identity — you can't add yourself.
-#   * On machines with no OS keyring the age-file fallback prompts for a
-#     passphrase on /dev/tty (first run: create + confirm = two prompts;
-#     later runs: one). The tape types `demo-pass` wherever a real run
-#     prompts. CINDER_IDENTITY=ephemeral is NOT used: `cinder id` and
-#     `cinder tui` are separate processes and would get different
-#     peer-ids.
+#   * CINDER_KEYSTORE=age pins the passphrase-file keystore: OS keychain
+#     access can block on an unseen permission dialog (unsigned binaries
+#     prompt per-access on macOS) — never in CI. First run prompts twice
+#     (create + confirm), later runs once; prompts read /dev/tty, never
+#     stdin. The tape types `demo-pass` wherever a real run prompts.
+#     CINDER_IDENTITY=ephemeral is NOT used: `cinder id` and `cinder tui`
+#     are separate processes and would get different peer-ids.
 #   * The relay slot survives `cinder id` exiting, but the OWNER must be
 #     online when the Msg1 arrives — the left side runs `cinder tui`
 #     before the right runs `cinder add`.
@@ -49,7 +50,7 @@ Require cinder-relay
 
 # ---------- setup (hidden): scratch dirs, local relay, attached tmux ----------
 Hide
-Type "pkill -f 'cinder-relay --listen' 2>/dev/null; rm -rf /tmp/cinder-demo; mkdir -p /tmp/cinder-demo"
+Type "pkill -f 'cinder-relay --listen' 2>/dev/null; tmux kill-session -t cinder 2>/dev/null; rm -rf /tmp/cinder-demo; mkdir -p /tmp/cinder-demo"
 Enter
 Type "cinder-relay --listen 127.0.0.1:7000 >/tmp/cinder-demo/relay.log 2>&1 &"
 Enter
@@ -71,7 +72,7 @@ Type "o"
 Sleep 400ms
 
 # ---------- left pane: identity + one-time invite link ----------
-Type "export CINDER_DATA_DIR=/tmp/cinder-demo/left CINDER_RELAY=127.0.0.1:7000"
+Type "export CINDER_DATA_DIR=/tmp/cinder-demo/left CINDER_RELAY=127.0.0.1:7000 CINDER_KEYSTORE=age"
 Enter
 Type "cinder id --qr"
 Enter
@@ -104,13 +105,13 @@ Sleep 3s
 Ctrl+B
 Type "o"
 Sleep 400ms
-Type "export CINDER_DATA_DIR=/tmp/cinder-demo/right CINDER_RELAY=127.0.0.1:7000"
+Type "export CINDER_DATA_DIR=/tmp/cinder-demo/right CINDER_RELAY=127.0.0.1:7000 CINDER_KEYSTORE=age"
 Enter
 Hide
 Type "URI=$(cat /tmp/cinder-demo/uri.txt)"
 Enter
 Show
-Type "cinder add \"$URI\""
+Type "cinder add $URI"
 Enter
 Sleep 1500ms
 Type "demo-pass"
@@ -138,29 +139,26 @@ Sleep 400ms
 Type "/quit"
 Enter
 Sleep 1s
-Type "( echo '{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"session.hello\",\"params\":{\"protocol_version\":[1]}}'; sleep 0.5; echo '{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"contact.list\",\"params\":{}}'; sleep 0.5; echo '{\"jsonrpc\":\"2.0\",\"id\":9,\"method\":\"shutdown.request\",\"params\":{\"grace_ms\":500}}' ) | cinder rpc | tee /tmp/cinder-demo/clist.json"
+Type "bash demo/rpc_list.sh"
 Enter
 Sleep 1500ms
 Type "demo-pass"
 Enter
 Sleep 5s
-Hide
-Type "CID=$(grep -oE 'contact:[a-z2-7]{20,}' /tmp/cinder-demo/clist.json | tail -n1)"
-Enter
-Show
 # accept emits security.verification_needed with sas_hint {emoji,digits};
 # subscribe with since:0 replays it into stdout → digits land in the file
-Type "( echo '{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"session.hello\",\"params\":{\"protocol_version\":[1]}}'; sleep 0.5; echo \"{\\\"jsonrpc\\\":\\\"2.0\\\",\\\"id\\\":3,\\\"method\\\":\\\"contact.accept\\\",\\\"params\\\":{\\\"contact_id\\\":\\\"$CID\\\"}}\"; sleep 1.5; echo '{\"jsonrpc\":\"2.0\",\"id\":4,\"method\":\"events.subscribe\",\"params\":{\"since\":0}}'; sleep 1.5; echo '{\"jsonrpc\":\"2.0\",\"id\":9,\"method\":\"shutdown.request\",\"params\":{\"grace_ms\":500}}' ) | cinder rpc | tee /tmp/cinder-demo/accept.json"
+Type "bash demo/rpc_accept.sh"
 Enter
 Sleep 1500ms
 Type "demo-pass"
 Enter
 Sleep 8s
 Hide
-Type "grep -oE '\"digits\":\"[0-9 ]+\"' /tmp/cinder-demo/accept.json | head -n1 | sed -E 's/\"digits\":\"//; s/\"$//' > /tmp/cinder-demo/digits.txt"
+# accept emitted the verification_needed event; replay wrote it to
+# accept.json — lift the digits into the tmux paste buffer for /verify
+Type "bash demo/load_sas.sh"
 Enter
-Type "tmux set-buffer \"$(tr -d '\\n' < /tmp/cinder-demo/digits.txt)\""
-Enter
+Sleep 500ms
 Show
 Type "cinder tui"
 Enter

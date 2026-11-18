@@ -1,6 +1,7 @@
 use std::fs;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use secrecy::{ExposeSecret, SecretSlice, SecretString};
 
@@ -12,20 +13,41 @@ pub trait KeyStore {
 }
 
 pub struct KeyringStore {
-    entry: keyring::Entry,
+    service: String,
+    account: String,
 }
+
+// OS keychain calls can block indefinitely on an unseen permission dialog
+// (unsigned binaries on macOS prompt per-access). Bound the wait so callers
+// fall back to the age-file store instead of wedging the whole process.
+const KEYRING_OP_TIMEOUT: Duration = Duration::from_secs(8);
 
 impl KeyringStore {
     pub fn new(service: &str, account: &str) -> Result<Self, Error> {
-        let entry = keyring::Entry::new(service, account)
-            .map_err(|e| Error::KeyUnavailable(e.to_string()))?;
-        Ok(Self { entry })
+        keyring::Entry::new(service, account).map_err(|e| Error::KeyUnavailable(e.to_string()))?;
+        Ok(Self {
+            service: service.into(),
+            account: account.into(),
+        })
+    }
+
+    fn with_entry<T: Send + 'static>(
+        &self,
+        f: impl FnOnce(keyring::Entry) -> Result<T, keyring::Error> + Send + 'static,
+    ) -> Result<T, keyring::Error> {
+        let entry = keyring::Entry::new(&self.service, &self.account)?;
+        let (tx, rx) = std::sync::mpsc::sync_channel(0);
+        std::thread::spawn(move || drop(tx.send(f(entry))));
+        rx.recv_timeout(KEYRING_OP_TIMEOUT)
+            .unwrap_or(Err(keyring::Error::PlatformFailure(
+                "keyring access timed out".into(),
+            )))
     }
 }
 
 impl KeyStore for KeyringStore {
     fn get(&self) -> Result<Option<SecretSlice<u8>>, Error> {
-        match self.entry.get_password() {
+        match self.with_entry(|e| e.get_password()) {
             Ok(s) => {
                 let raw = data_encoding::BASE64.decode(s.as_bytes()).map_err(|_| {
                     Error::IdentityStore("keyring entry is not valid base64".into())
@@ -38,8 +60,8 @@ impl KeyStore for KeyringStore {
     }
 
     fn put(&self, secret: &[u8]) -> Result<(), Error> {
-        self.entry
-            .set_password(&data_encoding::BASE64.encode(secret))
+        let b64 = data_encoding::BASE64.encode(secret);
+        self.with_entry(move |e| e.set_password(&b64))
             .map_err(|e| Error::KeyUnavailable(e.to_string()))
     }
 }

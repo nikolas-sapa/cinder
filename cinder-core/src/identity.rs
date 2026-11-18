@@ -70,17 +70,22 @@ impl Identity {
     }
 
     pub fn load_or_create(dir: &Path) -> Result<Self, Error> {
-        if let Ok(ks) = KeyringStore::new(KEYRING_SERVICE, KEYRING_ACCOUNT) {
-            match ks.get() {
-                Ok(Some(blob)) => return Self::from_stored_blob(blob.expose_secret()),
-                Ok(None) => {
-                    let id = Self::generate()?;
-                    if ks.put(id.stored_blob().expose_secret()).is_ok() {
-                        return Ok(id);
+        // CINDER_KEYSTORE=age skips the OS keyring entirely — for headless
+        // agents and CI where a keychain prompt can never be answered.
+        let keyring_ok = std::env::var("CINDER_KEYSTORE").ok().as_deref() != Some("age");
+        if keyring_ok {
+            if let Ok(ks) = KeyringStore::new(KEYRING_SERVICE, KEYRING_ACCOUNT) {
+                match ks.get() {
+                    Ok(Some(blob)) => return Self::from_stored_blob(blob.expose_secret()),
+                    Ok(None) => {
+                        let id = Self::generate()?;
+                        if ks.put(id.stored_blob().expose_secret()).is_ok() {
+                            return Ok(id);
+                        }
+                        return Self::create_in_file(dir, id);
                     }
-                    return Self::create_in_file(dir, id);
+                    Err(_) => {}
                 }
-                Err(_) => {}
             }
         }
         let store = AgeFileStore::new(dir.join(IDENTITY_FILE));

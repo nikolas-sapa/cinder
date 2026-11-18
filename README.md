@@ -136,14 +136,17 @@ EOF
 | `--data-dir` / `CINDER_DATA_DIR` | Identity, contacts, sqlite store location |
 | `--relay` / `CINDER_RELAY` | Relay `host[:port]` (default port 7000); falls back to the last address that connected |
 | `CINDER_IDENTITY=ephemeral` | Throwaway identity per process — no keyring/file touched. Dev-only: your peer-id changes every run |
+| `CINDER_KEYSTORE=age` | Skip the OS keyring entirely — always use the age-encrypted file. For headless/CI where a keychain prompt can never be answered |
 | `XDG_RUNTIME_DIR` | Daemon socket directory when set |
 
 Identity loads from the **OS keyring first**; without one (headless
 Linux, no Secret Service) it falls back to an age-encrypted file and
 prompts for the passphrase **on `/dev/tty`** — never stdin, so piped
-protocol frames stay clean. Truly TTY-less agents need either a working
-keyring or `CINDER_IDENTITY=ephemeral`; `rpassword` cannot prompt without
-a terminal.
+protocol frames stay clean. Keyring calls are bounded to ~8s — a
+keychain that blocks on an unseen permission dialog falls back to the
+file path rather than wedging. Truly TTY-less agents need either a
+working keyring or `CINDER_IDENTITY=ephemeral`; `rpassword` cannot
+prompt without a terminal.
 
 ### Methods at a glance
 

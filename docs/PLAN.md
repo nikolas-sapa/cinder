@@ -6,17 +6,21 @@ implementation (milestone ladder) second. Every test has numeric pass criteria.
 Repo: `/Users/nikolassapalidis/Developer/cinder`. Crates at root:
 `cinder-core/`, `cinder-relay/`, `cinder/`.
 
-Chosen defaults not specified in brief (flagged, injectable in tests):
+Chosen defaults not specified in brief (flagged, injectable in tests).
+Relay-side limits are normative in **PROTOCOL.md §12** — that table is
+authoritative; tests inject lower caps to trip fast. RPC-side limits are
+normative in **AGENT-API.md §8.4** and advertised via `capabilities.limits`.
 
 | Knob | Default | Test value |
 |---|---|---|
-| Per-IP handshake rate limit | 10 handshakes/min | configurable, test trips at 10 |
-| Pending-handshake cap (global) | 256 | test cap = 4 |
-| Handshake timeout | 10s (brief-mandated) | tokio time-crate pause or 50ms injected |
-| events replay log bound | 10,000 events/account | test cap = 4 |
-| Per-client send queue | 256 frames | test cap = 4 |
-| Keepalive | none (brief allows "or none") | n/a |
-| Rekey policy | 1024 msgs OR 600s | test = 4 msgs / 50ms |
+| Per-IP handshake rate limit | **PROTOCOL §12: 30 inits/60s/IP, burst 10** | injected 10/min, test trips at 10 (R2) |
+| Pending-handshake cap | **PROTOCOL §12: 8/IP, 512 global**, 10s TTL | test cap = 4 |
+| Handshake timeout | 10s (brief-mandated, PROTOCOL §12) | tokio time-crate pause or 50ms injected |
+| events replay log bound | **AGENT-API §8.4: `replay_log_max_events`, target 16,384** | test cap = 4 |
+| Per-client send queue (rpc/daemon) | **AGENT-API §8.4: `send_queue_frames` = 1024** | test cap = 4 |
+| Relay queues (in/out per conn) | **PROTOCOL §12: 256 frames** | test cap = 4 |
+| Keepalive | jittered `Ping` 45–75s (PROTOCOL §12 120s idle timeout effectively requires it) | n/a |
+| Rekey policy | 1024 msgs OR 600s (PROTOCOL §11) | test = 4 msgs / 50ms |
 
 ---
 
@@ -101,7 +105,7 @@ Two-process e2e lives in `cinder/tests/e2e.rs` via `env!("CARGO_BIN_EXE_cinder")
 | # | Test | Location | Pass criteria |
 |---|---|---|---|
 | R1 | Echo routing | `cinder-relay/tests/echo.rs` | 2 in-process clients, frame routed by peer-id arrives byte-identical, <100ms |
-| R2 | Per-IP rate limit trip | `cinder-relay/tests/limits.rs` | Limit=10/min: handshakes 1–10 from 127.0.0.1 accepted, 11th refused with protocol error; accepted count asserted == 10 exactly |
+| R2 | Per-IP rate limit trip | `cinder-relay/tests/limits.rs` | Injected limit=10/min (independent of PROTOCOL §12 prod default 30/60s): handshakes 1–10 from 127.0.0.1 accepted, 11th refused with protocol error; accepted count asserted == 10 exactly |
 | R3 | Pending-handshake cap | `cinder-relay/tests/limits.rs` | Cap=4 injected: 4 stalled handshakes held, 5th refused immediately (TCP close <100ms); `pending_count` never >4 |
 | R4 | Handshake timeout | `cinder-relay/tests/limits.rs` | Stalled handshake → connection closed at 10s±0.5s (or injected 50ms timeout, assert wall-clock <1s) |
 | R5 | Mailbox count cap | `cinder-relay/tests/mailbox.rs` | Deposit 500 msgs → all accepted; 501st → rejected error; mailbox still exactly 500 |
@@ -112,6 +116,7 @@ Two-process e2e lives in `cinder/tests/e2e.rs` via `env!("CARGO_BIN_EXE_cinder")
 | R10 | Atomic batch drop | `cinder-relay/tests/mailbox.rs` | 5 queued transport frames for a dead session → after session death, mailbox holds 0 or 5 frames, never 1–4 (50 trials) |
 | R11 | Mailbox-id unguessable | `cinder-relay/src/mailbox.rs` unit | 100 generated ids: each 32 bytes, all unique, none equal to any peer-id bytes |
 | R12 | Relay blindness (also in e2e) | `cinder/tests/e2e.rs` | See I2 |
+| R13 | MailboxMessages frame packing | `cinder-relay/tests/mailbox.rs` | Fetch of 50 envelopes: every emitted `MailboxMessages` frame ≤16KiB serialized; no envelope split across frames; final frame carries `more:false`; total envelope count/byte-identity preserved |
 
 ### 2.7 cinder rpc (stdio + unix-socket daemon)
 
@@ -168,10 +173,10 @@ Invariants asserted every step:
 | Component | Named tests | proptest cases | fuzz targets |
 |---|---|---|---|
 | cinder-core | 25 | 2 suites (256 + 500 cases) | 2 |
-| cinder-relay | 11 | — | shared |
+| cinder-relay | 12 | — | shared |
 | cinder rpc/daemon | 11 | — | — |
 | integration/perf | 6 | — | — |
-| **Total** | **53** | **756 cases** | **2** |
+| **Total** | **54** | **756 cases** | **2** |
 
 ---
 
@@ -222,7 +227,8 @@ Invariants asserted every step:
   cap, flush-per-frame, error frame per parseable line), all 18 methods,
   idempotency map `client_msg_id→msg_id`, bounded persisted replay log
   (monotonic seq, gap marker), per-client bounded send queues, daemon =
-  same engine over unix socket + SO_PEERCRED/getpeereid + 0600 dir.
+  same engine over unix socket + SO_PEERCRED/getpeereid + 0700 dir /
+  0600 socket file.
   Stdout = frames only; all logs stderr.
 - **Exit:** P1–P11, I1–I3 green. (`I1` uses direct peer-id contact add;
   `invite.*`/rendezvous methods return `kind:"unimplemented"` until M5 —
@@ -243,8 +249,13 @@ Invariants asserted every step:
   (conversation list / chat pane / status / input via ratatui-textarea),
   slash commands `/help /add /verify /finger /clear /quit`, Alt-1..9 buffer
   jump, M-a next-unread, C-g fuzzy switch, M-k $EDITOR, PgUp/PgDn scroll,
-  ticks `…/✓/✓✓` (no read state). Store: rusqlite + bundled-sqlcipher,
-  windowed fetch only.
+  ticks `…/✓/✓✓` (no read state — `read` is reserved, never emitted, per
+  AGENT-API §5.2). Store: rusqlite + bundled-sqlcipher,
+  windowed fetch only. **Required by THREAT-MODEL §3.4/§6.7:** render path
+  MUST strip C0/C1 control characters and ANSI escape sequences from all
+  peer-controlled text before drawing (terminal-injection vector) — include
+  a unit test asserting a peer body containing `\x1b[`, `\x07`, `\x00`
+  renders as sanitized glyphs.
 - **Exit:** PF3 green (windowed fetch proof, <1s first render, ≤100-row
   LIMIT); headless `TestBackend` render smoke ≥5 screens, 0 panic; cargo deny
   ratatui↔crossterm lockstep ban rule active and demonstrated failing on a
@@ -252,9 +263,8 @@ Invariants asserted every step:
   `keybindings.md` written.
 - **Files touched:** `cinder/src/{tui/mod,tui/app,tui/ui,tui/store,main}.rs`,
   `cinder/tests/tui_store.rs` + render tests, `cinder/Cargo.toml` —
-  **bump ratatui 0.29→0.30 + crossterm 0.28→0.29** (skeleton ships the older
-  matched pair; brief mandates 0.30/0.29 — if 0.30 unavailable at build time,
-  keep newest matching pair + FLAG per brief), +`rusqlite/bundled-sqlcipher`,
+  ratatui 0.30 / crossterm 0.29 already in skeleton (resolved, see FLAGS 1);
+  +`rusqlite/bundled-sqlcipher`,
   `ratatui-textarea`, `qrcode`. `deny.toml` lockstep rule.
 - **Rollback:** TUI is additive on top of rpc — revert `tui/` dir; `cinder rpc`
   keeps working. Version bump isolated in one commit for clean revert.
@@ -263,12 +273,15 @@ Invariants asserted every step:
 
 - **Entry:** M3 green (relay echo already live since M1).
 - **Deliver:** relay mailbox module (per-mailbox 500 msg / 4MiB caps, TTL ≤30d,
-  256-bit random mailbox ids, atomic batch drop on session death), capability
+  256-bit random mailbox ids, atomic batch drop on session death,
+  multi-frame `MailboxMessages` packing per PROTOCOL §5), capability
   tokens issued inside authenticated channel at contact-add (deposit/fetch
   scoped; relay stores H(token)), rendezvous one-time invite slots →
   `invite.create`/`invite.accept` + `contact.add {link}` full path,
+  in-band delivery-ack app messages driving `sent`→`delivered`
+  (PROTOCOL §11, AGENT-API §5.2),
   per-IP rate limits, pending-handshake cap, 10s timeout.
-- **Exit:** R2–R11 green; P1 happy-path now covers `invite.*` for real;
+- **Exit:** R2–R11, R13 green; P1 happy-path now covers `invite.*` for real;
   I1 re-run through rendezvous-link flow (not direct add).
 - **Files touched:** `cinder-relay/src/{mailbox,tokens,limits}.rs` (new),
   `cinder-relay/src/server.rs` (wire-in), `cinder-relay/tests/{mailbox,limits}.rs`,
@@ -283,8 +296,11 @@ Invariants asserted every step:
 - **Entry:** M2 session stable, M5 green.
 - **Deliver:** `RekeyPolicy{msgs, interval}` injectable into `Session`;
   `rekey_manually` with fresh X25519 ephemerals triggered at ≥1024 msgs or
-  ≥600s (defaults), whichever first; rekey handshake re-verifies peer-id
-  (key-changed → `security.identity_changed` event + send-block).
+  ≥600s (defaults), whichever first. Rekey is transport-level only
+  (PROTOCOL §11) — it performs no handshake and re-verifies nothing;
+  peer-id pinning applies at each NEW XX handshake on session
+  re-establishment, where a pin mismatch → `key_changed` →
+  `security.identity_changed` event + send-block.
 - **Exit:** SE4–SE6 green; proptest suite (V1–V4) 500 cases green; 0 decrypt
   retries observed across all session tests (retry counter == 0 — decrypt
   failure is always fatal, never retried).
@@ -300,8 +316,9 @@ Invariants asserted every step:
 ## 4. CI / RELEASE PIPELINE
 
 - **Toolchain:** `rust-toolchain.toml` at root pins stable (`channel =
-  "1.8x"`, components `clippy,rustfmt`). Fuzz job alone uses `nightly` +
-  `cargo-fuzz`. All builds/tests `--locked`.
+  "stable"`, components `rustfmt,clippy` — matches the committed file).
+  Fuzz job alone uses `nightly` + `cargo-fuzz`. All builds/tests
+  `--locked`.
 - **Gates per push/PR:**
   1. `cargo fmt --check`, `cargo clippy --workspace -- -D warnings`
   2. `cargo test --workspace --locked`
@@ -338,7 +355,7 @@ Invariants asserted every step:
 
 DoD checklist (all must hold simultaneously):
 
-- [ ] `cargo test --workspace` green — all 53 named tests + proptests
+- [ ] `cargo test --workspace` green — all 54 named tests + proptests
 - [ ] Integration test proves relay-blindness (I2: needle count == 0)
 - [ ] `cargo audit` clean; fuzz smoke 60s/target, 0 panic
 - [ ] `cinder rpc` round-trips a message between two spawned processes (I1)
@@ -356,7 +373,7 @@ Phase → test mapping:
 | M2 session/SAS/contacts | H1–H4, S1–S4, C1–C5, SE1–SE3, SE7 |
 | M3 rpc+daemon | P1–P11, I1–I3 (I1 via direct-add) |
 | M4 TUI | PF3, render smoke ×5, deny-lockstep red-test |
-| M5 mailbox+tokens | R2–R11, P1 full incl. invite.*, I1 via rendezvous |
+| M5 mailbox+tokens | R2–R11, R13, P1 full incl. invite.*, I1 via rendezvous |
 | M6 rekey | SE4–SE6, proptest V1–V4 (500 cases), retry-count==0 |
 | Release | Z1–Z2 (60s each), PF1–PF2, audit clean, dist+minisign+SBOM |
 
@@ -364,16 +381,19 @@ Phase → test mapping:
 
 ## FLAGS / CONTRADICTIONS FOUND IN BRIEF vs SKELETON
 
-1. `cinder/Cargo.toml` ships `ratatui 0.29` + `crossterm 0.28`; brief mandates
-   `0.30` + `0.29`. Plan: bump in M4 (or at skeleton fix — pair must move
-   together; brief's "if 0.30 unavailable use newest matching pair and FLAG"
-   applies if crates.io disagrees).
-2. `lib.rs` exports `proto`/`session` items that don't exist — workspace
-   doesn't compile out of the box. M1 entry criteria covers this.
-3. `snow = "0.9"` in cinder-core Cargo.toml — brief says ≥0.9.6. "0.9"
-   resolves to 0.9.6 but pin `"0.9.6"` for auditability (M1).
+1. **RESOLVED** — `cinder/Cargo.toml` now ships `ratatui = "0.30"` +
+   `crossterm = "0.29"` (Cargo.lock: 0.30.2 / 0.29.0), the brief-mandated
+   matched pair. No M4 bump needed.
+2. **RESOLVED** — `cinder-core/src/{proto,session}.rs` exist and
+   `cargo build --workspace --locked` compiles clean. M1 entry note kept for
+   history.
+3. **RESOLVED (with note)** — `Cargo.lock` locks `snow 0.9.6`. The
+   `cinder-core` req is still `snow = "0.9"`, which *allows* <0.9.6 on an
+   unlocked resolve — tighten to `"0.9.6"` in M1 for auditability
+   (one-word Cargo.toml change; `--locked` builds are already correct).
 4. `curve25519-dalek ≥4.1.3` is transitive via snow — no direct dep exists to
    pin; enforced through cargo-deny minimum-version ban + audit instead.
+   (Cargo.lock already resolves 4.1.3.)
 5. Brief lists `cinder daemon` as a core interface but task milestone ladder
    had no daemon milestone — folded into M3 (same engine, second transport;
    deferrable within M3 without breaking stdio tests).
@@ -381,6 +401,36 @@ Phase → test mapping:
    infra → sequenced to M5. M3/M4 contact-add tests use direct peer-id path.
    `invite.*` returns typed `unimplemented` error frames in M3–M4 (error
    contract still tested).
-7. Chosen-but-unspecified defaults (rate limit 10/min, pending cap 256,
-   replay bound 10k, send queue 256, no keepalive) — all injectable, all
-   listed in the defaults table. Flag to orchestrator if any should differ.
+7. Chosen-but-unspecified defaults — all injectable, all listed in the
+   defaults table, which now references the authoritative limit tables
+   (PROTOCOL §12 for relay, AGENT-API §8.4 for RPC). Prior inconsistencies
+   (10/min vs 30/60s, pending 256 vs 512, replay 10k vs 16,384, send queue
+   256 vs 1024, "no keepalive" vs 120s idle timeout) resolved in favor of
+   the protocol docs.
+
+---
+
+## Security review — 2026-11-18
+
+Pre-implementation spec audit; cross-doc reconciliation + FLAGS refresh:
+
+- Fixed: defaults table contradicted PROTOCOL §12 (rate 10/min vs 30/60s,
+  pending cap 256 vs 512 global) and AGENT-API §8.4 (replay 10k vs 16,384,
+  send queue 256 vs 1024); keepalive "none" contradicted the 120s idle
+  timeout. Table now references the authoritative spec tables.
+- Updated: R2 records that its 10/min limit is test-injected, not the
+  production default.
+- Added: R13 — `MailboxMessages` multi-frame packing test (frames ≤16KiB,
+  whole-envelope only, `more:false` terminator); test totals 53 → 54.
+- Fixed: M4 deliverable gained the terminal-sanitization requirement
+  (C0/C1/ANSI stripping on peer-controlled text) — THREAT-MODEL required it
+  but no milestone owned it. Unit-test criterion included.
+- Fixed: M6 claimed "rekey handshake re-verifies peer-id" — rekey performs
+  no handshake; corrected to match PROTOCOL §11 (pinning applies at each
+  NEW XX handshake).
+- Fixed: rust-toolchain note — committed file pins `channel = "stable"`,
+  not `"1.8x"`.
+- Fixed: FLAGS items 1–3 marked RESOLVED (ratatui 0.30/crossterm 0.29 in
+  Cargo.toml+lock, workspace compiles, snow locked 0.9.6 — with a residual
+  note to tighten the `"0.9"` req in M1).
+- Harmonized: M3 daemon dir/socket perms (0700/0600) with AGENT-API §1.2.

@@ -81,6 +81,13 @@ rendezvous token inside it.
 much. Can correlate two users' flows to the same relay and infer who talks to
 whom with timing analysis — padding does not address this at all. Bucketed
 sizes still leak approximate length class and full conversation shape.
+**Learns mailbox capability tokens** when they observe
+`MailboxDeposit/Fetch/Ack/Rotate/Close` frames on your client↔relay link —
+tokens transit in cleartext (there is no client↔relay crypto layer; Noise is
+peer-to-peer only, PROTOCOL §8). Consequence: exercise of that one mailbox's
+capability — deposit-token spam, or fetch-token mail deletion/withholding.
+Availability loss on one mailbox, never plaintext; PROTOCOL §8/§13 document
+it as accepted v1 residual.
 
 ### 3.2 Malicious relay operator
 
@@ -156,6 +163,8 @@ between client and relay or between the two TCP hops. Controls DNS/routing.
 - Pure denial of service — an on-path attacker can always kill the TCP
   connection. cinder's answer is detection (fatal close, `failed` states)
   and resend over a *new* handshake, not prevention.
+- Same mailbox-token exposure as §3.1 — an on-path observer learns presented
+  capability tokens and can race-use them (deposit spam / mail deletion).
 - **First-contact gap**: for an `unverified` contact, the MITM protection
   is only as strong as the invite link's authenticity — if the *link itself*
   was substituted in transit, the pinned peer-id pins the attacker's key.
@@ -196,9 +205,13 @@ at the peer boundary.
 
 **Residual risk.**
 
-- **Spam/flood** — contact-level spam is only bounded by you blocking the
-  contact; there is no spam scoring in v1. Pre-contact spam is bounded by
-  rendezvous tokens being one-time.
+- **Spam/flood** — contact-level spam is only bounded by declining the
+  contact record (repeat requests from a declined key auto-decline,
+  AGENT-API §4.12); there is no spam scoring in v1. Pre-contact spam via
+  invite links is bounded by rendezvous tokens being one-time; the bare
+  **static-address path** (no token, PROTOCOL §7) is bounded only by relay
+  rate limits and the accept/decline gate — publishing a static address
+  means accepting unsolicited contact requests.
 - **Session-kill DoS** — a peer can send one bad ciphertext and force a
   fatal close (by design); recovery is a new handshake + resend of pending
   messages. Integrity-first choice, accepted liveness cost.
@@ -214,7 +227,7 @@ machine running `cinder`/`cinder daemon`.
 **What limits damage.**
 
 - Static key at rest: OS keyring primary; age-encrypted file fallback
-  (`0600` dir `0700`, atomic write). Passphrase entry is TTY-only — never
+  (dir `0700`, file `0600`, atomic write). Passphrase entry is TTY-only — never
   argv, never env (both are scrapable via `/proc` and `ps`).
 - In memory: `secrecy`/`zeroize` on key material; `TransportState` never
   serialized to disk; `RLIMIT_CORE=0` (no core dumps), `PR_SET_DUMPABLE`
@@ -248,7 +261,8 @@ verified — a write op with real security weight).
 
 - `cinder rpc` (stdio): whoever spawns/attaches to the process *is* the
   trust boundary — same trust model as MCP stdio servers.
-- `cinder daemon` (unix socket): socket dir `0600`, peer-cred auth via
+- `cinder daemon` (unix socket): socket dir `0700` + socket file `0600`,
+  peer-cred auth via
   `SO_PEERCRED`/`getpeereid` — only same-uid processes connect. No TCP
   listener exists; the surface is local-only by construction.
 - Protocol hygiene: frame cap 4MiB/line, flush per frame, per-client
@@ -315,8 +329,10 @@ you.
 
 **What rekey-lite buys — and does not:**
 
-- `rekey_manually` every ~1024 messages or 10 minutes bounds a transport
-  cipher key's exposure: stealing one key decrypts only its window
+- `rekey_manually` every ~1024 messages or 10 minutes (normative policy:
+  PROTOCOL §11 — transport-level only, performs no handshake and
+  re-verifies nothing) bounds a transport cipher key's exposure: stealing
+  one key decrypts only its window
   (≤~1024 msgs / ≤10 min), not the whole session.
 - It is **not** a Double Ratchet: no per-message key deletion chain, no
   skipped-key recovery (unnecessary — TCP is ordered and decrypt failure
@@ -371,7 +387,8 @@ RUSTSEC-2024-0344 (the dalek timing-signal advisory).
    infrastructure that is explicitly out of scope.
 5. **Same-uid agents and processes are trusted completely.** The daemon's
    peer-cred check answers "are you me", not "are you trustworthy". v2
-   scopes this with capability tokens; v1 relies on socket-dir `0600` and
+   scopes this with capability tokens; v1 relies on socket dir `0700` /
+   socket file `0600` and
    user discretion.
 6. **No post-compromise recovery.** Steal the live Noise state and rekey
    won't save past or future traffic of that session — only a new
@@ -381,6 +398,17 @@ RUSTSEC-2024-0344 (the dalek timing-signal advisory).
    one.** The threat model *requires* control-char stripping on render;
    code review must confirm it — a peer-controlled escape sequence is a
    real injection vector in terminal UIs.
+8. **Mailbox capability tokens transit in cleartext.** The client↔relay
+   link is unauthenticated TCP (Noise is peer-to-peer only); a passive
+   observer of token presentation gains that mailbox's capability —
+   deposit spam, or fetch+ack deletion of queued mail. Availability
+   consequence only, scoped to one mailbox, mitigated by least-privilege
+   tokens and rotation (PROTOCOL §8). Proof-of-possession tokens or a
+   Noise layer to the relay are v2 candidates.
+9. **Unsolicited contact requests on static addresses.** The bare
+   `cinder://<pubkey>@<relay>` path carries no rendezvous token; anyone
+   who learns your pubkey+relay can force a `pending_in` request. Gated
+   by accept/decline and relay rate limits, nothing more (PROTOCOL §7).
 
 ---
 
@@ -412,3 +440,29 @@ RUSTSEC-2024-0344 (the dalek timing-signal advisory).
   `#![forbid(unsafe_code)]` or `#![deny(unsafe_code)]`.
 - To report a vulnerability, see `SECURITY.md` in the repository root.
   Please do not file public issues for undisclosed vulnerabilities.
+
+---
+
+## Security review — 2026-11-18
+
+Pre-implementation spec audit: every mitigation claimed here was traced to a
+normative mechanism in PROTOCOL.md / AGENT-API.md. Changed:
+
+- Added: mailbox capability-token cleartext transit as a residual risk under
+  §3.1 (passive observer) and §3.3 (MITM), plus §6 item 8 — the claim
+  "relay stores only H(token)" was accurate at rest but silent on transit.
+- Fixed: §3.4 "bounded by you blocking the contact" — v1 has no
+  `contact.block` method; softened to decline + auto-decline of repeat
+  requests (AGENT-API §4.12).
+- Fixed: §3.4 pre-contact spam claim — invite-link spam is token-bounded,
+  but the bare static-address path (PROTOCOL §7) has no token; now stated
+  with its actual bounds (rate limits + accept/decline). Added §6 item 9.
+- Fixed: §5 rekey claim had no normative spec — PROTOCOL §11 now carries
+  the normative `rekey_manually` policy; citation added here.
+- Fixed: socket/file permission strings harmonized with AGENT-API §1.2
+  (dir 0700, socket file 0600); also age-fallback perms line.
+- Verified traceability: peer-id pinning → PROTOCOL §6; padding → §2;
+  invite slots → §7; mailbox tokens/drop-atomicity → §8/§9; decrypt-fatal →
+  §11; rate limits → §12; contacts HMAC → PROTOCOL §6 pinning-root +
+  PLAN C1–C4; terminal sanitization → now a PLAN M4 deliverable;
+  daemon auth → AGENT-API §1.2; `trusted:false` → §6; gap events → §5.8.

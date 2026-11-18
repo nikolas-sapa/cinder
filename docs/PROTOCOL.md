@@ -74,14 +74,22 @@ Application plaintext is padded inside the Noise AEAD envelope (padding is
 part of the transported plaintext, invisible to the relay):
 
 ```
-padded_block = [u16 BE pt_len ‖ pt ‖ 0x00…]
-block_size   = max(256, next_power_of_two(pt_len))   // pt_len ≤ 8192
+plaintext unit = [u16 BE pt_len ‖ block]
+block          = [pt ‖ 0x00…]                        // zero-padded
+block_size     = max(256, next_power_of_two(pt_len)) // pt_len ≤ 8192
 ```
 
+The `u16` length prefix sits **outside** the power-of-2 bucket: it is a
+constant 2 bytes on every message, so it leaks no size information, and this
+keeps `pt_len = 8192` encodable inside the 8192 bucket (a length prefix *inside*
+the block could not hold `8192 + 2` bytes in an 8192 block — that encoding is
+a spec bug, do not implement it).
+
 The receiver strips padding by reading `pt_len` after AEAD-open. A `pt_len`
-inconsistent with the block size, or nonzero padding bytes, MUST be treated as
-a decrypt/integrity failure → fatal to the session (see §11). Maximum
-ciphertext size per transport message: `8192 + 16` (AEAD tag) = `8208` B.
+whose `block_size` is not exactly `max(256, next_power_of_two(pt_len))`, or
+nonzero padding bytes, MUST be treated as a decrypt/integrity failure → fatal
+to the session (see §11). Maximum ciphertext size per transport message:
+`2 + 8192 + 16` (AEAD tag) = `8210` B.
 
 ## 3. Core types
 
@@ -113,14 +121,14 @@ hard bound.
 ```rust
 struct DepositEnvelope {
     session_id: SessionId,   // groups frames of one Noise transport session
-    body: Vec<u8>,           // Noise transport ciphertext, ≤ 8208 B
+    body: Vec<u8>,           // Noise transport ciphertext, ≤ 8210 B
 }
 
 struct StoredEnvelope {
     msg_id: u64,             // relay-assigned, per-mailbox monotonic
     from: PeerId,            // depositor's CLAIMED peer-id — unauthenticated
     session_id: SessionId,
-    body: Vec<u8>,           // opaque Noise transport ciphertext
+    body: Vec<u8>,           // opaque Noise transport ciphertext, ≤ 8210 B
     received_at: u64,        // relay unix time; informational only
 }
 ```
@@ -156,7 +164,7 @@ enum ClientMsg {
 
     /// Opaque Noise transport ciphertext routed by destination peer-id.
     /// session_id lets the relay (and the peer) group frames that share a
-    /// nonce stream. body = AEAD(padded plaintext). ≤ 8208 B body; whole
+    /// nonce stream. body = AEAD(padded plaintext). ≤ 8210 B body; whole
     /// frame ≤ 16 KiB.
     Transport { to: PeerId, session_id: SessionId, body: Vec<u8> },
 
@@ -199,6 +207,8 @@ enum ClientMsg {
 
     /// Liveness probe. Relay answers Pong. Clients SHOULD send at a jittered
     /// 45–75 s interval (see §12 idle timeout).
+    /// `nonce` here is an opaque echo token ONLY — it is unrelated to Noise
+    /// transport nonces, which never appear on the wire (§11).
     Ping { nonce: u64 },
 }
 ```
@@ -218,7 +228,9 @@ enum ServerMsg {
     /// `from` is the originator's claimed peer-id, stamped by the relay.
     Handshake { from: PeerId, hs_id: HsId, body: HandshakeMsg },
 
-    /// Forwarded transport ciphertext.
+    /// Forwarded transport ciphertext. `from` is a CLAIMED peer-id stamped
+    /// by the relay — unauthenticated; the real sender is proven inside the
+    /// Noise plaintext (§6: identity is derived, never claimed).
     Transport { from: PeerId, session_id: SessionId, body: Vec<u8> },
 
     /// Mailbox registered; expires_at authoritative after TTL clamp.
@@ -227,8 +239,14 @@ enum ServerMsg {
     /// Deposit accepted; msg_id is the stored envelope's id.
     MailboxDeposited { msg_id: u64 },
 
-    /// Fetch result (non-destructive). Oldest-first, ≤ requested max_msgs.
-    MailboxMessages { msgs: Vec<StoredEnvelope> },
+    /// Fetch result frame (non-destructive). Oldest-first. One MailboxFetch
+    /// produces a SEQUENCE of MailboxMessages frames: the relay packs as many
+    /// WHOLE envelopes as fit under the frame cap (an envelope is never split
+    /// across frames; every frame's serialized size ≤ MAX_FRAME_TRANSPORT),
+    /// sets `more:true` on each frame while fetched envelopes remain
+    /// undelivered, and terminates the response with a frame carrying
+    /// `more:false` (possibly `msgs` empty — e.g. empty mailbox).
+    MailboxMessages { msgs: Vec<StoredEnvelope>, more: bool },
 
     /// Generic success for MailboxAck / MailboxRotate / MailboxClose /
     /// PresenceSubscribe.
@@ -299,6 +317,17 @@ Pinning points (MUST be implemented — a missing check is Bitchat's MITM bug):
 - `hs_id` is generated fresh by the initiator for every handshake attempt and
   must be echoed unchanged in Msg2/Msg3 frames. A mismatched or unknown
   `hs_id` on Msg2/Msg3 → drop the frame (client side).
+- **Identity is derived, never claimed.** Contact lookup, pinning, and every
+  trust decision key on the peer-id *derived* from `get_remote_static()` —
+  never on the `from` field of any relay frame, which is unauthenticated
+  routing metadata stamped by the relay.
+- **Pinning root = the contacts store.** The pinned peer-id's source of truth
+  is the local `contacts.json`; its integrity is therefore security-critical,
+  not just data hygiene: the store MUST be integrity-protected with
+  `HMAC-SHA256` keyed by `HKDF(static_secret)`, verified fail-closed on every
+  load (mismatch → refuse to load, never auto-repair), and written atomically
+  (tmpfile + rename, `0600` file / `0700` dir). A tampered contacts store is
+  a pinning bypass.
 
 ### SAS transcript binding
 
@@ -315,6 +344,22 @@ Rendered to the user as 7 emoji (primary) or a digit string (fallback) per
 the SAS spec in the TUI/agent layer. Because both statics are sorted, both
 sides derive the same bytes without role negotiation. `sas` commits to this
 exact handshake transcript — an active MITM cannot produce matching SAS.
+
+### SAS persistence semantics
+
+The SAS is **per-session**: every new handshake produces a new
+`handshake_hash` and therefore a new SAS. Consequences:
+
+- A `verified` contact stays `verified` across reconnects — verification
+  binds to the pinned static *key pair*, not to one session. Continuity is
+  re-proven by the pinning check on every handshake; no re-verification is
+  needed while the pin holds.
+- The SAS *displayed* for a contact changes whenever the session is
+  re-established. A changed SAS with unchanged keys is expected, not an
+  alarm. Only a fingerprint change (`security.identity_changed`) indicates a
+  different key.
+- `ident.verify` compares against the SAS of the contact's **most recent
+  completed handshake**. A wrong SAS is an error, never a silent rebind.
 
 ## 7. Contact-add / rendezvous flow
 
@@ -360,6 +405,22 @@ cinder://<base32-pubkey>@<relay-host>[:<port>]?rendezvous=<token>
   ≤ 72 h). Expired or unknown token → `InviteInvalid`.
 - **One outstanding invite per client** is recommended client-side; the
   relay caps slots per connection/IP (§12).
+- **Offline slot owner:** if the owner is not currently connected when
+  `InviteAccept` arrives, the forwarded Msg1 is dropped — the relay holds no
+  handshake mailbox. The initiator's attempt expires via the handshake
+  timeout / client retry path.
+- **Link authenticity (unauthenticated trust anchor):** the `cinder://` URI
+  is only as trustworthy as the out-of-band channel that carried it — the
+  link carries NO authentication of its own. The acceptor pins to the URI's
+  pubkey, so a substituted link silently pins the *attacker's* key. The
+  in-protocol mitigation is SAS verification (§6); until `ident.verify`, a
+  link-derived contact MUST be treated as `unverified`. See THREAT-MODEL
+  §3.3 (first-contact gap) and §6.1.
+- **Static-address path:** `Handshake{Msg1}` to a peer-id that never issued a
+  rendezvous slot (a bare `cinder://<pubkey>@<relay>` link, no token) is how
+  unsolicited contact requests arrive. There is no pre-contact proof the
+  requester is wanted; mitigation is the app-layer accept/decline gate plus
+  §12 rate limits — nothing else bounds request spam.
 
 ### Acceptor pending-contact states
 
@@ -417,6 +478,25 @@ are complete before either side reports the contact `unverified`/usable.
 - **Expiry:** tokens share the mailbox's `expires_at`. After expiry the
   mailbox and its hashes are gone — every op returns `UnknownMailbox`.
 
+### Why raw tokens transit — and the residual risk
+
+Raw presentation is deliberate, not an oversight: the relay is itself the
+token verifier, so a hashed presentation would need a challenge it cannot
+answer from `H(token)` alone. Storing only `SHA-256(token)` exists to bound
+the blast radius of a **relay datastore leak**, not to hide tokens from the
+relay.
+
+**Residual (accepted for v1):** the client↔relay link is unauthenticated TCP
+— Noise is the *peer-to-peer* layer; there is no TLS to the relay. A passive
+observer of a `MailboxDeposit`/`Fetch`/`Ack`/`Rotate`/`Close` frame learns
+the raw token and can exercise that capability: deposit token → spam one
+mailbox; fetch token → fetch+ack (**delete**) queued mail or `MailboxClose`
+it outright. Consequence is one mailbox's availability — never plaintext.
+Mitigations: least-privilege per-mailbox tokens, rotation on any suspicion,
+and gap-visibility downstream (AGENT-API `msg_state`/`event.gap`).
+Proof-of-possession-bound tokens or a Noise layer to the relay are v2
+candidates. See §13, THREAT-MODEL §3.1/§3.3.
+
 ## 9. Mailbox semantics
 
 - `mailbox_id` = fresh 256-bit CSPRNG value. Never derived from peer-id —
@@ -432,9 +512,14 @@ are complete before either side reports the contact `unverified`/usable.
   session anyway, so partial drops are forbidden. Individual frames are
   dropped nowhere else: deposit is all-or-reject (`MailboxFull`), never
   truncate.
-- Fetch is non-destructive (peek). `MailboxAck` deletes by `msg_id`;
-  un-acked envelopes are redelivered on the next fetch. Clients SHOULD ack
-  only after durably storing/decrypting.
+- Fetch is non-destructive (peek) and multi-frame (§5 `MailboxMessages`:
+  whole envelopes packed under the frame cap, `more:false` terminates).
+  `MailboxAck` deletes by `msg_id`; un-acked envelopes are redelivered on the
+  next fetch. Clients SHOULD ack only after durably storing/decrypting.
+- A fetched envelope that fails AEAD-open is a decrypt failure — the same
+  fatal rule as a live transport frame applies (§11): the session keyed by
+  that envelope's `session_id` is destroyed and zeroized. Envelopes of OTHER
+  `session_id`s in the same mailbox are unaffected.
 - `from` on `StoredEnvelope` is the depositor's claimed peer-id —
   informational, unauthenticated; the real sender is proven inside the Noise
   plaintext.
@@ -448,13 +533,13 @@ discriminants).
 | Code | Name | Trigger | Connection after error |
 |---|---|---|---|
 | `0x0001` | `VersionMismatch` | `Hello.version != PROTOCOL_VERSION` | **close** (after sending error) |
-| `0x0002` | `OversizeFrame` | `len` prefix > phase cap, or `len == 0` → see note | **close** (framing desync; error send best-effort) |
+| `0x0002` | `OversizeFrame` | `len` prefix > phase cap | **close** (framing desync; error send best-effort) |
 | `0x0003` | `RateLimited` | any §12 limit exceeded | stays open; **≥5 strikes/60 s → close** |
 | `0x0004` | `UnknownMailbox` | mailbox_id unknown/expired | stays open |
 | `0x0005` | `BadToken` | token hash mismatch | stays open; **≥10 strikes/60 s per IP → close** |
 | `0x0006` | `MailboxFull` | deposit over 500 msgs or 4 MiB | stays open |
 | `0x0007` | `HandshakeTimeout` | pending `hs_id` evicted after 10 s | stays open (attempt aborted) |
-| `0x0008` | `ProtocolViolation` | wrong first frame, trailing bytes, handshake body >4 KiB, garbage | **close** |
+| `0x0008` | `ProtocolViolation` | wrong first frame, `len == 0`, trailing bytes, handshake body >4 KiB, garbage | **close** |
 | `0x0009` | `InviteInvalid` | invite token unknown/consumed/expired | stays open |
 | `0x000A` | `PeerIdInUse` | `Hello` claims an already-connected peer-id | **close** (new connection rejected; existing session kept) |
 | `0x000B` | `MailboxExists` | `MailboxOpen` with a live mailbox_id | stays open |
@@ -470,10 +555,28 @@ contain keys, tokens, or ciphertext.
   path back.
 - **Any decrypt failure is fatal:** close session, zeroize, mark the peer
   pending. Never retry-skip a frame — a skipped frame desyncs the nonce
-  stream permanently.
+  stream permanently. This applies identically to live `Transport` frames
+  and to envelopes fetched via `MailboxFetch` (§9).
+- A transport frame or mailbox envelope under an **unknown or dead
+  `session_id`** is dropped without a decrypt attempt (no session state
+  exists to desync). It does not by itself trigger a re-handshake.
 - The transport nonce is a local counter maintained identically on both
   ends; **nonce material never appears on the wire** — a frame carrying
   nonce-looking data is just ciphertext to be rejected by AEAD.
+- **Ratchet-lite rekey (normative):** within a live session, each side runs
+  `rekey_manually` (snow) with fresh X25519 ephemerals at ≥1024 sent messages
+  or ≥600 s, whichever comes first. Rekey is transport-level only — it
+  refreshes cipher keys, performs no handshake, and re-verifies nothing;
+  peer-id pinning applies only at each NEW XX handshake. Rekey bounds key
+  exposure (a stolen cipher key decrypts only its window); it is NOT a
+  ratchet and provides no post-compromise security — see THREAT-MODEL §5.
+- **Delivery acknowledgement (app layer):** `delivered` grade requires a
+  peer-level ack. Every application message carries a unique sender-chosen
+  wire id; a client MUST send an in-band delivery-ack inside the E2E channel
+  listing the wire ids it has durably stored. The sender transitions
+  `sent`→`delivered` on ack; a mailbox deposit accepted by the relay is only
+  `sent`. Wire layout of the app payload enum is client-internal; the ack
+  contract is normative.
 - On session death, the client marks the peer `pending` and queues outgoing
   app messages client-side (bounded per-peer queue, §12). After the new
   handshake completes, a **new `session_id`** is generated and the pending
@@ -519,6 +622,8 @@ slots, mailboxes) and per-connection for post-`Hello` traffic.
 | Mailbox ids, counts, sizes, TTLs, token **hashes** | Message contents of mailbox blobs |
 | `from`/`to` peer-id pairs on live traffic (social graph of live flows) | `deposit_token`/`fetch_token` raw values at rest (only SHA-256 stored) |
 | `session_id` groupings (one opaque 16-byte tag per session) | Whether a transport frame is chat text vs. a mailbox grant vs. a ping inside E2E |
+| Raw deposit/fetch capability tokens **when presented** (transit is cleartext on the client↔relay link — §8) | Token plaintext at rest (only `SHA-256` stored) |
+| Presence-subscription interest sets | — |
 
 Residual risk (accepted, documented for v2): `Hello.peer_id` is an
 unauthenticated claim — the relay has no key material to verify. An attacker
@@ -529,6 +634,11 @@ handshake fails peer-id pinning. Result is DoS/message-loss only, never
 plaintext compromise. A proof-of-possession challenge at `Hello` is a v2
 candidate.
 
+Second residual: capability tokens transit in cleartext on client↔relay
+links (§8) — the relay itself sees them, and so does any passive observer of
+that link. Exposure of a fetch token allows deletion of queued mail. This is
+a one-mailbox availability loss, never a confidentiality loss.
+
 ## 14. Invariants checklist (grep-able MUSTs)
 
 1. `len` validated against phase cap before any allocation; `len==0` or
@@ -537,10 +647,59 @@ candidate.
    after Msg2 (initiator) / Msg3 (responder); mismatch → close, no Msg3.
 3. Decrypt failure → session destroyed, zeroized; never resume, never skip.
 4. `TransportState` never serialized; nonce never read from the wire.
-5. Padding: `pt_len` u16-BE prefix, zero-filled, next pow2 ≥ 256 B.
+5. Padding: `u16 BE pt_len` prefix OUTSIDE the block; block zero-filled,
+   `next_pow2(pt_len)` ≥ 256 B; max ciphertext 8210 B.
 6. Relay stores `SHA-256(token)` only; raw tokens appear only in
    deposit/fetch/ack/rotate/close request frames.
 7. Mailbox drops are whole-`session_id` atomic; no partial-frame eviction.
 8. Invite slots single-use + expiring; mailbox ids and tokens CSPRNG.
 9. `detail` strings and logs carry no keys, tokens, or ciphertext.
 10. `PROTOCOL_VERSION` checked in `Hello`; mismatch → error + close.
+11. Contact identity = derived peer-id only (`get_remote_static` → SHA-256);
+    claimed `from` fields never feed trust decisions.
+12. `MailboxMessages` frames never split an envelope; response ends with
+    `more:false`; every frame ≤ 16 KiB.
+13. Contacts store: `HMAC-SHA256(HKDF(static_secret))`, fail-closed on load,
+    atomic tmpfile+rename writes.
+14. `rekey_manually` at ≥1024 sent msgs or ≥600 s; rekey performs no
+    handshake and re-verifies nothing — pinning applies per new XX.
+
+## Security review — 2026-11-18
+
+Pre-implementation spec audit against BRIEF.md. Checked / changed:
+
+- Verified: peer-id pinning is specified at the correct points both directions
+  (initiator after Msg2 / before Msg3; responder after Msg3) with mismatch =
+  close + loud error, and re-checked every handshake incl. reconnects (§6, §11).
+- Added: identity-is-derived-not-claimed invariant — contact lookup/pinning MUST
+  key on `get_remote_static()` output, never the relay-stamped `from` field.
+- Added: contacts store declared the pinning root — HMAC-SHA256 keyed by
+  HKDF(static_secret), fail-closed, atomic writes now a normative requirement
+  in this doc (§6, §14), not only a client-side note.
+- Fixed: padding layout bug — `u16 pt_len` moved OUTSIDE the pow2 block (the
+  old `[u16‖pt‖pad]` inside `next_pow2(pt_len)` could not encode pt_len
+  8191–8192); max ciphertext 8208 → 8210 everywhere.
+- Fixed: `MailboxMessages` could not fit 500 × ~8.2 KiB envelopes in one
+  ≤16 KiB frame — now a multi-frame response (`more` flag, whole-envelope
+  packing, `more:false` terminator).
+- Added: SAS persistence semantics (per-session SAS, `verified` binds to the
+  pinned key pair and survives reconnects; `ident.verify` uses most recent
+  handshake's SAS).
+- Added: unauthenticated-anchor flags — `cinder://` link authenticity is
+  channel-dependent (TOFU gap closed only by SAS), offline-slot-owner Msg1
+  drop, unsolicited static-address `Handshake{Msg1}` spam note (§7).
+- Added: raw-token transit justification AND new residual — tokens transit
+  cleartext on client↔relay links; fetch-token exposure allows mail deletion;
+  availability-only consequence, v2 candidates named (§8, §13).
+- Clarified: decrypt-fatal rule now explicitly covers mailbox-fetched
+  envelopes; dead/unknown `session_id` frames dropped without decrypt (§9, §11).
+- Added: normative ratchet-lite rekey policy (≥1024 msgs / ≥600 s,
+  `rekey_manually`, no re-verification) — THREAT-MODEL §5 claim now traces to
+  a spec mechanism (§11, §14).
+- Added: in-band delivery-ack contract so `delivered` has a real mechanism
+  distinct from `sent` (§11).
+- Clarified: `Ping.nonce` marked opaque echo token, unrelated to Noise nonces.
+- Fixed: error-table inconsistency — `len == 0` is `ProtocolViolation`, not
+  `OversizeFrame` (§10 now matches §2).
+- Extended: §13 can-see table (token transit, presence subscriptions) and
+  residual paragraphs; §14 invariants 11–14 added.

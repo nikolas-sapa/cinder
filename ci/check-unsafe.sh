@@ -10,7 +10,8 @@
 #         cinder/src/hardening.rs      libc hardening: RLIMIT_CORE / mlockall /
 #                                      PR_SET_DUMPABLE
 #         cinder/src/**/peercred.rs    SO_PEERCRED / getpeereid socket auth
-#     At most ONE #[allow(unsafe_code)] per allow-listed file.
+#         cinder/src/presence.rs       LAContext user-presence gate (macOS)
+#     At most ONE #[allow(unsafe_code)] per allow-listed module file.
 #
 # Fails loudly on: missing lint attribute, `unsafe` token outside the
 # allow-list, or an allow attribute in any other file.
@@ -52,7 +53,7 @@ if [ -n "$unsafe_hits" ]; then
     while IFS= read -r line; do
         [ -z "$line" ] && continue
         case "$line" in
-            cinder/src/hardening.rs:*|cinder/src/*peercred.rs:*) : ;;
+            cinder/src/hardening.rs:*|cinder/src/*peercred.rs:*|cinder/src/presence.rs:*) : ;;
             *) err "unsafe token outside allow-list: $line" ;;
         esac
     done <<EOF
@@ -62,10 +63,11 @@ fi
 
 # --- 3) #[allow(unsafe_code)] confined to the allow-list ----------------------
 # Permitted forms:
-#   a) inside cinder/src/hardening.rs or cinder/src/*peercred.rs (any position)
+#   a) inside cinder/src/{hardening,presence}.rs or cinder/src/*peercred.rs
+#      (any position)
 #   b) an outer #[allow(unsafe_code)] directly attached to the module
-#      declaration `mod hardening;` / `(pub )?mod peercred;` — the only legal
-#      way to permit unsafe inside a #![deny]-rooted crate.
+#      declaration `mod hardening;` / `mod presence;` / `(pub )?mod peercred;`
+#      — the only legal way to permit unsafe inside a #![deny]-rooted crate.
 allow_hits=$(grep -rnE 'allow\(unsafe_code\)' \
                --include='*.rs' \
                cinder/src cinder-core/src cinder-relay/src 2>/dev/null \
@@ -75,22 +77,27 @@ if [ -n "$allow_hits" ]; then
         [ -z "$line" ] && continue
         f="${line%%:*}"; rest="${line#*:}"; ln="${rest%%:*}"
         case "$f" in
-            cinder/src/hardening.rs|cinder/src/*peercred.rs) continue ;;
+            cinder/src/hardening.rs|cinder/src/*peercred.rs|cinder/src/presence.rs) continue ;;
         esac
-        # is the very next source line a hardening/peercred module decl?
+        # is the very next source line an allow-listed module decl?
         next=$(sed -n "$((ln + 1))p" "$f" 2>/dev/null | tr -d '[:space:]')
         case "$next" in
-            modhardening\;*|modpeercred\;*|pubmodpeercred\;*) : ;;
+            modhardening\;*|modpresence\;*|modpeercred\;*|pubmodpeercred\;*) : ;;
             *) err "#[allow(unsafe_code)] outside allow-list: $line" ;;
         esac
     done <<EOF
 $allow_hits
 EOF
-    # at most one allow attribute per file
+    # at most one allow attribute inside each allow-listed module file
+    # (mod-declaration attributes are vetted individually above)
     for f in $(printf '%s\n' "$allow_hits" | cut -d: -f1 | sort -u); do
+        case "$f" in
+            cinder/src/hardening.rs|cinder/src/*peercred.rs|cinder/src/presence.rs) ;;
+            *) continue ;;
+        esac
         n=$(printf '%s\n' "$allow_hits" | grep -c "^${f}:" || true)
         if [ "$n" -gt 1 ]; then
-            err "$f has $n #[allow(unsafe_code)] attributes — max 1 per file"
+            err "$f has $n #[allow(unsafe_code)] attributes — max 1 per module file"
         fi
     done
 else

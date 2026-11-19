@@ -337,9 +337,17 @@ fn reactions_edit_and_soft_delete() {
     assert!(page[0].edited_at.is_some());
 
     s.soft_delete("msg:m").unwrap();
+    // window() must not surface tombstones at all (M8): a deleted row is
+    // audit data, not history. get_message still resolves it for the rpc
+    // seams that need direction/tombstone state.
     let (page, _) = s.window("chat:a", None, 10).unwrap();
-    assert!(page[0].deleted);
-    assert_eq!(page[0].body, "");
+    assert!(
+        page.iter().all(|m| m.msg_id != "msg:m"),
+        "soft-deleted message must not render in history"
+    );
+    let tomb = s.get_message("msg:m").unwrap().unwrap();
+    assert!(tomb.deleted);
+    assert_eq!(tomb.body, "");
     assert!(matches!(
         s.edit_message("msg:m", "nope"),
         Err(StoreError::NotFound(_))
@@ -566,6 +574,132 @@ fn v1_to_v2_migration_preserves_rows() {
         s.get_message("msg:new").unwrap().unwrap().expires_at,
         eph.expires_at
     );
+}
+
+// SEC-M1: expire_due must scrub the replay-log copy of the body too —
+// message.received persists the plaintext inside its payload, and
+// events_since must never serve it after expiry. The event row itself and
+// its audit metadata survive.
+#[test]
+fn expire_due_scrubs_replay_payload() {
+    let dir = TempDir::new().unwrap();
+    let s = open(&dir);
+    s.upsert_chat("chat:a", &PEER, None, false).unwrap();
+    let now = now_ms();
+
+    let mut dying = msg("msg:ephem", "chat:a", Dir::In, "plaintext secret", now);
+    dying.expires_at = Some(now + 1_000);
+    s.insert_message(&dying).unwrap();
+    let mut live = msg("msg:keep", "chat:a", Dir::In, "unrelated", now);
+    live.expires_at = Some(now + 60_000);
+    s.insert_message(&live).unwrap();
+
+    // Same payload shape the core emits for message.received.
+    s.append_event(
+        "message.received",
+        Some("chat:a"),
+        &json!({
+            "chat_id": "chat:a",
+            "message": {
+                "msg_id": "msg:ephem",
+                "chat_id": "chat:a",
+                "dir": "in",
+                "body": {"text": "plaintext secret", "trusted": false},
+                "ts_ms": now,
+            },
+        }),
+    )
+    .unwrap();
+    s.append_event(
+        "message.received",
+        Some("chat:a"),
+        &json!({
+            "chat_id": "chat:a",
+            "message": {
+                "msg_id": "msg:keep",
+                "chat_id": "chat:a",
+                "dir": "in",
+                "body": {"text": "unrelated", "trusted": false},
+                "ts_ms": now,
+            },
+        }),
+    )
+    .unwrap();
+
+    s.expire_due(now + 1_000).unwrap();
+
+    let page = s.events_since(0, 50).unwrap();
+    let mut ephem_ev = None;
+    let mut keep_ev = None;
+    for e in &page.events {
+        if e.payload["message"]["msg_id"] == "msg:ephem" {
+            ephem_ev = Some(e);
+        }
+        if e.payload["message"]["msg_id"] == "msg:keep" {
+            keep_ev = Some(e);
+        }
+    }
+    let ephem_ev = ephem_ev.expect("expired message's event must survive");
+    assert_eq!(
+        ephem_ev.payload["message"]["body"]["text"], "",
+        "expired body leaked through the replay log"
+    );
+    assert_eq!(ephem_ev.payload["message"]["chat_id"], "chat:a");
+    let keep_ev = keep_ev.expect("unrelated event must survive");
+    assert_eq!(
+        keep_ev.payload["message"]["body"]["text"], "unrelated",
+        "scrub must be scoped to the expiring msg_id"
+    );
+    // Raw-dump every payload: the secret string must appear nowhere.
+    let dump =
+        serde_json::to_string(&page.events.iter().map(|e| &e.payload).collect::<Vec<_>>()).unwrap();
+    assert!(
+        !dump.contains("plaintext secret"),
+        "body survived in replay"
+    );
+}
+
+// M12 store half: only outbound `queued` text rows are re-driven after a
+// restart — sent/failed/inbound/file-kind rows must be left alone.
+#[test]
+fn queued_out_texts_returns_only_undelivered_text() {
+    let dir = TempDir::new().unwrap();
+    let s = open(&dir);
+    s.upsert_chat("chat:a", &PEER, None, false).unwrap();
+    let now = now_ms();
+
+    let mut q1 = msg("msg:q1", "chat:a", Dir::Out, "first", now);
+    q1.expires_at = Some(now + 5_000);
+    s.insert_message(&q1).unwrap();
+    s.insert_message(&msg("msg:q2", "chat:a", Dir::Out, "second", now + 1))
+        .unwrap();
+    // Sent and failed outbound must NOT come back.
+    let mut sent = msg("msg:sent", "chat:a", Dir::Out, "gone", now + 2);
+    sent.state = Some(MsgState::Sent);
+    s.insert_message(&sent).unwrap();
+    s.update_state("msg:sent", MsgState::Sent).ok();
+    let mut failed = msg("msg:fail", "chat:a", Dir::Out, "dead", now + 3);
+    failed.state = Some(MsgState::Queued);
+    s.insert_message(&failed).unwrap();
+    s.update_state("msg:fail", MsgState::Failed).unwrap();
+    // Inbound and file-kind rows are not text re-drive candidates.
+    s.insert_message(&msg("msg:in", "chat:a", Dir::In, "peer wrote", now + 4))
+        .unwrap();
+    let mut file = msg("msg:file", "chat:a", Dir::Out, "[file] n.bin", now + 5);
+    file.kind = MsgKind::File;
+    s.insert_message(&file).unwrap();
+    // Tombstoned queued row must not re-drive either.
+    let mut dead = msg("msg:dead", "chat:a", Dir::Out, "deleted", now + 6);
+    dead.state = Some(MsgState::Queued);
+    s.insert_message(&dead).unwrap();
+    s.soft_delete("msg:dead").unwrap();
+
+    let rows = s.queued_out_texts().unwrap();
+    let ids: Vec<&str> = rows.iter().map(|(_, mid, _, _)| mid.as_str()).collect();
+    assert_eq!(ids, vec!["msg:q1", "msg:q2"], "ts-asc queued texts only");
+    assert_eq!(rows[0].1, "msg:q1");
+    assert_eq!(rows[0].2, "first");
+    assert_eq!(rows[0].3, Some(now + 5_000), "expiry deadline preserved");
 }
 
 #[test]

@@ -232,7 +232,11 @@ pub enum ServerMsg {
         hs_id: HsId,
         body: HandshakeMsg,
     },
-    /// Forwarded transport ciphertext. from is CLAIMED and unauthenticated.
+    /// Forwarded transport ciphertext. `from` is relay-STAMPED (the peer-id
+    /// the relay holds this connection for — a client cannot forge another
+    /// peer's origin). End-to-end binding is still enforced receiver-side:
+    /// the sender must own the session_id's sid-index entry, and peer-id
+    /// pinning happened at the handshake that created the session.
     Transport {
         from: PeerId,
         session_id: SessionId,

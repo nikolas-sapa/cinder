@@ -316,6 +316,10 @@ type MsgRow = (
     Option<i64>,
 );
 
+/// `(chat_id, msg_id, body, expires_at)` — a queued outbound text row
+/// re-loaded by `queued_out_texts` for restart recovery.
+pub type QueuedText = (String, String, String, Option<i64>);
+
 #[derive(Serialize, Deserialize)]
 struct Cursor {
     c: String,
@@ -755,6 +759,7 @@ impl Store {
                             revision, edited_at, deleted, expires_at
                      FROM messages
                      WHERE chat_id = ?1
+                       AND deleted = 0
                        AND (expires_at IS NULL OR expires_at > ?2)
                      ORDER BY ts DESC, msg_id DESC LIMIT ?3",
                 )?;
@@ -773,6 +778,7 @@ impl Store {
                             revision, edited_at, deleted, expires_at
                      FROM messages
                      WHERE chat_id = ?1
+                       AND deleted = 0
                        AND (ts < ?2 OR (ts = ?2 AND msg_id < ?3))
                        AND (expires_at IS NULL OR expires_at > ?4)
                      ORDER BY ts DESC, msg_id DESC LIMIT ?5",
@@ -1200,10 +1206,44 @@ impl Store {
                     params![chat_id, ts],
                 )?;
             }
+            // The replay log carries a COPY of the body inside each
+            // message.received payload — expiry is broken if events_since
+            // can still serve the plaintext. Scrub it in the same tx so
+            // audit metadata survives but the body is gone for good.
+            tx.execute(
+                "UPDATE event_log
+                    SET payload = json_set(payload, '$.message.body.text', '')
+                 WHERE json_extract(payload, '$.message.msg_id') = ?1",
+                [&msg_id],
+            )?;
             out.push((chat_id, msg_id));
         }
         tx.commit()?;
         Ok(out)
+    }
+
+    /// Restart recovery: outbound text rows still `queued` when the process
+    /// last died. `pending_out` is memory-only, so without this a restart
+    /// would strand them forever — the caller re-queues them as
+    /// `AppMsg::Text` items and the first link-up re-drives delivery.
+    pub fn queued_out_texts(&self) -> Result<Vec<QueuedText>> {
+        let conn = self.conn()?;
+        let mut stmt = conn.prepare(
+            "SELECT chat_id, msg_id, body, expires_at FROM messages
+             WHERE dir = 'out' AND state = 'queued' AND kind = 'text' AND deleted = 0
+             ORDER BY ts ASC",
+        )?;
+        let rows = stmt
+            .query_map([], |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, String>(2)?,
+                    r.get::<_, Option<i64>>(3)?,
+                ))
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(rows)
     }
 
     /// Local per-chat disappearing-message default (ms). `ttl_ms = 0`

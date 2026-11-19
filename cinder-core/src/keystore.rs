@@ -88,16 +88,20 @@ impl AgeFileStore {
 
     fn passphrase(&self, confirm: bool) -> Result<SecretString, Error> {
         if let Some(p) = &self.passphrase {
+            // `confirm` marks a NEW passphrase being set (encrypting a
+            // just-created file): programmatic passphrases meet the same
+            // strength floor as interactive ones — with_passphrase is not
+            // a backdoor around it. Decrypt of an existing store reaches
+            // here with confirm=false and is intentionally unchecked, so
+            // older weaker passphrases keep working.
+            if confirm {
+                check_passphrase_strength(p.expose_secret())?;
+            }
             return Ok(SecretString::new(p.expose_secret().into()));
         }
         let p = rpassword::prompt_password("cinder passphrase: ")
             .map_err(|e| Error::KeyUnavailable(format!("passphrase prompt failed: {e}")))?;
         if confirm {
-            // `confirm` marks a NEW passphrase being set (encrypt a
-            // just-created file) — the only point where a strength floor
-            // can apply without breaking existing stores. Programmatic
-            // passphrases (with_passphrase) return early above and are
-            // exempt: callers there supply their own policy.
             check_passphrase_strength(&p)?;
             let p2 = rpassword::prompt_password("confirm passphrase: ")
                 .map_err(|e| Error::KeyUnavailable(format!("passphrase prompt failed: {e}")))?;
@@ -212,7 +216,8 @@ pub(crate) fn write_atomic_0600(path: &Path, data: &[u8]) -> Result<(), Error> {
 
 #[cfg(test)]
 mod tests {
-    use super::check_passphrase_strength;
+    use super::{check_passphrase_strength, AgeFileStore, KeyStore};
+    use secrecy::{ExposeSecret, SecretString};
 
     #[test]
     fn passphrase_strength_rule() {
@@ -229,5 +234,33 @@ mod tests {
         // Non-ASCII still counts as its classes (lower/upper apply to
         // unicode letters; anything else lands in "other").
         assert!(check_passphrase_strength("pässwörd_12345").is_ok());
+    }
+
+    // Programmatic passphrases are NOT a backdoor around the floor: a weak
+    // with_passphrase can't CREATE a store (confirm path), but it can still
+    // DECRYPT one written under it (open path is intentionally unchecked —
+    // existing weaker stores keep working).
+    #[test]
+    fn with_passphrase_strength_enforced_on_create() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join("identity.age");
+        let weak = AgeFileStore::with_passphrase(&path, SecretString::new("hunter2".into()));
+        assert!(
+            weak.put(&[0x5au8; 64]).is_err(),
+            "weak programmatic passphrase must not create a store"
+        );
+        assert!(!path.exists(), "failed put must leave no file behind");
+
+        let strong =
+            AgeFileStore::with_passphrase(&path, SecretString::new("hunter2-correct-horse".into()));
+        strong.put(&[0x5au8; 64]).unwrap();
+        // The same weak phrase on the OPEN path is unchecked — it just
+        // fails to decrypt like any wrong passphrase.
+        let weak_open = AgeFileStore::with_passphrase(&path, SecretString::new("hunter2".into()));
+        assert!(weak_open.get().is_err());
+        assert_eq!(
+            strong.get().unwrap().unwrap().expose_secret(),
+            &[0x5au8; 64]
+        );
     }
 }

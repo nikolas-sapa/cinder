@@ -51,11 +51,19 @@ pub fn verify_user_presence() -> Presence {
     // as Denied — safe). The reply block only sends over a channel.
     unsafe {
         let ctx = LAContext::new();
-        if ctx
-            .canEvaluatePolicy_error(LAPolicy::DeviceOwnerAuthentication)
-            .is_err()
-        {
-            return Presence::Unavailable;
+        // canEvaluatePolicy_error answers TWO different questions: whether
+        // prompting is even possible here (NotInteractive → Unavailable,
+        // same class as headless/SSH where the gate is inert), and whether
+        // the mechanism is currently healthy — biometry lockout, passcode
+        // unset, service errors. Those are NOT "no API": treating them as
+        // Unavailable would silently ungate the keyring read exactly when
+        // the OS is reporting trouble, so they deny fail-closed instead.
+        match ctx.canEvaluatePolicy_error(LAPolicy::DeviceOwnerAuthentication) {
+            Ok(()) => {}
+            Err(e) if e.code() == LAError::NotInteractive.0 => {
+                return Presence::Unavailable;
+            }
+            Err(_) => return Presence::Denied,
         }
         let (tx, rx) = mpsc::channel();
         let block = RcBlock::new(move |success: Bool, err: *mut NSError| {

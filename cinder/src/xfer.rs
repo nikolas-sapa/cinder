@@ -196,6 +196,8 @@ impl FileState {
     }
 
     /// Non-terminal states that count toward inflight caps and resume scans.
+    // kept for the state-machine surface (tests via #[path] include use it)
+    #[allow(dead_code)]
     pub fn active(self) -> bool {
         matches!(
             self,

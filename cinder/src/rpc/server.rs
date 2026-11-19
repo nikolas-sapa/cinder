@@ -80,12 +80,16 @@ pub async fn run_daemon(engine: Arc<Engine>, dcfg: DaemonConfig) -> io::Result<(
     let expected_uid = dcfg.expected_uid.unwrap_or_else(peercred::own_uid);
     let shutdown = engine.shutdown_handle();
 
+    // Pinned once: a recreated Notified per iteration can miss a
+    // notify_waiters that lands while the accept arm is being serviced.
+    let notified = shutdown.notified();
+    tokio::pin!(notified);
     loop {
         if engine.is_shutting_down() {
             break;
         }
         tokio::select! {
-            _ = shutdown.notified() => break,
+            _ = &mut notified => break,
             res = listener.accept() => {
                 let (stream, _) = match res {
                     Ok(v) => v,

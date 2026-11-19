@@ -129,7 +129,8 @@ async fn stop(core: &Arc<Core>) {
     core.begin_shutdown();
     let step = Duration::from_millis(50);
     let mut waited = Duration::ZERO;
-    while waited < Duration::from_secs(10) {
+    // 30s: parallel workspace runs can schedule the teardown late.
+    while waited < Duration::from_secs(30) {
         if core.conn_state() == tb::ConnState::Offline {
             return;
         }
@@ -618,7 +619,9 @@ async fn ft16_reaper_expires_stale() {
         caps.reap_every = Duration::from_millis(1100);
     }
 
-    // Stale inbound + a real .part + an orphan blob with no row.
+    // Stale inbound + a real .part + two orphan blobs with no row: one aged
+    // past the orphan grace (reaped), one still young — a mid-staging blob
+    // must survive the sweep (M9).
     let rel = xfer::stage_rel(&[8u8; 32], &[9u8; 32]);
     let abs = xfer::stage_create(data.path(), &rel, 1024).unwrap();
     let mut f = test_row("file:stale", Dir::In, 1024, 1, "transferring");
@@ -626,6 +629,12 @@ async fn ft16_reaper_expires_stale() {
     core.store().insert_file(&f).unwrap();
     let orphan = xfer::stage_dir(data.path()).join("orphan.part");
     std::fs::write(&orphan, b"stale").unwrap();
+    let aged = std::fs::File::options().write(true).open(&orphan).unwrap();
+    aged.set_modified(std::time::SystemTime::now() - Duration::from_secs(120))
+        .unwrap();
+    drop(aged);
+    let young = xfer::stage_dir(data.path()).join("young.part");
+    std::fs::write(&young, b"fresh").unwrap();
 
     wait_for(
         || {
@@ -639,9 +648,15 @@ async fn ft16_reaper_expires_stale() {
     wait_for(
         || (!abs.exists() && !orphan.exists()).then_some(()),
         Duration::from_secs(10),
-        ".part + orphan sweep",
+        ".part + aged-orphan sweep",
     )
     .await;
+    // Grace window: the young orphan is still mid-staging from the reaper's
+    // point of view — it must NOT have been swept.
+    assert!(
+        young.exists(),
+        "young orphan .part was reaped mid-staging (M9 regression)"
+    );
     stop(&core).await;
 }
 

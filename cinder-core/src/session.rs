@@ -399,6 +399,16 @@ impl Session {
         self.policy = policy;
     }
 
+    /// Cross-crate test seam (cinder's integration tests can't reach
+    /// `#[cfg(test)]` items here): force the stream id this session will
+    /// stamp into its handshake payloads, so an install-time sid-conflict
+    /// can be driven with real XX frames. Never valid post-construction in
+    /// production — an honest session draws `local_sid` once at `new()`.
+    #[doc(hidden)]
+    pub fn test_set_local_sid(&mut self, sid: SessionId) {
+        self.local_sid = sid;
+    }
+
     /// §11 ratchet-lite rekey. `incoming = false` performs the OUTBOUND
     /// rekey: the returned control frame is sealed under the CURRENT egress
     /// key, then `rekey_outgoing` rotates it — the frame MUST be transmitted

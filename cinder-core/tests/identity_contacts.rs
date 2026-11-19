@@ -318,7 +318,8 @@ fn mailbox_grant_and_pending_roundtrip() {
 fn age_file_store_roundtrip_and_perms() {
     let dir = TempDir::new().unwrap();
     let path = dir.path().join("identity.age");
-    let store = AgeFileStore::with_passphrase(&path, SecretString::new("hunter2".into()));
+    let store =
+        AgeFileStore::with_passphrase(&path, SecretString::new("hunter2-correct-horse".into()));
     assert!(store.get().unwrap().is_none());
 
     let secret = [0x5au8; 64];
@@ -340,7 +341,7 @@ fn age_file_store_roundtrip_and_perms() {
 fn age_file_wrong_passphrase_errors_not_panics() {
     let dir = TempDir::new().unwrap();
     let path = dir.path().join("identity.age");
-    AgeFileStore::with_passphrase(&path, SecretString::new("right".into()))
+    AgeFileStore::with_passphrase(&path, SecretString::new("right-horse-staple".into()))
         .put(&[0xabu8; 64])
         .unwrap();
     let wrong = AgeFileStore::with_passphrase(&path, SecretString::new("wrong".into()));

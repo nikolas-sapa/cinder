@@ -71,6 +71,9 @@ const MAILBOX_FETCH_PAGE: u16 = 500;
 const REQ_TIMEOUT: Duration = Duration::from_secs(15);
 /// Expiry sweep cadence for disappearing messages.
 const EXPIRY_SWEEP: Duration = Duration::from_secs(1);
+/// Orphan `.part` grace: blobs younger than this are never reaped — a row
+/// insert in flight or a mid-append chunk writer must not lose its staging.
+const PART_ORPHAN_GRACE: Duration = Duration::from_secs(60);
 
 fn now_ms() -> i64 {
     SystemTime::now()
@@ -508,6 +511,19 @@ enum DepositResult {
     Failed,
 }
 
+/// `deliver_now` verdict. `Deposited` is deliberately distinct from
+/// `Sent`: a mailbox acceptance proves nothing about delivery (the sealed
+/// generation may be dead by drain time), so queued copies are retained
+/// and only a live-wire send or the peer's Ack advances the message.
+enum Delivered {
+    /// On the wire over a live session.
+    Sent,
+    /// Accepted into the peer's mailbox — unproven; retained for re-drive.
+    Deposited,
+    /// No usable path (no session, encrypt failure, closed channel).
+    Failed,
+}
+
 enum SealOutcome {
     Sealed {
         ps: Arc<PeerSession>,
@@ -572,8 +588,12 @@ struct Shared {
     /// `call.info`/terminal dedup stay consistent (bounded: one live call,
     /// ended rows trimmed past CALL_ENDED_KEEP).
     calls: HashMap<[u8; 16], Call>,
-    /// Last inbound/outbound ring attempt per peer (CALL_RING_MIN_GAP).
-    call_last_ring: HashMap<PeerId, Instant>,
+    /// Last inbound ring per peer (CALL_RING_MIN_GAP throttle). Kept
+    /// separate from the outbound stamp: glare (both sides ring at once)
+    /// must never let our own ring suppress the peer's.
+    call_last_ring_in: HashMap<PeerId, Instant>,
+    /// Last outbound ring attempt per peer (CALL_RING_MIN_GAP throttle).
+    call_last_ring_out: HashMap<PeerId, Instant>,
 }
 
 /// Response waiters completed by the pump. Request ops are serialized by
@@ -893,7 +913,8 @@ impl Core {
                 shutting_down: false,
                 xfers: HashMap::new(),
                 calls: HashMap::new(),
-                call_last_ring: HashMap::new(),
+                call_last_ring_in: HashMap::new(),
+                call_last_ring_out: HashMap::new(),
             }),
             link: Arc::new(LinkHub {
                 cmd_tx,
@@ -915,6 +936,34 @@ impl Core {
             call_caps: Mutex::new(CallCaps::default()),
             media_factory: Mutex::new(std::sync::Arc::new(call::default_devices) as MediaFactory),
         });
+
+        // Restart recovery (§11): rows still `queued` when the last process
+        // died re-enter pending_out — the first link-up sees the backlog,
+        // kicks a handshake per peer, and flush_pending re-drives them.
+        // File anchors are covered by resume_xfers' offer re-emit instead.
+        let queued = {
+            let s = core.store.clone();
+            tokio::task::spawn_blocking(move || s.queued_out_texts()).await??
+        };
+        {
+            let mut sh = core.sh();
+            for (chat_id, msg_id, body, expires_at) in queued {
+                let Ok(peer) = peer_of_chat(&chat_id) else {
+                    continue;
+                };
+                sh.pending_out
+                    .entry(peer)
+                    .or_default()
+                    .push_back(PendingMsg {
+                        app: AppMsg::Text {
+                            msg_id: msg_id.clone(),
+                            body,
+                            expires_at: expires_at.map(|e| e.max(0) as u64),
+                        },
+                        msg_id: Some(msg_id),
+                    });
+            }
+        }
 
         if let Some((addr, host)) = relay {
             *core.relay_host.lock().unwrap_or_else(|e| e.into_inner()) = Some(host);
@@ -1070,7 +1119,7 @@ impl Core {
     #[cfg(test)]
     #[allow(dead_code)]
     pub async fn test_handle_app(self: &Arc<Self>, peer: PeerId, app: AppMsg) {
-        self.handle_app(peer, app).await;
+        self.handle_app(peer, app, None).await;
     }
 
     /// Test seam: mutate transfer caps (pace, staging cap, TTL, intervals).
@@ -1153,12 +1202,12 @@ impl Core {
         self.sh().presence.insert(*peer, online);
     }
 
-    /// Test seam: stamp the per-peer re-ring throttle so the next CallRing
-    /// from `peer` is dropped silently (CA3 deliver-timeout).
+    /// Test seam: stamp the per-peer inbound re-ring throttle so the next
+    /// CallRing from `peer` is dropped silently (CA3 deliver-timeout).
     #[cfg(test)]
     #[allow(dead_code)]
     pub fn test_touch_ring(&self, peer: &PeerId) {
-        self.sh().call_last_ring.insert(*peer, Instant::now());
+        self.sh().call_last_ring_in.insert(*peer, Instant::now());
     }
 
     /// Test seam: drop the live session for `peer` so the next send
@@ -1167,6 +1216,53 @@ impl Core {
     #[allow(dead_code)]
     pub fn test_drop_session(&self, peer: &PeerId) {
         self.drop_session(peer);
+    }
+
+    /// Test seam: the sid `peer` stamps on its inbound frames to us (the
+    /// sid_index binding for the live session).
+    #[cfg(test)]
+    #[allow(dead_code)]
+    pub fn test_remote_sid(&self, peer: &PeerId) -> Option<SessionId> {
+        self.sh()
+            .sessions
+            .get(peer)
+            .and_then(|ps| *ps.remote_sid.lock().unwrap_or_else(|e| e.into_inner()))
+    }
+
+    /// Test seam: inject an inbound transport frame (the HIGH-1 foreign-
+    /// sender regression drives a frame stamped with another peer's sid).
+    #[cfg(test)]
+    #[allow(dead_code)]
+    pub async fn test_handle_transport(
+        self: &Arc<Self>,
+        from: PeerId,
+        session_id: SessionId,
+        body: Vec<u8>,
+    ) {
+        self.handle_transport(from, session_id, body).await;
+    }
+
+    /// Test seam: run a real (in-process handshaken) Session through
+    /// install_session's guard path — the HIGH-2 regression needs a peer
+    /// claiming another live peer's stream id.
+    #[cfg(test)]
+    #[allow(dead_code)]
+    pub fn test_install_session(&self, peer: PeerId, session: Session) -> bool {
+        self.install_session(peer, session).is_some()
+    }
+
+    /// Test seam: shrink a live session's rekey policy so the media-lane
+    /// rekey boundary is reachable inside a test window (HIGH-3).
+    #[cfg(test)]
+    #[allow(dead_code)]
+    pub fn test_set_rekey_policy(&self, peer: &PeerId, msgs: u64) {
+        let Some(ps) = self.sh().sessions.get(peer).cloned() else {
+            return;
+        };
+        ps.session
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .set_rekey_policy(cinder_core::session::RekeyPolicy { msgs, secs: 600 });
     }
 
     /// Test seam: drive the real key-change consequence path as if a
@@ -1306,6 +1402,10 @@ impl Core {
 
     async fn link_loop(self: &Arc<Self>, addr: SocketAddr) {
         let mut wait = RECONNECT_MIN;
+        // Pinned outside the loop so the waiter survives across iterations —
+        // a notify_waiters landing mid-connect-attempt must not be lost.
+        let notified = self.shutdown.notified();
+        tokio::pin!(notified);
         loop {
             if self.shutdown_requested() {
                 break;
@@ -1337,7 +1437,7 @@ impl Core {
             }
             tokio::select! {
                 _ = tokio::time::sleep(wait) => {}
-                _ = self.shutdown.notified() => break,
+                _ = &mut notified => break,
             }
             wait = (wait * 2).min(RECONNECT_MAX);
         }
@@ -1355,9 +1455,20 @@ impl Core {
             None => return,
         };
         let mut ping = tokio::time::interval(PING_EVERY);
+        // One pinned Notified keeps the waiter registered across select
+        // iterations: a notify_waiters() landing while another arm is being
+        // serviced would otherwise fall between two dropped-and-recreated
+        // futures and be lost — leaving the link up past a 60s ping tick,
+        // or forever on an idle connection. The flag check covers a
+        // shutdown that fired before this task ever registered.
+        let notified = self.shutdown.notified();
+        tokio::pin!(notified);
         loop {
+            if self.shutdown_requested() {
+                break;
+            }
             tokio::select! {
-                _ = self.shutdown.notified() => break,
+                _ = &mut notified => break,
                 cmd = cmd_rx.recv() => {
                     match cmd {
                         Some(m) => if link.send(m).await.is_err() { break; },
@@ -1878,12 +1989,37 @@ impl Core {
     fn install_session(&self, peer: PeerId, session: Session) -> Option<Arc<PeerSession>> {
         let sid = session.session_id()?;
         let remote = session.remote_session_id();
+        let mut sh = self.sh();
+        // A claimed remote sid already bound to a DIFFERENT live session is
+        // a sid the peer cannot own — honest peers draw theirs at random.
+        // Indexing it would hijack the victim's inbound routing (and the
+        // first decrypt-fail would tombstone the victim's live stream), so
+        // refuse the install outright. Never tombstone `rs` here either:
+        // it still belongs to its live owner.
+        if let Some(rs) = remote {
+            let conflict = match sh.sid_index.get(&rs) {
+                Some(owner) if *owner != peer => sh
+                    .sessions
+                    .get(owner)
+                    .map(|ps| {
+                        !ps.session
+                            .lock()
+                            .unwrap_or_else(|e| e.into_inner())
+                            .is_closed()
+                    })
+                    .unwrap_or(false),
+                _ => false,
+            };
+            if conflict {
+                tracing::debug!(%peer, ?rs, "claimed remote sid bound to a live peer; refusing install");
+                return None;
+            }
+        }
         let ps = Arc::new(PeerSession {
             session: Mutex::new(session),
             session_id: sid,
             remote_sid: Mutex::new(remote),
         });
-        let mut sh = self.sh();
         if let Some(old) = sh.sessions.insert(peer, ps.clone()) {
             // The replaced session's inbound id is dead: tombstone it so
             // late-arriving old-generation frames drop instead of binding
@@ -1901,9 +2037,12 @@ impl Core {
         // The peer's stream id was learned inside the handshake: pre-bind it
         // so only this generation's frames decrypt. Any older sid (dead-
         // generation leftovers) falls through to the foreign-sid drop, never
-        // the fatal lazy-bind path.
+        // the fatal lazy-bind path. A sid already tombstoned (just killed
+        // above, or earlier) must stay dead — never resurrect it.
         if let Some(rs) = remote {
-            sh.sid_index.insert(rs, peer);
+            if !sh.dead_sids.contains_key(&rs) {
+                sh.sid_index.insert(rs, peer);
+            }
         }
         Some(ps)
     }
@@ -2237,6 +2376,14 @@ impl Core {
         let Some(ps) = self.session(peer) else {
             return SealOutcome::NoSession;
         };
+        self.seal_with(peer, ps, app)
+    }
+
+    /// `seal_app` on a caller-resolved session. Call-media callers pin to a
+    /// generation BEFORE sealing: encrypting under a session that is about
+    /// to be rejected burns a nonce and desyncs the stream for its real
+    /// owner.
+    fn seal_with(&self, peer: &PeerId, ps: Arc<PeerSession>, app: &AppMsg) -> SealOutcome {
         let payload = match wire_serialize(app) {
             Ok(p) => p,
             Err(e) => {
@@ -2282,9 +2429,10 @@ impl Core {
     }
 
     /// Encrypt + send on a live session. For a known-offline peer with a
-    /// mailbox grant, deposits the frame into their mailbox instead. Returns
-    /// false when no usable path exists (caller queues/retries).
-    async fn deliver_now(&self, peer: PeerId, item: &PendingMsg) -> bool {
+    /// mailbox grant, deposits the frame into their mailbox instead — a
+    /// `Deposited` verdict, never `Sent` (see `Delivered`). `Failed` when
+    /// no usable path exists (caller queues/retries).
+    async fn deliver_now(&self, peer: PeerId, item: &PendingMsg) -> Delivered {
         let SealOutcome::Sealed {
             ps,
             ct,
@@ -2292,17 +2440,21 @@ impl Core {
             deposit,
         } = self.seal_app(&peer, &item.app)
         else {
-            return false;
+            return Delivered::Failed;
         };
         if deposit {
+            // A mailbox deposit is NOT a delivery: the frame was sealed
+            // under this session generation, and if the peer's session
+            // moves on before it drains, the deposit is dead-on-arrival.
+            // Never mark `sent` — the caller keeps the item queued so the
+            // next live path re-drives it. The peer's dedupe makes a later
+            // live copy harmless; only its Ack may advance the row.
+            // MailboxFull is self-limiting.
             return match self.deposit_env(peer, ps.session_id, ct).await {
-                DepositResult::Ok => {
-                    if let Some(id) = &item.msg_id {
-                        self.transition(id, MsgState::Sent, None).await;
-                    }
-                    true
-                }
-                _ => false,
+                DepositResult::Ok => Delivered::Deposited,
+                // Full/failed deposits are Failed — flush_pending re-queues
+                // at the head and stops hammering the mailbox.
+                DepositResult::MailboxFull | DepositResult::Failed => Delivered::Failed,
             };
         }
         if self
@@ -2316,7 +2468,7 @@ impl Core {
             .await
             .is_err()
         {
-            return false;
+            return Delivered::Failed;
         }
         if let Some(ctrl) = ctrl {
             let _ = self
@@ -2332,7 +2484,7 @@ impl Core {
         if let Some(id) = &item.msg_id {
             self.transition(id, MsgState::Sent, None).await;
         }
-        true
+        Delivered::Sent
     }
 
     /// Chunk-lane delivery: same seal/send as `deliver_now` but reports
@@ -2421,12 +2573,14 @@ impl Core {
         }
     }
 
-    /// Queue-or-send: when no live path exists the item lands in pending_out
-    /// and a handshake attempt is kicked off.
+    /// Queue-or-send: on a live-wire send the item is done; a deposit or a
+    /// failure keeps it in pending_out (a deposit proves nothing — it must
+    /// be re-driven until a live path or the peer's Ack lands it) and a
+    /// handshake attempt is kicked off.
     async fn deliver_or_queue(self: &Arc<Self>, peer: PeerId, item: PendingMsg) {
         let send = self.send_lock(&peer);
         let _send = send.lock().await;
-        if self.deliver_now(peer, &item).await {
+        if matches!(self.deliver_now(peer, &item).await, Delivered::Sent) {
             return;
         }
         let item_id = item.msg_id.clone();
@@ -2453,16 +2607,32 @@ impl Core {
     async fn flush_pending(&self, peer: PeerId) {
         let send = self.send_lock(&peer);
         let _send = send.lock().await;
+        // Items the mailbox just accepted are re-queued (once each) after
+        // the pass — a deposit is unproven delivery, never `Sent`.
+        let mut deposited: Vec<PendingMsg> = Vec::new();
         loop {
             let item = {
                 let mut sh = self.sh();
                 sh.pending_out.get_mut(&peer).and_then(|q| q.pop_front())
             };
             let Some(item) = item else { break };
-            if !self.deliver_now(peer, &item).await {
-                let mut sh = self.sh();
-                sh.pending_out.entry(peer).or_default().push_front(item);
-                break;
+            match self.deliver_now(peer, &item).await {
+                Delivered::Sent => {}
+                Delivered::Deposited => deposited.push(item),
+                Delivered::Failed => {
+                    let mut sh = self.sh();
+                    sh.pending_out.entry(peer).or_default().push_front(item);
+                    break;
+                }
+            }
+        }
+        if !deposited.is_empty() {
+            let mut sh = self.sh();
+            let q = sh.pending_out.entry(peer).or_default();
+            for item in deposited {
+                if q.len() < PENDING_OUT_CAP {
+                    q.push_back(item);
+                }
             }
         }
     }
@@ -2573,18 +2743,26 @@ impl Core {
     }
 
     /// Call signalling: seal on the pinned session, NEVER deposit, send
-    /// reliably on cmd_tx (control messages are low-rate).
+    /// reliably on cmd_tx (control messages are low-rate). The pin is
+    /// checked BEFORE sealing — encrypting under a generation that is
+    /// about to be rejected burns a nonce and desyncs its real owner.
     async fn send_call_ctrl(&self, peer: PeerId, app: &AppMsg, pinned_sid: SessionId) -> bool {
+        let Some(ps) = self.session(&peer) else {
+            return false;
+        };
+        if ps.session_id != pinned_sid {
+            return false;
+        }
         let SealOutcome::Sealed {
             ps,
             ct,
             ctrl,
             deposit,
-        } = self.seal_app(&peer, app)
+        } = self.seal_with(&peer, ps, app)
         else {
             return false;
         };
-        if deposit || ps.session_id != pinned_sid {
+        if deposit {
             return false;
         }
         if self
@@ -2616,35 +2794,51 @@ impl Core {
 
     /// Media lane: seal on the pinned session, send via try_send so a
     /// saturated channel drops the frame (isochronous) instead of
-    /// queueing behind chat. Returns whether the frame went on the wire.
+    /// queueing behind chat. The pin is checked BEFORE sealing (a stale
+    /// generation must not consume a nonce), and a rekey control unit —
+    /// the last frame under the old egress key — goes on the wire AFTER
+    /// the data frame it follows and via a blocking send so the rotation
+    /// boundary can never be reordered or dropped mid-stream.
     async fn send_call_frame(&self, peer: PeerId, app: &AppMsg, pinned_sid: SessionId) -> bool {
+        let Some(ps) = self.session(&peer) else {
+            return false;
+        };
+        if ps.session_id != pinned_sid {
+            return false;
+        }
         let SealOutcome::Sealed {
             ps,
             ct,
             ctrl,
             deposit,
-        } = self.seal_app(&peer, app)
+        } = self.seal_with(&peer, ps, app)
         else {
             return false;
         };
-        if deposit || ps.session_id != pinned_sid {
+        if deposit {
             return false;
         }
-        if let Some(ctrl) = ctrl {
-            let _ = self.link.cmd_tx.try_send(ClientMsg::Transport {
-                to: peer,
-                session_id: ps.session_id,
-                body: ctrl,
-            });
-        }
-        self.link
+        let sent = self
+            .link
             .cmd_tx
             .try_send(ClientMsg::Transport {
                 to: peer,
                 session_id: ps.session_id,
                 body: ct,
             })
-            .is_ok()
+            .is_ok();
+        if let Some(ctrl) = ctrl {
+            let _ = self
+                .link
+                .cmd_tx
+                .send(ClientMsg::Transport {
+                    to: peer,
+                    session_id: ps.session_id,
+                    body: ctrl,
+                })
+                .await;
+        }
+        sent
     }
 
     fn emit_call_state(&self, c: &Call, reason: Option<EndReason>) {
@@ -2795,32 +2989,54 @@ impl Core {
                     return;
                 };
                 let mut pcm = [0.0f32; call::FRAME_SAMPLES];
+                // Absolute-deadline pacing: schedule each frame from the
+                // PREVIOUS target so work-time jitter never accumulates
+                // into rate drift (a relative sleep slips ~the scheduler
+                // overshoot per frame). A stall longer than a few frames
+                // resets the anchor instead of bursting catch-up.
+                let ka_gap = (caps.media_keepalive / 2).max(pace);
+                let mut next = Instant::now();
+                let mut next_ka = Instant::now() + ka_gap;
                 while !rt.stop.load(std::sync::atomic::Ordering::Relaxed) {
-                    let t = Instant::now();
+                    std::thread::sleep(next.saturating_duration_since(Instant::now()));
+                    if rt.stop.load(std::sync::atomic::Ordering::Relaxed) {
+                        break;
+                    }
                     if mic.read(&mut pcm).is_err() {
                         pcm.fill(0.0);
                     }
-                    // §7 mute is local truth: capture gates at the source —
-                    // no AppMsg is produced, the peer sees a media gap.
                     if rt.muted.load(std::sync::atomic::Ordering::Relaxed) {
-                        std::thread::sleep(pace);
-                        continue;
-                    }
-                    match enc.encode(&pcm) {
-                        Ok(pkt) if pkt.len() <= call::MAX_OPUS_PACKET => {
-                            if rt.out_q.push(pkt) {
+                        // §7 mute is local truth: the mic gate closes at the
+                        // source — but a TOTAL media gap reads as dead media
+                        // to the peer (media_dead ends the call), so sparse
+                        // real silence frames ride at keepalive cadence.
+                        if Instant::now() >= next_ka {
+                            next_ka = Instant::now() + ka_gap;
+                            pcm.fill(0.0);
+                            if let Ok(pkt) = enc.encode(&pcm) {
+                                if pkt.len() <= call::MAX_OPUS_PACKET && rt.out_q.push(pkt) {
+                                    rt.drops_out
+                                        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                                }
+                            }
+                        }
+                    } else {
+                        match enc.encode(&pcm) {
+                            Ok(pkt) if pkt.len() <= call::MAX_OPUS_PACKET => {
+                                if rt.out_q.push(pkt) {
+                                    rt.drops_out
+                                        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                                }
+                            }
+                            _ => {
                                 rt.drops_out
                                     .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                             }
                         }
-                        _ => {
-                            rt.drops_out
-                                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                        }
                     }
-                    let elapsed = t.elapsed();
-                    if elapsed < pace {
-                        std::thread::sleep(pace - elapsed);
+                    next += pace;
+                    if next <= Instant::now() {
+                        next = Instant::now() + pace;
                     }
                 }
             });
@@ -2935,7 +3151,9 @@ impl Core {
             // Re-ring throttle cleanup alongside the call sweeps.
             {
                 let mut sh = self.sh();
-                sh.call_last_ring
+                sh.call_last_ring_in
+                    .retain(|_, t| t.elapsed() < caps.ring_min_gap);
+                sh.call_last_ring_out
                     .retain(|_, t| t.elapsed() < caps.ring_min_gap);
                 let ended: Vec<[u8; 16]> = sh
                     .calls
@@ -3057,6 +3275,10 @@ impl Core {
 
     // ---- inbound call signalling ----
 
+    /// `sid` = the local session id that carried the inbound frame. Every
+    /// call row pins to its own generation (`local_sid`), so a frame that
+    /// arrived under any other generation is stale and must not mutate the
+    /// call (M7). `None` = no transport context (test seam) → unpinned.
     async fn on_call_ring(
         self: &Arc<Self>,
         peer: PeerId,
@@ -3064,18 +3286,21 @@ impl Core {
         media: u8,
         cap: u8,
         expires_unix: u64,
+        sid: Option<SessionId>,
     ) {
         let caps = self.call_caps();
-        // The frame already decrypted under the live session for `peer`
-        // (stale/foreign sids never reach here); that session's generation
-        // is the pin.
+        // The frame already decrypted under a live session for `peer`
+        // (stale/foreign sids never reach here); that generation is the pin.
         let Some(ps) = self.session(&peer) else {
             return;
         };
+        let pin = sid.unwrap_or(ps.session_id);
         // Re-ring of a call we already know → re-ack, no new state/event.
         let existing = { self.sh().calls.get(&call_id).cloned() };
         if let Some(existing) = existing {
-            if existing.state == CallState::Ringing {
+            if existing.state == CallState::Ringing
+                && sid.map(|s| s == existing.local_sid).unwrap_or(true)
+            {
                 let _ = self
                     .send_call_ctrl(peer, &AppMsg::CallRinging { call_id }, existing.local_sid)
                     .await;
@@ -3091,7 +3316,7 @@ impl Core {
                         call_id,
                         reason: EndReason::Failed.to_u8(),
                     },
-                    ps.session_id,
+                    pin,
                 )
                 .await;
             return;
@@ -3103,15 +3328,47 @@ impl Core {
         // Re-ring throttle: same peer re-ringing inside CALL_RING_MIN_GAP.
         {
             let mut sh = self.sh();
-            if let Some(t) = sh.call_last_ring.get(&peer) {
+            if let Some(t) = sh.call_last_ring_in.get(&peer) {
                 if t.elapsed() < caps.ring_min_gap {
                     return;
                 }
             }
-            sh.call_last_ring.insert(peer, Instant::now());
+            sh.call_last_ring_in.insert(peer, Instant::now());
         }
         // Busy: one live call — busy answer must not disturb it (CA4).
-        if self.live_calls().len() >= caps.max_active {
+        // Recount + insert under the SAME lock acquisition: two inbound
+        // rings landing together must not both pass the cap (mirrors the
+        // outbound M11 fix). The guard must be gone before the busy-answer
+        // await, so the decision is computed inside the lock scope.
+        let c = {
+            let mut sh = self.sh();
+            let over_cap = sh
+                .calls
+                .values()
+                .filter(|c| c.state != CallState::Ended)
+                .count()
+                >= caps.max_active;
+            if over_cap {
+                None
+            } else {
+                let c = Call {
+                    id: call_id,
+                    peer,
+                    dir: CallDir::In,
+                    state: CallState::Ringing,
+                    local_sid: pin,
+                    cap,
+                    since_ms: now_ms(),
+                    ring_deadline: Instant::now() + caps.ring_timeout,
+                    deliver_deadline: None,
+                    max_deadline: Instant::now() + caps.max_duration,
+                    rt: None,
+                };
+                sh.calls.insert(call_id, c.clone());
+                Some(c)
+            }
+        };
+        let Some(c) = c else {
             let _ = self
                 .send_call_ctrl(
                     peer,
@@ -3119,38 +3376,28 @@ impl Core {
                         call_id,
                         reason: EndReason::Busy.to_u8(),
                     },
-                    ps.session_id,
+                    pin,
                 )
                 .await;
             return;
-        }
-        let c = Call {
-            id: call_id,
-            peer,
-            dir: CallDir::In,
-            state: CallState::Ringing,
-            local_sid: ps.session_id,
-            cap,
-            since_ms: now_ms(),
-            ring_deadline: Instant::now() + caps.ring_timeout,
-            deliver_deadline: None,
-            max_deadline: Instant::now() + caps.max_duration,
-            rt: None,
         };
-        self.sh().calls.insert(call_id, c.clone());
         self.emit_call_incoming(&c);
         let _ = self
-            .send_call_ctrl(peer, &AppMsg::CallRinging { call_id }, ps.session_id)
+            .send_call_ctrl(peer, &AppMsg::CallRinging { call_id }, pin)
             .await;
         self.emit_call_state(&c, None);
     }
 
-    async fn on_call_ringing(&self, peer: PeerId, call_id: [u8; 16]) {
+    async fn on_call_ringing(&self, peer: PeerId, call_id: [u8; 16], sid: Option<SessionId>) {
         let mut sh = self.sh();
         let Some(c) = sh.calls.get_mut(&call_id) else {
             return;
         };
-        if c.peer != peer || c.dir != CallDir::Out || !matches!(c.state, CallState::Outgoing) {
+        if c.peer != peer
+            || c.dir != CallDir::Out
+            || !matches!(c.state, CallState::Outgoing)
+            || sid.map(|s| s != c.local_sid).unwrap_or(false)
+        {
             return;
         }
         c.state = CallState::Ringing;
@@ -3160,8 +3407,14 @@ impl Core {
         self.emit_call_state(&c, None);
     }
 
-    async fn on_call_accept(self: &Arc<Self>, peer: PeerId, call_id: [u8; 16], cap: u8) {
-        let (c, sid) = {
+    async fn on_call_accept(
+        self: &Arc<Self>,
+        peer: PeerId,
+        call_id: [u8; 16],
+        cap: u8,
+        sid: Option<SessionId>,
+    ) {
+        let (c, pinned) = {
             let mut sh = self.sh();
             let Some(c) = sh.calls.get_mut(&call_id) else {
                 return;
@@ -3169,6 +3422,7 @@ impl Core {
             if c.peer != peer
                 || c.dir != CallDir::Out
                 || !matches!(c.state, CallState::Outgoing | CallState::Ringing)
+                || sid.map(|s| s != c.local_sid).unwrap_or(false)
             {
                 return;
             }
@@ -3176,16 +3430,22 @@ impl Core {
             c.cap &= cap;
             (c.clone(), c.local_sid)
         };
-        self.start_media(call_id, peer, sid);
+        self.start_media(call_id, peer, pinned);
         self.emit_call_state(&c, None);
     }
 
-    async fn on_call_end(&self, peer: PeerId, call_id: [u8; 16], reason: u8) {
+    async fn on_call_end(
+        &self,
+        peer: PeerId,
+        call_id: [u8; 16],
+        reason: u8,
+        sid: Option<SessionId>,
+    ) {
         let known = {
             let sh = self.sh();
             sh.calls
                 .get(&call_id)
-                .map(|c| c.peer == peer)
+                .map(|c| c.peer == peer && sid.map(|s| s == c.local_sid).unwrap_or(true))
                 .unwrap_or(false)
         };
         if !known {
@@ -3199,7 +3459,14 @@ impl Core {
         .await;
     }
 
-    async fn on_call_frame(&self, peer: PeerId, call_id: [u8; 16], seq: u16, payload: Vec<u8>) {
+    async fn on_call_frame(
+        &self,
+        peer: PeerId,
+        call_id: [u8; 16],
+        seq: u16,
+        payload: Vec<u8>,
+        sid: Option<SessionId>,
+    ) {
         if payload.len() > call::MAX_OPUS_PACKET {
             return;
         }
@@ -3207,7 +3474,11 @@ impl Core {
             let sh = self.sh();
             sh.calls
                 .get(&call_id)
-                .filter(|c| c.peer == peer && c.state == CallState::Active)
+                .filter(|c| {
+                    c.peer == peer
+                        && c.state == CallState::Active
+                        && sid.map(|s| s == c.local_sid).unwrap_or(true)
+                })
                 .and_then(|c| c.rt.clone())
         };
         let Some(rt) = rt else { return };
@@ -3245,32 +3516,60 @@ impl Core {
         };
         let now = Instant::now();
         let bytes_done = {
-            let peer = peer_of_chat(&row.chat_id).unwrap_or_else(|_| self.identity.peer_id());
             let mut sh = self.sh();
-            let x = sh
-                .xfers
-                .entry(row.file_id.clone())
-                .or_insert_with(|| Xfer::new(peer, row.chunks_total as u32));
-            if x.last_state == Some(state)
-                && x.last_emit
-                    .map(|t| now.duration_since(t) < Duration::from_secs(1))
-                    .unwrap_or(false)
-            {
-                return;
+            if !sh.xfers.contains_key(&row.file_id) && !state.is_terminal() {
+                // Live-state row with no runtime entry (rehydrated test row,
+                // post-restart emit before resume_xfers ran): recreate it —
+                // NOT a zombie, the terminal transition will drop it again.
+                if let Ok(peer) = peer_of_chat(&row.chat_id) {
+                    let mut x = Xfer::new(peer, row.chunks_total.max(0) as u32);
+                    if !row.have.is_empty() && row.have.len() == x.have.len() {
+                        x.have.copy_from_slice(&row.have);
+                    }
+                    sh.xfers.insert(row.file_id.clone(), x);
+                }
             }
-            x.last_state = Some(state);
-            x.last_emit = Some(now);
-            if state == FileState::Complete {
-                row.size as u64
-            } else {
-                let have = if progress_have.is_empty() {
-                    &x.have
-                } else {
-                    progress_have
-                };
-                (xfer::popcount(have) as u64)
-                    .saturating_mul(row.chunk_size.max(0) as u64)
-                    .min(row.size.max(0) as u64)
+            match sh.xfers.get_mut(&row.file_id) {
+                Some(x) => {
+                    if x.last_state == Some(state)
+                        && x.last_emit
+                            .map(|t| now.duration_since(t) < Duration::from_secs(1))
+                            .unwrap_or(false)
+                    {
+                        return;
+                    }
+                    x.last_state = Some(state);
+                    x.last_emit = Some(now);
+                    if state == FileState::Complete {
+                        row.size as u64
+                    } else {
+                        let have = if progress_have.is_empty() {
+                            &x.have
+                        } else {
+                            progress_have
+                        };
+                        (xfer::popcount(have) as u64)
+                            .saturating_mul(row.chunk_size.max(0) as u64)
+                            .min(row.size.max(0) as u64)
+                    }
+                }
+                // No runtime entry (terminal emit after xfer_finish dropped
+                // it): still emit from the persisted row — recreating a
+                // zombie Xfer here would leak it forever.
+                None => {
+                    if state == FileState::Complete {
+                        row.size as u64
+                    } else {
+                        let have = if progress_have.is_empty() {
+                            row.have.as_slice()
+                        } else {
+                            progress_have
+                        };
+                        (xfer::popcount(have) as u64)
+                            .saturating_mul(row.chunk_size.max(0) as u64)
+                            .min(row.size.max(0) as u64)
+                    }
+                }
             }
         };
         self.emit(
@@ -3559,11 +3858,19 @@ impl Core {
                 self.sh().dropped_inbound += 1;
                 return;
             }
-            let active = FileState::parse(&row.state)
-                .map(|s| s.active())
+            // Re-offer while a transfer is live → re-accept with current
+            // ranges. `Offered` is excluded on purpose: the row is live but
+            // NOT yet accepted locally, so answering FileAccept here would
+            // acknowledge a transfer the user never approved.
+            let reaccept = FileState::parse(&row.state)
+                .map(|s| {
+                    matches!(
+                        s,
+                        FileState::Accepted | FileState::Transferring | FileState::Verifying
+                    )
+                })
                 .unwrap_or(false);
-            if active && row.dir == Dir::In {
-                // Re-offer while live → re-accept with current ranges.
+            if reaccept && row.dir == Dir::In {
                 self.send_file_accept(&row).await;
             }
             return;
@@ -4313,7 +4620,11 @@ impl Core {
                         .await;
                 }
             }
-            // Orphan .part sweep: any blob not referenced by a row.
+            // Orphan .part sweep: any blob not referenced by a row — but
+            // only once it has aged past the grace window. A blob whose row
+            // insert is still in flight (or a chunk writer mid-append)
+            // looks orphaned to a naive sweep and would be reaped
+            // mid-staging; the mtime check keeps young files.
             let keep: HashSet<String> = self
                 .sblk(|s| s.file_staged_paths())
                 .await
@@ -4326,7 +4637,17 @@ impl Core {
                     for e in rd.flatten() {
                         let name = e.file_name().to_string_lossy().to_string();
                         let rel = format!("xfer/{name}");
-                        if name.ends_with(".part") && !keep.contains(&rel) {
+                        if !name.ends_with(".part") || keep.contains(&rel) {
+                            continue;
+                        }
+                        let young = e
+                            .metadata()
+                            .and_then(|m| m.modified())
+                            .ok()
+                            .and_then(|t| t.elapsed().ok())
+                            .map(|age| age < PART_ORPHAN_GRACE)
+                            .unwrap_or(false);
+                        if !young {
                             xfer::stage_unlink(&e.path());
                         }
                     }
@@ -4632,7 +4953,18 @@ impl Core {
                 .get(&session_id)
                 .and_then(|p| sh.sessions.get(p).map(|ps| (*p, ps.clone())));
             match bound {
-                Some((peer, ps)) => (ps, peer, false),
+                Some((peer, ps)) => {
+                    // The relay-stamped sender must own the sid — a foreign
+                    // `from` under a bound stream id is a hijack attempt:
+                    // drop WITHOUT decrypt and WITHOUT tombstoning, the
+                    // stream still belongs to its live owner.
+                    if peer != from {
+                        sh.dropped_inbound += 1;
+                        tracing::debug!(%from, %peer, ?session_id, "transport under sid bound to another peer; dropped");
+                        return;
+                    }
+                    (ps, peer, false)
+                }
                 None => match sh.sessions.get(&from).cloned() {
                     None => {
                         // Park ONLY while a handshake or install for `from`
@@ -4736,10 +5068,12 @@ impl Core {
                 return;
             }
         };
-        self.handle_app(peer, app).await;
+        // The session generation that carried the frame rides into the
+        // app layer: call signalling pins to it (M7).
+        self.handle_app(peer, app, Some(ps.session_id)).await;
     }
 
-    async fn handle_app(self: &Arc<Self>, peer: PeerId, app: AppMsg) {
+    async fn handle_app(self: &Arc<Self>, peer: PeerId, app: AppMsg, sid: Option<SessionId>) {
         let chat_id = chat_str(&peer);
         // Belt to the inbound_loop/on_session_ready suspenders: a session
         // that predates a decline keeps delivering frames — drop them here.
@@ -5021,17 +5355,17 @@ impl Core {
                 cap,
                 expires_unix,
             } => {
-                self.on_call_ring(peer, call_id, media, cap, expires_unix)
+                self.on_call_ring(peer, call_id, media, cap, expires_unix, sid)
                     .await;
             }
             AppMsg::CallRinging { call_id } => {
-                self.on_call_ringing(peer, call_id).await;
+                self.on_call_ringing(peer, call_id, sid).await;
             }
             AppMsg::CallAccept { call_id, cap } => {
-                self.on_call_accept(peer, call_id, cap).await;
+                self.on_call_accept(peer, call_id, cap, sid).await;
             }
             AppMsg::CallEnd { call_id, reason } => {
-                self.on_call_end(peer, call_id, reason).await;
+                self.on_call_end(peer, call_id, reason, sid).await;
             }
             AppMsg::CallFrame {
                 call_id,
@@ -5039,7 +5373,7 @@ impl Core {
                 payload,
                 ..
             } => {
-                self.on_call_frame(peer, call_id, seq, payload).await;
+                self.on_call_frame(peer, call_id, seq, payload, sid).await;
             }
         }
     }
@@ -5185,7 +5519,17 @@ impl Core {
             .map_err(store_rpc)?;
         let (mid, deduped) = inserted;
         if deduped {
-            return Ok((mid, chat_str(&peer), expires_at));
+            // The stored row is authoritative — its deadline, not this
+            // call's re-computed one.
+            let stored_exp = self
+                .sblk({
+                    let id = mid.clone();
+                    move |s| s.get_message(&id).map(|o| o.and_then(|m| m.expires_at))
+                })
+                .await
+                .ok()
+                .flatten();
+            return Ok((mid, chat_str(&peer), stored_exp));
         }
         self.emit(
             "msg_state",
@@ -5650,6 +5994,15 @@ impl CinderCore for Core {
             }));
         }
         let scope = p.scope.as_deref().unwrap_or("everyone");
+        if scope == "everyone" && m.dir != Dir::Out {
+            // Direction check BEFORE the tombstone — a `scope=everyone`
+            // call on a peer's message must fail clean, not delete the
+            // local copy on its way out.
+            return Err(RpcError::new(
+                ErrorKind::Conflict,
+                "delete for everyone applies to own messages only",
+            ));
+        }
         self.sblk({
             let id = p.msg_id.clone();
             move |s| s.soft_delete(&id)
@@ -5657,12 +6010,6 @@ impl CinderCore for Core {
         .await
         .map_err(store_rpc)?;
         if scope == "everyone" {
-            if m.dir != Dir::Out {
-                return Err(RpcError::new(
-                    ErrorKind::Conflict,
-                    "delete for everyone applies to own messages only",
-                ));
-            }
             let peer = peer_of_chat(&m.chat_id)?;
             let me = self.arc();
             let msg_id = m.msg_id.clone();
@@ -6277,6 +6624,14 @@ impl CinderCore for Core {
         };
         let chunk_size = caps.chunk_bytes;
         let chunks_total = size.div_ceil(chunk_size as u64) as u32;
+        if chunks_total > caps.max_chunks {
+            // The receiver would reject this offer outright — fail the
+            // send before the file row ever lands.
+            return Err(RpcError::new(
+                ErrorKind::InvalidParams,
+                "file exceeds the chunk-count cap",
+            ));
+        }
         // Name resolution: explicit override, else source basename, else
         // fallback — sanitized before it touches the wire OR the store.
         let name = p.name.clone().unwrap_or_else(|| {
@@ -6458,18 +6813,9 @@ impl CinderCore for Core {
             self.xfer_hydrate(&row, peer);
             self.emit_xfer(&row, &[]);
         }
-        if msg_deduped {
-            // Anchor already existed (cross-crash replay): still deduped.
-            return Ok(json!({
-                "file_id": fid,
-                "msg_id": mid,
-                "chat_id": chat_id,
-                "state": "offered",
-                "chunks": chunks_total,
-                "bytes": size,
-                "deduped": true,
-            }));
-        }
+        // A deduped ANCHOR (client_xfer_id replay whose file row was never
+        // committed — e.g. crash mid-send) still owes the wire its FileOffer:
+        // the file row is brand new, only the message insert deduped.
         let me = self.arc();
         let mid2 = mid.clone();
         tokio::spawn(async move {
@@ -6489,7 +6835,7 @@ impl CinderCore for Core {
             "state": "offered",
             "chunks": chunks_total,
             "bytes": size,
-            "deduped": false,
+            "deduped": msg_deduped,
         }))
     }
 
@@ -6803,13 +7149,6 @@ impl CinderCore for Core {
                 "contact is not connected",
             ));
         }
-        // CALL_MAX_ACTIVE = 1: any live call blocks a second outbound ring.
-        if self.live_calls().len() >= caps.max_active {
-            return Err(RpcError::new(
-                ErrorKind::Conflict,
-                "a call is already in progress (CALL_MAX_ACTIVE=1)",
-            ));
-        }
         // Live path only — calls never queue or mailbox-deposit (CA18).
         let Some(ps) = self.call_live_path(&peer) else {
             return Err(RpcError::new(
@@ -6817,41 +7156,8 @@ impl CinderCore for Core {
                 "no live session with peer (calls cannot be deposited)",
             ));
         };
-        // Per-peer re-ring throttle.
-        {
-            let sh = self.sh();
-            if let Some(t) = sh.call_last_ring.get(&peer) {
-                if t.elapsed() < caps.ring_min_gap {
-                    return Err(RpcError::new(
-                        ErrorKind::RateLimited,
-                        format!(
-                            "re-ring to this peer within {}s",
-                            caps.ring_min_gap.as_secs()
-                        ),
-                    ));
-                }
-            }
-        }
         let call_id = *HsId::random().as_bytes();
         let expires_unix = (now_ms() + caps.ring_timeout.as_millis() as i64) as u64;
-        let sent = self
-            .send_call_ctrl(
-                peer,
-                &AppMsg::CallRing {
-                    call_id,
-                    media: call::MEDIA_AUDIO,
-                    cap: call::CAP_AUDIO_OPUS48K,
-                    expires_unix,
-                },
-                ps.session_id,
-            )
-            .await;
-        if !sent {
-            return Err(RpcError::new(
-                ErrorKind::PeerOffline,
-                "ring could not be delivered on the live session",
-            ));
-        }
         let c = Call {
             id: call_id,
             peer,
@@ -6865,10 +7171,57 @@ impl CinderCore for Core {
             max_deadline: Instant::now() + caps.max_duration,
             rt: None,
         };
+        // Reserve the call BEFORE the ring goes on the wire: capacity
+        // recheck + throttle + insert are atomic under the shared lock, so
+        // two concurrent rings can't both pass (M11), and a peer answering
+        // at wire speed always finds the row (M3).
         {
             let mut sh = self.sh();
+            if sh
+                .calls
+                .values()
+                .filter(|c| c.state != CallState::Ended)
+                .count()
+                >= caps.max_active
+            {
+                return Err(RpcError::new(
+                    ErrorKind::Conflict,
+                    "a call is already in progress (CALL_MAX_ACTIVE=1)",
+                ));
+            }
+            if let Some(t) = sh.call_last_ring_out.get(&peer) {
+                if t.elapsed() < caps.ring_min_gap {
+                    return Err(RpcError::new(
+                        ErrorKind::RateLimited,
+                        format!(
+                            "re-ring to this peer within {}s",
+                            caps.ring_min_gap.as_secs()
+                        ),
+                    ));
+                }
+            }
             sh.calls.insert(call_id, c.clone());
-            sh.call_last_ring.insert(peer, Instant::now());
+            sh.call_last_ring_out.insert(peer, Instant::now());
+        }
+        let sent = self
+            .send_call_ctrl(
+                peer,
+                &AppMsg::CallRing {
+                    call_id,
+                    media: call::MEDIA_AUDIO,
+                    cap: call::CAP_AUDIO_OPUS48K,
+                    expires_unix,
+                },
+                ps.session_id,
+            )
+            .await;
+        if !sent {
+            // Roll the reservation back — no state was emitted for it.
+            self.sh().calls.remove(&call_id);
+            return Err(RpcError::new(
+                ErrorKind::PeerOffline,
+                "ring could not be delivered on the live session",
+            ));
         }
         self.emit_call_state(&c, None);
         Ok(json!({
@@ -6889,6 +7242,35 @@ impl CinderCore for Core {
             (target.clone(), target.local_sid)
         };
         let negotiated = call.cap & call::CAP_AUDIO_OPUS48K;
+        if negotiated == 0 {
+            // Nothing left after the cap intersection — the call is
+            // unsupportable, not a transport problem.
+            let mut call = call;
+            {
+                let mut sh = self.sh();
+                if let Some(c) = sh.calls.get_mut(&call.id) {
+                    if c.state == CallState::Active {
+                        c.state = CallState::Ended;
+                    }
+                }
+            }
+            call.state = CallState::Ended;
+            let _ = self
+                .send_call_ctrl(
+                    call.peer,
+                    &AppMsg::CallEnd {
+                        call_id: call.id,
+                        reason: EndReason::Failed.to_u8(),
+                    },
+                    sid,
+                )
+                .await;
+            self.emit_call_state(&call, Some(EndReason::Failed));
+            return Err(RpcError::new(
+                ErrorKind::Conflict,
+                "no media capability survives negotiation",
+            ));
+        }
         let sent = self
             .send_call_ctrl(
                 call.peer,
@@ -6902,7 +7284,12 @@ impl CinderCore for Core {
         if !sent {
             let mut sh = self.sh();
             if let Some(c) = sh.calls.get_mut(&call.id) {
-                c.state = CallState::Ringing;
+                // Revert ONLY our own mark: a concurrent terminal transition
+                // (janitor, hangup, peer CallEnd) must never be flipped back
+                // to Ringing — ended is absorbing.
+                if c.state == CallState::Active {
+                    c.state = CallState::Ringing;
+                }
             }
             return Err(RpcError::new(
                 ErrorKind::PeerOffline,
@@ -7050,6 +7437,12 @@ impl CinderCore for Core {
                     .ok_or_else(|| RpcError::new(ErrorKind::NotFound, "no active call"))?,
             }
         };
+        if call.state != CallState::Active {
+            return Err(RpcError::new(
+                ErrorKind::Conflict,
+                "mute applies only to an active call",
+            ));
+        }
         let Some(rt) = &call.rt else {
             return Err(RpcError::new(
                 ErrorKind::Conflict,

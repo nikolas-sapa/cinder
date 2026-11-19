@@ -119,7 +119,8 @@ async fn stop(core: &Arc<Core>) {
     core.begin_shutdown();
     let step = Duration::from_millis(50);
     let mut waited = Duration::ZERO;
-    while waited < Duration::from_secs(10) {
+    // 30s: parallel workspace runs can schedule the teardown late.
+    while waited < Duration::from_secs(30) {
         if core.conn_state() == crate::tui::backend::ConnState::Offline {
             return;
         }

@@ -16,6 +16,7 @@
 <script src="main.js" defer></script>
 </head>
 <body>
+<canvas id="bgField" aria-hidden="true"></canvas>
 <a class="skip" href="#main">Skip to content</a>
 
 <header class="nav">
@@ -41,6 +42,8 @@
 
 <!-- ============ HERO ============ -->
 <section class="hero" id="top">
+  <pre class="hero-ascii" id="heroAscii" aria-hidden="true"></pre>
+  <div class="hero-vignette" aria-hidden="true"></div>
   <div class="wrap">
     <p class="eyebrow mono">e2e-encrypted · terminal-native · agent-first</p>
     <h1>encrypted chat<br>your agents<br>can drive<span class="ember-dot">.</span></h1>
@@ -62,7 +65,7 @@
     </div>
 
     <div class="ctas" data-reveal>
-      <a class="btn btn-primary" href="#quickstart">get started</a>
+      <a class="btn btn-primary" href="#quickstart" data-fill="#FFB224" data-halo="#5A4114"><canvas aria-hidden="true"></canvas><span class="btn-label">get started</span></a>
       <a class="btn btn-ghost" href="https://github.com/nikolas-sapa/cinder/tree/main/docs" rel="noopener">read the docs</a>
       <p class="chips mono">
         <span>Noise_XX_25519_ChaChaPoly_BLAKE2s</span>
@@ -75,7 +78,7 @@
 
 <!-- ============ EMBER FIELD — live ordered-dither shader ============ -->
 <div class="ember-field" aria-hidden="true" data-reveal>
-  <canvas id="emberCanvas" height="168"></canvas>
+  <canvas id="emberCanvas"></canvas>
 </div>
 
 <!-- ============ THE WIRE ============ -->
@@ -166,6 +169,7 @@
       <p class="sec-side">the same session, two ways to drive it</p>
     </div>
     <div class="term" data-reveal>
+      <canvas class="burn" aria-hidden="true"></canvas>
       <div class="term-bar">
         <span class="dot"></span><span class="dot"></span><span class="dot"></span>
         <span class="term-title mono">cinder — tui</span>
@@ -262,7 +266,7 @@
   </div>
 </section>
 
-<div class="dither-rule" aria-hidden="true"></div>
+<div class="dither-div" role="separator" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>
 
 <!-- ============ AGENTS ============ -->
 <section class="agents" id="agents">
@@ -302,7 +306,11 @@
   </div>
 </section>
 
-<div class="dither-rule" aria-hidden="true"></div>
+<!-- ============ MOLTEN FIELD — webgl ordered-dither shader ============ -->
+<div class="molten" aria-hidden="true" data-reveal>
+  <div class="band-label mono"><span>fig 0.2 — thermal strip</span><span>bayer 8×8 · fbm warp · glsl</span></div>
+  <canvas id="moltenCanvas"></canvas>
+</div>
 
 <!-- ============ SECURITY ============ -->
 <section class="security" id="security">
@@ -339,6 +347,11 @@
   </div>
 </section>
 
+<!-- ============ GLYPH FIELD — ascii ordered dither ============ -->
+<div class="ascii-band" aria-hidden="true" data-reveal>
+  <canvas id="asciiCanvas"></canvas>
+</div>
+
 <!-- ============ QUICKSTART ============ -->
 <section class="quickstart" id="quickstart">
   <div class="wrap">
@@ -363,16 +376,31 @@
         the API by asking cinder.</p>
       </div>
     </div>
+    <div class="boot-term mono" id="bootTerm" data-reveal aria-label="cinderd boot log">
+      <div class="boot-bar">
+        <span class="boot-dot ember"></span><span class="boot-dot"></span><span class="boot-dot"></span>
+        <span class="boot-title">cinderd — tty0</span>
+        <span class="boot-led" aria-hidden="true"></span>
+      </div>
+      <div class="boot-body" id="bootBody"></div>
+      <div class="boot-keys">click panel <b>pause</b> · press <b>s</b> to skip · stays static when done</div>
+    </div>
   </div>
 </section>
 
-<div class="dither-rule" aria-hidden="true"></div>
+<!-- ============ PAGE-EDGE DISSOLVE ============ -->
+<div class="page-dissolve" aria-hidden="true">
+  <canvas class="dissolve-cv"></canvas>
+</div>
 
 </main>
 
 <footer class="footer">
   <div class="wrap foot-in">
     <div class="foot-brand">
+      <pre class="spark-mark" aria-hidden="true">╲ │ ╱
+─ █ ─
+╱ │ ╲</pre>
       <span class="wordmark">cinder</span>
       <span class="mono dim">encrypted chat your agents can drive</span>
     </div>

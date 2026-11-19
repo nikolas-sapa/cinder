@@ -1,0 +1,210 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>cinder — ascii field experiment</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --ground:#0B0C0E; --ink:#EDEDE8; --muted:#9BA0A6;
+    --ember:#FFB224; --dim-ember:#5A4114; --line:#1E2126;
+    --mono:'JetBrains Mono',ui-monospace,monospace;
+  }
+  *{box-sizing:border-box;margin:0}
+  html,body{height:100%}
+  body{background:var(--ground);color:var(--ink);font-family:var(--mono);
+    font-size:14px;line-height:1.6;-webkit-font-smoothing:antialiased}
+
+  /* --- field layer: fixed canvas sits under everything ---------- */
+  #field{position:fixed;inset:0;z-index:0;display:block;pointer-events:none}
+
+  /* --- demo content above the field ----------------------------- */
+  .page{position:relative;z-index:1;min-height:100vh;display:flex;
+    flex-direction:column}
+  header{padding:28px 32px;display:flex;justify-content:space-between;
+    align-items:baseline;border-bottom:1px solid var(--line)}
+  .tag{color:var(--ember);font-weight:500}
+  .hint{color:var(--muted);font-size:12px}
+  main{flex:1;display:grid;place-items:center;padding:64px 24px}
+
+  .card{max-width:560px;width:100%;padding:36px 40px;
+    background:rgba(11,12,14,.82);backdrop-filter:blur(3px);
+    border:1px solid var(--line);border-radius:6px}
+  .card h1{font-size:18px;font-weight:500;margin-bottom:6px}
+  .card h1 .cursor{display:inline-block;width:9px;height:17px;
+    background:var(--ember);vertical-align:-2px;margin-left:2px;
+    animation:blink 1.1s steps(1) infinite}
+  .card .sub{color:var(--muted);margin-bottom:24px;font-size:13px}
+  .term{border:1px solid var(--line);border-radius:4px;padding:14px 16px;
+    font-size:12.5px;color:var(--muted);background:rgba(11,12,14,.6)}
+  .term .p{color:var(--ember)}
+  .term .ok{color:var(--ink)}
+  .meta{margin-top:20px;font-size:11px;color:var(--muted);opacity:.7;
+    display:flex;justify-content:space-between}
+  @keyframes blink{50%{opacity:0}}
+  @media (prefers-reduced-motion:reduce){.cursor{animation:none}}
+</style>
+</head>
+<body>
+<canvas id="field" aria-hidden="true"></canvas>
+
+<div class="page">
+  <header>
+    <span class="tag">cinder / experiments</span>
+    <span class="hint">ascii-field — move the cursor to ignite glyphs</span>
+  </header>
+  <main>
+    <section class="card">
+      <h1>ember_field<span class="cursor"></span></h1>
+      <p class="sub">E2E-encrypted messenger for the terminal. The field behind
+        this card is the background layer — content stays legible at rest.</p>
+      <div class="term">
+        <span class="p">$</span> cinder login<br>
+        <span class="ok">identity:</span> nk@cinder · key fingerprint 9F:41:…<br>
+        <span class="p">$</span> cinder send @mars "relay is up"<br>
+        <span class="ok">sealed → relay → delivered</span> · 41ms
+      </div>
+      <div class="meta"><span>glyphs: <b id="count">0</b></span><span>motion: <b id="mode">auto</b></span></div>
+    </section>
+  </main>
+</div>
+
+<script>
+(function(){
+  'use strict';
+
+  /* ---------------------------------------------------------------
+     ASCII EMBER FIELD — tunables
+     CELL    : px per seed cell (lower = denser)
+     MAX     : hard cap on particle count (CPU bound)
+     RADIUS  : mouse influence radius, px
+     DRIFT   : upward px/frame at 60fps (embers rise)
+     COOL    : heat decay per frame (0..1, lower = faster cool)
+  ---------------------------------------------------------------- */
+  var CELL = 42, MAX = 850, RADIUS = 130;
+  var DRIFT = 0.09, COOL = 0.955;
+  var GLYPHS = '···········::::***++x~~';        // weighted set
+  var SIZE = 14;                                  // px glyph size
+
+  var canvas = document.getElementById('field');
+  var ctx = canvas.getContext('2d');
+  var reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  var W = 0, H = 0, parts = [], raf = 0, running = false;
+  var mouse = {x: -9999, y: -9999, active: false};
+  var t = 0;
+
+  // deterministic seed so the field composition is stable per layout
+  function rng(seed){ return function(){ seed|=0; seed=seed+0x6D2B79F5|0;
+    var r=Math.imul(seed^seed>>>15,1|seed); r=r+Math.imul(r^r>>>7,61|r)^r;
+    return ((r^r>>>14)>>>0)/4294967296; }; }
+
+  function seed(){
+    var rand = rng(0xC1D3E);
+    parts.length = 0;
+    var cols = Math.ceil(W/CELL), rows = Math.ceil(H/CELL);
+    for (var gy=0; gy<rows; gy++) for (var gx=0; gx<cols; gx++){
+      if (parts.length >= MAX) break;
+      if (rand() < 0.28) continue;                  // skip ~28% of cells: sparse pockets
+      parts.push({
+        x: gx*CELL + rand()*CELL,
+        y: gy*CELL + rand()*CELL,
+        g: GLYPHS[(rand()*GLYPHS.length)|0],
+        phase: rand()*6.283,
+        speed: 0.6 + rand()*0.9,                    // per-particle drift multiplier
+        base: 0.28 + rand()*0.35,                   // resting alpha
+        heat: 0, ox: 0, oy: 0
+      });
+    }
+    document.getElementById('count').textContent = parts.length;
+  }
+
+  function resize(){
+    var dpr = Math.min(window.devicePixelRatio||1, 2);
+    W = window.innerWidth; H = window.innerHeight;
+    canvas.width = W*dpr; canvas.height = H*dpr;
+    canvas.style.width = W+'px'; canvas.style.height = H+'px';
+    ctx.setTransform(dpr,0,0,dpr,0,0);
+    ctx.font = '500 '+SIZE+'px "JetBrains Mono",monospace';
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    seed();
+    if (reduced) draw();                            // static frame only
+  }
+
+  function lerp(a,b,k){ return a+(b-a)*k; }
+
+  function draw(){
+    ctx.clearRect(0,0,W,H);
+    for (var i=0; i<parts.length; i++){
+      var p = parts[i];
+      var tw = 0.75 + 0.25*Math.sin(t*0.02*p.speed + p.phase);   // twinkle
+      var a = Math.min(1, p.base*tw + p.heat*0.85);
+      var x = p.x + p.ox, y = p.y + p.oy;
+      if (p.heat > 0.02){
+        // flare: dim-ember halo then ember core, cools back to muted
+        ctx.fillStyle = 'rgba(90,65,20,'+(p.heat*0.5).toFixed(3)+')';
+        ctx.fillText(p.g, x, y);
+        var r=lerp(155,255,p.heat)|0, g=lerp(160,178,p.heat)|0, b=lerp(166,36,p.heat)|0;
+        ctx.fillStyle = 'rgba('+r+','+g+','+b+','+a.toFixed(3)+')';
+      } else {
+        ctx.fillStyle = 'rgba(155,160,166,'+a.toFixed(3)+')';    // --muted
+      }
+      ctx.fillText(p.g, x, y);
+    }
+  }
+
+  function tick(){
+    t++;
+    var r2 = RADIUS*RADIUS;
+    for (var i=0; i<parts.length; i++){
+      var p = parts[i];
+      p.y -= DRIFT*p.speed;
+      p.x += Math.sin(t*0.008*p.speed + p.phase)*0.12;           // lateral wander
+      if (p.y < -20) p.y = H+20;
+      if (p.x < -20) p.x = W+20; else if (p.x > W+20) p.x = -20;
+
+      if (mouse.active){
+        var dx = p.x - mouse.x, dy = p.y - mouse.y, d2 = dx*dx+dy*dy;
+        if (d2 < r2){
+          var d = Math.sqrt(d2)||1, f = 1 - d/RADIUS;
+          p.ox += (dx/d)*f*2.4;                                  // displace away
+          p.oy += (dy/d)*f*2.4;
+          p.heat = Math.min(1, p.heat + f*0.3);                  // ignite
+        }
+      }
+      p.ox *= 0.9; p.oy *= 0.9;                                  // spring back
+      p.heat *= COOL;
+    }
+    draw();
+    if (running) raf = requestAnimationFrame(tick);
+  }
+
+  function start(){ if (!running && !reduced){ running = true; raf = requestAnimationFrame(tick); } }
+  function stop(){ running = false; cancelAnimationFrame(raf); }
+
+  /* pause when tab hidden or canvas scrolled offscreen */
+  document.addEventListener('visibilitychange', function(){
+    document.hidden ? stop() : start();
+  });
+  new IntersectionObserver(function(e){
+    e[0].isIntersecting ? start() : stop();
+  }).observe(canvas);
+
+  window.addEventListener('pointermove', function(e){
+    mouse.x = e.clientX; mouse.y = e.clientY; mouse.active = true;
+  }, {passive:true});
+  window.addEventListener('pointerleave', function(){ mouse.active = false; });
+
+  var rt; window.addEventListener('resize', function(){
+    clearTimeout(rt); rt = setTimeout(resize, 150);
+  });
+
+  document.getElementById('mode').textContent = reduced ? 'static (reduced motion)' : 'live';
+  resize();
+  start();
+})();
+</script>
+</body>
+</html>

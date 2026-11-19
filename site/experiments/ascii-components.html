@@ -1,0 +1,260 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark">
+<title>cinder · ascii components</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+:root{
+  --ground:#0B0C0E;--panel:#15171B;--ink:#EDEDE8;--muted:#9BA0A6;
+  --faint:#3D4249;--line:#23262D;--ember:#FFB224;--dimember:#5A4114;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+::selection{background:var(--ember);color:var(--ground)}
+body{
+  background:var(--ground);color:var(--ink);
+  font:400 15px/1.6 "Inter",system-ui,sans-serif;
+  max-width:960px;margin:0 auto;padding:64px 32px 96px;
+  -webkit-font-smoothing:antialiased;
+}
+.mono,.ascii,.fig,.card-head,.index,.sw{
+  font-family:"JetBrains Mono",ui-monospace,"SF Mono",Menlo,Consolas,monospace;
+}
+.ascii{font-size:13px;line-height:1.42;white-space:pre;color:var(--ink)}
+.ascii .ft{color:var(--faint)}
+.ascii .mu{color:var(--muted)}
+.ascii .em{color:var(--ember)}
+.ascii .de{color:var(--dimember)}
+.ascii .ink{color:var(--ink)}
+.ascii .b{font-weight:600}
+
+header.mast .ascii{margin-bottom:42px}
+h1{
+  font-family:"Space Grotesk","Inter",sans-serif;
+  font-size:clamp(42px,6.5vw,68px);line-height:.95;
+  letter-spacing:-.02em;font-weight:600;text-transform:uppercase;
+}
+h1 .tick{color:var(--ember)}
+.lede{margin-top:18px;color:var(--muted);max-width:54ch}
+.index{
+  margin-top:30px;display:flex;flex-wrap:wrap;gap:10px 26px;
+  font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:var(--muted);
+}
+.index a{color:inherit;text-decoration:none}
+.index a:hover{color:var(--ember)}
+.index b{color:var(--ember);font-weight:500;margin-right:7px}
+
+section.card{margin-top:58px}
+.card-head{
+  display:flex;align-items:center;gap:14px;
+  font-size:11px;letter-spacing:.12em;text-transform:uppercase;
+}
+.card-head .idx{color:var(--ember)}
+.card-head .ttl{color:var(--ink)}
+.card-head .hr{flex:1;height:1px;background:var(--line)}
+.card-head .sub{color:var(--faint)}
+.demo{
+  margin-top:16px;background:var(--panel);
+  border:1px solid var(--line);border-radius:6px;padding:20px;
+}
+.well{
+  background:var(--ground);border:1px solid var(--line);border-radius:4px;
+  padding:20px 22px;overflow-x:auto;
+}
+.fig{
+  font-size:10px;letter-spacing:.12em;text-transform:uppercase;
+  color:var(--faint);margin:16px 0 10px;
+}
+.fig:first-child{margin-top:0}
+.fig .sep{color:var(--line)}
+.note{margin-top:16px;font-size:13px;color:var(--muted);max-width:64ch}
+.note code{
+  font-family:"JetBrains Mono",monospace;font-size:12px;color:var(--ink);
+  background:var(--panel);border:1px solid var(--line);
+  border-radius:3px;padding:1px 5px;
+}
+footer{margin-top:70px}
+footer .ascii{margin-top:8px}
+.palette{display:flex;gap:16px;flex-wrap:wrap;margin-top:26px}
+.sw{font-size:10px;color:var(--muted);letter-spacing:.06em;text-transform:lowercase}
+.sw i{
+  display:block;width:56px;height:22px;border-radius:3px;
+  border:1px solid var(--line);margin-bottom:6px;
+}
+</style>
+</head>
+<body>
+
+<header class="mast">
+<pre class="ascii"><span class="ft">┌─ </span><span class="em">cinder</span><span class="mu"> · ascii component sheet</span><span class="ft"> ─────────────────────────┐</span>
+<span class="ft">│</span>                                                          <span class="ft">│</span>
+<span class="ft">│</span>  <span class="mu">e2e encrypted terminal messenger</span>       <span class="ft">instrument skin</span>  <span class="ft">│</span>
+<span class="ft">│</span>  <span class="mu">experiments/ascii-components</span>                      <span class="em">v0.1</span>  <span class="ft">│</span>
+<span class="ft">│</span>                                                          <span class="ft">│</span>
+<span class="ft">└──────────────────────────────────────────────────────────┘</span></pre>
+<h1>ascii<br>components<span class="tick">.</span></h1>
+<p class="lede">box-drawing interface kit for the cinder surface — frames, marks,
+meters, keys. six glyphs, hand-aligned inside <code>&lt;pre&gt;</code>, no dependencies.</p>
+<nav class="index">
+  <a href="#s01"><b>01</b>frame</a>
+  <a href="#s02"><b>02</b>mark</a>
+  <a href="#s03"><b>03</b>term</a>
+  <a href="#s04"><b>04</b>meter</a>
+  <a href="#s05"><b>05</b>keys</a>
+  <a href="#s06"><b>06</b>table</a>
+</nav>
+</header>
+
+<section class="card" id="s01">
+  <div class="card-head"><span class="idx">01</span><span class="ttl">frame</span><span class="hr"></span><span class="sub">section headers</span></div>
+  <div class="demo"><div class="well">
+    <div class="fig">fig a <span class="sep">·</span> band — kicker in the top rule</div>
+    <pre class="ascii"><span class="ft">┌─ </span><span class="em">01</span><span class="mu"> · handshake</span><span class="ft"> ─────────────────────────────────────────┐</span>
+<span class="ft">│</span>                                                          <span class="ft">│</span>
+<span class="ft">│</span>  <span class="ink b">HANDSHAKE</span>                                               <span class="ft">│</span>
+<span class="ft">│</span>  <span class="mu">noise ik · peer auth · x25519</span>                           <span class="ft">│</span>
+<span class="ft">│</span>                                                          <span class="ft">│</span>
+<span class="ft">└──────────────────────────────────────────────────────────┘</span></pre>
+    <div class="fig">fig b <span class="sep">·</span> tee — inline divider</div>
+    <pre class="ascii"><span class="ft">──┤ </span><span class="em">02</span><span class="mu"> · peers</span><span class="ft"> ├──────────────────────────────────────────</span></pre>
+    <div class="fig">fig c <span class="sep">·</span> tee-right — right-anchored</div>
+    <pre class="ascii"><span class="ft">───────────────────────────────────────────┤ </span><span class="em">03</span><span class="mu"> · log</span><span class="ft"> ├───</span></pre>
+  </div></div>
+  <p class="note">section frames from single-line box chars. the kicker rides inside
+  the top rule; tee variants work inline where a full band is too loud.</p>
+</section>
+
+<section class="card" id="s02">
+  <div class="card-head"><span class="idx">02</span><span class="ttl">mark</span><span class="hr"></span><span class="sub">spark glyph · 3 sizes</span></div>
+  <div class="demo"><div class="well">
+    <div class="fig">fig a <span class="sep">·</span> starburst — detail scales with size</div>
+    <pre class="ascii">                          <span class="mu">╲</span>     <span class="mu">│</span>     <span class="mu">╱</span>
+                           <span class="mu">╲</span>    <span class="mu">│</span>    <span class="mu">╱</span>
+                            <span class="mu">╲</span>   <span class="mu">│</span>   <span class="mu">╱</span>
+                             <span class="mu">╲</span>  <span class="de">│</span>  <span class="mu">╱</span>
+           <span class="mu">╲</span>   <span class="mu">│</span>   <span class="mu">╱</span>          <span class="de">╲</span> <span class="em">│</span> <span class="de">╱</span>
+            <span class="mu">╲</span>  <span class="de">│</span>  <span class="mu">╱</span>       <span class="mu">────</span><span class="de">─</span> <span class="em">█</span> <span class="de">─</span><span class="mu">────</span>
+             <span class="de">╲</span> <span class="em">│</span> <span class="de">╱</span>            <span class="de">╱</span> <span class="em">│</span> <span class="de">╲</span>
+           <span class="mu">──</span><span class="de">─</span> <span class="em">█</span> <span class="de">─</span><span class="mu">──</span>         <span class="mu">╱</span>  <span class="de">│</span>  <span class="mu">╲</span>
+<span class="de">╲</span> <span class="em">│</span> <span class="de">╱</span>        <span class="de">╱</span> <span class="em">│</span> <span class="de">╲</span>          <span class="mu">╱</span>   <span class="mu">│</span>   <span class="mu">╲</span>
+<span class="de">─</span> <span class="em">█</span> <span class="de">─</span>       <span class="mu">╱</span>  <span class="de">│</span>  <span class="mu">╲</span>        <span class="mu">╱</span>    <span class="mu">│</span>    <span class="mu">╲</span>
+<span class="de">╱</span> <span class="em">│</span> <span class="de">╲</span>      <span class="mu">╱</span>   <span class="mu">│</span>   <span class="mu">╲</span>      <span class="mu">╱</span>     <span class="mu">│</span>     <span class="mu">╲</span>
+
+<span class="ft">5×3 · s</span>     <span class="ft">9×7 · m</span>         <span class="ft">13×11 · l</span></pre>
+  </div></div>
+  <p class="note">rays in <code>╲ │ ╱ ─</code> around a block core. glow falls off with
+  distance — ember core, dim-ember ring, muted tips.</p>
+</section>
+
+<section class="card" id="s03">
+  <div class="card-head"><span class="idx">03</span><span class="ttl">term</span><span class="hr"></span><span class="sub">terminal window</span></div>
+  <div class="demo"><div class="well">
+    <div class="fig">fig a <span class="sep">·</span> code view</div>
+    <pre class="ascii"><span class="ft">┌─ </span><span class="em">cinder</span><span class="mu"> · handshake.rs</span><span class="ft"> ─────────────────────────── </span><span class="ft">rust</span><span class="ft"> ─┐</span>
+<span class="ft">│</span>                                                          <span class="ft">│</span>
+<span class="ft">│</span>  <span class="em">use</span> <span class="mu">cinder::noise</span><span class="ft">::{</span>Handshake<span class="ft">, </span>Keypair<span class="ft">};</span>                <span class="ft">│</span>
+<span class="ft">│</span>                                                          <span class="ft">│</span>
+<span class="ft">│</span>  <span class="em">let</span> kp = Keypair<span class="ft">::</span><span class="mu">generate</span><span class="ft">(&amp;</span><span class="em">mut</span> OsRng<span class="ft">);</span>                 <span class="ft">│</span>
+<span class="ft">│</span>  <span class="em">let</span> hs = Handshake<span class="ft">::</span><span class="mu">ik</span><span class="ft">(&amp;kp)</span>                             <span class="ft">│</span>
+<span class="ft">│</span><span class="ft">      .</span><span class="mu">initiator</span><span class="ft">()</span>                                        <span class="ft">│</span>
+<span class="ft">│</span><span class="ft">      .</span><span class="mu">handshake</span><span class="ft">(</span>peer<span class="ft">.</span><span class="mu">addr</span><span class="ft">())</span>                             <span class="ft">│</span>
+<span class="ft">│</span><span class="ft">      .</span><span class="em">await</span><span class="ft">()?;</span>                                          <span class="ft">│</span>
+<span class="ft">│</span>                                                          <span class="ft">│</span>
+<span class="ft">│</span>  ratchet<span class="ft">.</span><span class="mu">arm</span><span class="ft">(hs);        // channel sealed</span>               <span class="ft">│</span>
+<span class="ft">│</span>                                                          <span class="ft">│</span>
+<span class="ft">└──────────────────────────────────────────────────────────┘</span></pre>
+    <div class="fig">fig b <span class="sep">·</span> session log</div>
+    <pre class="ascii"><span class="ft">┌─ </span><span class="em">cinder</span><span class="mu"> · session · alice</span><span class="ft"> ──────────────────────── </span><span class="em">live</span><span class="ft"> ─┐</span>
+<span class="ft">│</span>                                                          <span class="ft">│</span>
+<span class="ft">│</span>  <span class="em">$</span> cinder open alice                                     <span class="ft">│</span>
+<span class="ft">│</span>                                                          <span class="ft">│</span>
+<span class="ft">│</span>  <span class="de">::</span> <span class="mu">resolve</span>    alice.cinder.chat                <span class="mu">ok</span>       <span class="ft">│</span>
+<span class="ft">│</span>  <span class="de">::</span> <span class="mu">handshake</span>  noise ik · x25519                <span class="mu">ok</span>       <span class="ft">│</span>
+<span class="ft">│</span>  <span class="de">::</span> <span class="mu">sas</span>        <span class="em">431-772</span>                          <span class="em">verified</span> <span class="ft">│</span>
+<span class="ft">│</span>  <span class="de">::</span> <span class="mu">link</span>       open · ratchet armed             <span class="mu">ok</span>       <span class="ft">│</span>
+<span class="ft">│</span>                                                          <span class="ft">│</span>
+<span class="ft">│</span>  <span class="em">alice</span>  <span class="ft">&gt;</span> fp checks out. sealed.                         <span class="ft">│</span>
+<span class="ft">│</span>  <span class="mu">you</span>    <span class="ft">&gt;</span> same here.                                     <span class="ft">│</span>
+<span class="ft">│</span>                                                          <span class="ft">│</span>
+<span class="ft">│</span>  <span class="em">&gt;</span> <span class="em">█</span>                                                     <span class="ft">│</span>
+<span class="ft">│</span>                                                          <span class="ft">│</span>
+<span class="ft">└──────────────────────────────────────────────────────────┘</span></pre>
+  </div></div>
+  <p class="note">chrome-free titlebar: app badge left, state tag right, everything
+  else is dashes. wraps code or a live log — same box, two payloads.</p>
+</section>
+
+<section class="card" id="s04">
+  <div class="card-head"><span class="idx">04</span><span class="ttl">meter</span><span class="hr"></span><span class="sub">progress / status</span></div>
+  <div class="demo"><div class="well">
+    <div class="fig">fig a <span class="sep">·</span> link sequence, captured states</div>
+    <pre class="ascii"><span class="ft">── </span><span class="mu">channel · build-up</span><span class="ft"> ──────────────────────────────────</span>
+
+  <span class="ft">t0</span>  <span class="ft">░░░░░░░░░░░░░░░░░░░░░░</span>      0%   <span class="ft">idle</span>
+  <span class="ft">t1</span>  <span class="em">██████</span><span class="de">▓▓</span><span class="ft">░░░░░░░░░░░░░░</span>     38%   <span class="mu">handshake · nonce</span>
+  <span class="ft">t2</span>  <span class="em">███████████████</span><span class="de">▓▓</span><span class="ft">░░░░░</span>     78%   <span class="mu">ratchet sync</span>
+  <span class="ft">t3</span>  <span class="em">██████████████████████</span>    100%   <span class="em">link open</span>
+
+<span class="ft">── </span><span class="mu">stages</span><span class="ft"> ──────────────────────────────────────────────</span>
+
+  <span class="ft">stage</span>  <span class="mu">[ resolve ]</span><span class="ft">──</span><span class="mu">[ handshake ]</span><span class="ft">──</span><span class="em">[ sas ]</span><span class="ft">──[ link ]</span>
+  <span class="ft">state</span>      <span class="mu">ok</span>            <span class="mu">ok</span>         <span class="de">wait</span>       <span class="ft">··</span></pre>
+  </div></div>
+  <p class="note"><code>░</code> queued · <code>█</code> done · <code>▓</code> trailing
+  edge in dim-ember reads as motion without animation.</p>
+</section>
+
+<section class="card" id="s05">
+  <div class="card-head"><span class="idx">05</span><span class="ttl">keys</span><span class="hr"></span><span class="sub">command hints</span></div>
+  <div class="demo"><div class="well">
+    <div class="fig">fig a <span class="sep">·</span> keycap row — /sas active</div>
+    <pre class="ascii"><span class="ft">┌─────────┐</span> <span class="em">┌─────────┐</span> <span class="ft">┌─────────┐</span> <span class="ft">┌─────────┐</span>
+<span class="ft">│</span><span class="ink">  /help  </span><span class="ft">│</span> <span class="em">│</span><span class="em">   /sas  </span><span class="em">│</span> <span class="ft">│</span><span class="ink">  /deny  </span><span class="ft">│</span> <span class="ft">│</span><span class="ink"> /verify </span><span class="ft">│</span>
+<span class="ft">└─────────┘</span> <span class="em">└─────────┘</span> <span class="ft">└─────────┘</span> <span class="ft">└─────────┘</span>
+
+  <span class="ft">inline</span>   <span class="mu">[ /help ]</span>  <span class="em">[ /sas ]</span>  <span class="mu">[ /deny ]</span> <span class="mu">[ /verify ]</span>
+  <span class="ft">hint</span>     <span class="mu">· </span><span class="em">/sas</span><span class="mu"> compares the short auth string</span></pre>
+  </div></div>
+  <p class="note">keycap chips for shortcuts; one active state in ember. the inline
+  bracket variant survives plain-text contexts.</p>
+</section>
+
+<section class="card" id="s06">
+  <div class="card-head"><span class="idx">06</span><span class="ttl">table</span><span class="hr"></span><span class="sub">peer list</span></div>
+  <div class="demo"><div class="well">
+    <div class="fig">fig a <span class="sep">·</span> peers · fp · verified</div>
+    <pre class="ascii"><span class="ft">┌</span><span class="ft">────────</span><span class="ft">┬</span><span class="ft">─────────────────────────</span><span class="ft">┬</span><span class="ft">──────────</span><span class="ft">┐</span>
+<span class="ft">│</span><span class="mu"> peer</span>   <span class="ft">│</span><span class="mu"> fp</span>                      <span class="ft">│</span><span class="mu"> verified</span> <span class="ft">│</span>
+<span class="ft">├</span><span class="ft">────────</span><span class="ft">┼</span><span class="ft">─────────────────────────</span><span class="ft">┼</span><span class="ft">──────────</span><span class="ft">┤</span>
+<span class="ft">│</span> alice  <span class="ft">│</span><span class="mu"> 9f3e c21a 7b0d e811</span>     <span class="ft">│</span><span class="em"> [x] sas</span>  <span class="ft">│</span>
+<span class="ft">│</span> bob    <span class="ft">│</span><span class="mu"> 11aa 88f2 03cd 5f20</span>     <span class="ft">│</span><span class="ft"> [ ] ··</span>   <span class="ft">│</span>
+<span class="ft">│</span> carol  <span class="ft">│</span><span class="mu"> f00d 4e61 9c77 2a3b</span>     <span class="ft">│</span><span class="em"> [x] sas</span>  <span class="ft">│</span>
+<span class="ft">│</span> dave   <span class="ft">│</span><span class="mu"> 7c19 0e44 b2f8 6130</span>     <span class="ft">│</span><span class="ft"> [ ] ··</span>   <span class="ft">│</span>
+<span class="ft">├</span><span class="ft">────────</span><span class="ft">┴</span><span class="ft">─────────────────────────</span><span class="ft">┴</span><span class="ft">──────────</span><span class="ft">┤</span>
+<span class="ft">│</span>  <span class="mu">4 peers · 2 verified · relay eu-2</span>          <span class="ft">│</span>
+<span class="ft">└─────────────────────────────────────────────┘</span></pre>
+  </div></div>
+  <p class="note">junction glyphs <code>┬ ┼ ┴</code> keep columns honest; the footer
+  row merges upward with <code>┴</code>.</p>
+</section>
+
+<footer>
+  <div class="palette">
+    <div class="sw"><i style="background:#0B0C0E"></i>ground<br>0B0C0E</div>
+    <div class="sw"><i style="background:#15171B"></i>panel<br>15171B</div>
+    <div class="sw"><i style="background:#EDEDE8"></i>ink<br>EDEDE8</div>
+    <div class="sw"><i style="background:#9BA0A6"></i>muted<br>9BA0A6</div>
+    <div class="sw"><i style="background:#3D4249"></i>faint<br>3D4249</div>
+    <div class="sw"><i style="background:#23262D"></i>line<br>23262D</div>
+    <div class="sw"><i style="background:#FFB224"></i>ember<br>FFB224</div>
+    <div class="sw"><i style="background:#5A4114"></i>dim-ember<br>5A4114</div>
+  </div>
+  <pre class="ascii"><span class="ft">└─ </span><span class="em">eof</span><span class="mu"> ── hand-aligned · no deps · no emoji · view source</span><span class="ft"> ─┘</span></pre>
+</footer>
+
+</body>
+</html>

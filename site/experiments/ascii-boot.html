@@ -1,0 +1,295 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>cinder · ascii-boot</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg:#0B0C0E;
+    --ink:#EDEDE8;
+    --muted:#9BA0A6;
+    --ember:#FFB224;
+    --dim-ember:#5A4114;
+    --line:#1C1E22;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;padding:0}
+  body{
+    background:var(--bg);
+    color:var(--ink);
+    font-family:"JetBrains Mono",ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+    -webkit-font-smoothing:antialiased;
+  }
+
+  /* ---- demo page chrome ---- */
+  .page-tag{
+    position:fixed;top:18px;left:22px;
+    font-size:11px;letter-spacing:.14em;text-transform:uppercase;
+    color:var(--dim-ember);
+  }
+  .scroll-hint{
+    position:fixed;top:18px;right:22px;
+    font-size:11px;letter-spacing:.14em;text-transform:uppercase;
+    color:var(--dim-ember);
+  }
+  .spacer{height:72vh}
+  .stage{display:grid;place-items:center;padding:0 20px 14vh}
+  .keys{
+    margin-top:14px;font-size:11px;letter-spacing:.08em;
+    color:var(--dim-ember);
+  }
+  .keys b{color:var(--muted);font-weight:500}
+
+  /* ---- terminal panel ---- */
+  .term{
+    width:min(680px,100%);
+    border:1px solid var(--line);
+    border-radius:10px;
+    background:
+      repeating-linear-gradient(0deg,rgba(255,255,255,.012) 0 1px,transparent 1px 3px),
+      linear-gradient(180deg,#0D0E11 0%,var(--bg) 100%);
+    box-shadow:0 30px 80px rgba(0,0,0,.55),0 0 0 1px rgba(255,255,255,.02) inset;
+    overflow:hidden;
+  }
+  .term-bar{
+    display:flex;align-items:center;gap:8px;
+    padding:10px 14px;
+    border-bottom:1px solid var(--line);
+    font-size:11px;color:var(--dim-ember);letter-spacing:.1em;
+  }
+  .dot{width:9px;height:9px;border-radius:50%;background:var(--line)}
+  .dot.ember{background:var(--dim-ember)}
+  .term-bar .title{margin-left:6px}
+  .term-bar .led{
+    margin-left:auto;width:7px;height:7px;border-radius:50%;
+    background:var(--ember);
+    box-shadow:0 0 8px rgba(255,178,36,.6);
+    animation:led 2.4s ease-in-out infinite;
+  }
+  @keyframes led{0%,100%{opacity:1}50%{opacity:.35}}
+  .term.paused .led{animation:none;opacity:.25;background:var(--muted)}
+
+  .term-body{
+    padding:26px 28px 30px;
+    font-size:14px;line-height:1.6;
+    white-space:pre;
+    overflow-x:auto;
+    cursor:default;
+    user-select:text;
+  }
+  .term.paused .term-body{opacity:.72}
+
+  .line{transition:color .45s ease}
+  .line.typing{color:#4C5157}
+  .line.typing .ok,.line.typing .pend{color:inherit}
+  .line.lit{color:var(--muted)}
+  .line.lit .ink{color:var(--ink)}
+  .ok{color:var(--ember)}
+  .pend{color:var(--dim-ember)}
+  .gap{height:1em}
+
+  .banner-line{
+    color:var(--ember);
+    text-shadow:0 0 18px rgba(255,178,36,.25),0 0 2px rgba(255,178,36,.35);
+    animation:rise .22s cubic-bezier(.2,.9,.2,1) both;
+  }
+  @keyframes rise{from{opacity:0;transform:translateY(3px)}to{opacity:1;transform:none}}
+
+  .prompt .gt{color:var(--ink)}
+  .caret{
+    color:var(--ember);
+    animation:blink 1.06s steps(1) infinite;
+  }
+  @keyframes blink{50%{opacity:0}}
+
+  @media (prefers-reduced-motion:reduce){
+    .caret,.term-bar .led,.banner-line{animation:none}
+    .line{transition:none}
+  }
+  @media (max-width:640px){
+    .term-body{font-size:10.5px;padding:18px 16px 22px}
+  }
+</style>
+</head>
+<body>
+
+<div class="page-tag">cinder / experiments / ascii-boot</div>
+<div class="scroll-hint">scroll ↓</div>
+
+<div class="spacer"></div>
+
+<main class="stage">
+  <div>
+    <section class="term" id="term" aria-label="cinderd boot log">
+      <div class="term-bar">
+        <span class="dot ember"></span><span class="dot"></span><span class="dot"></span>
+        <span class="title">cinderd — tty0</span>
+        <span class="led"></span>
+      </div>
+      <div class="term-body" id="boot"></div>
+    </section>
+    <div class="keys">click panel <b>pause</b> · press <b>s</b> to skip · stays static when done</div>
+  </div>
+</main>
+
+<div class="spacer"></div>
+
+<script>
+(function(){
+  "use strict";
+
+  /* timing params */
+  var CHAR_MS = 14;        /* per keystroke */
+  var JITTER  = 8;         /* random extra ms per char */
+  var LINE_MS = 130;       /* pause between boot lines */
+  var PRE_BANNER = 380;    /* beat before banner reveal */
+  var BANNER_MS = 110;     /* per banner row */
+
+  var BOOT = [
+    { segs:[{t:"cinderd v0.1.0", c:"ink"}] },
+    { segs:[{t:"[ok]", c:"ok"}, {t:" identity loaded \u00B7 peer-id 9c1f\u2026aa07"}] },
+    { segs:[{t:"[ok]", c:"ok"}, {t:" noise XX \u00B7 session 7f3a"}] },
+    { segs:[{t:"[ok]", c:"ok"}, {t:" relay connected \u00B7 mailbox drained: 3"}] },
+    { segs:[{t:"[..]", c:"pend"}, {t:" listening :8420"}] }
+  ];
+
+  /* hand-set glyphs: C I N D E R, 6 rows each */
+  var GLYPHS = [
+    [" ██████╗ ","██╔════╝ ","██║      ","██║      ","╚██████╗ "," ╚═════╝ "],
+    ["██╗","██║","██║","██║","██║","╚═╝"],
+    ["███╗   ██╗","████╗  ██║","██╔██╗ ██║","██║╚██╗██║","██║ ╚████║","╚═╝  ╚═══╝"],
+    ["██████╗ ","██╔══██╗","██║  ██║","██║  ██║","██████╔╝","╚═════╝ "],
+    ["███████╗","██╔════╝","█████╗  ","██╔══╝  ","███████╗","╚══════╝"],
+    ["██████╗ ","██╔══██╗","██████╔╝","██╔══██╗","██║  ██║","╚═╝  ╚═╝"]
+  ];
+  var BANNER = [];
+  for (var r = 0; r < 6; r++) {
+    var row = "";
+    for (var g = 0; g < GLYPHS.length; g++) row += (g ? "  " : "") + GLYPHS[g][r];
+    BANNER.push(row);
+  }
+
+  var term = document.getElementById("term");
+  var boot = document.getElementById("boot");
+  var reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+  var started = false, finished = false, paused = false, skip = false;
+
+  function el(tag, cls, txt) {
+    var e = document.createElement(tag);
+    if (cls) e.className = cls;
+    if (txt !== undefined) e.textContent = txt;
+    return e;
+  }
+
+  function sleep(ms) {
+    return new Promise(function(res){
+      var waited = 0, last = performance.now();
+      (function tick(){
+        if (skip) return res();
+        var now = performance.now();
+        if (!paused) waited += now - last;
+        last = now;
+        if (waited >= ms) return res();
+        setTimeout(tick, 16);
+      })();
+    });
+  }
+
+  function lineEl(line, lit) {
+    var l = el("div", "line" + (lit ? " lit" : " typing"));
+    line.segs.forEach(function(s){
+      var sp = el("span", s.c || "");
+      if (lit) sp.textContent = s.t;
+      l.appendChild(sp);
+    });
+    return l;
+  }
+
+  function bannerEl(row){ return el("div", "banner-line", row); }
+
+  function promptEl(){
+    var l = el("div", "line prompt");
+    l.appendChild(el("span", "gt", ">"));
+    l.appendChild(el("span", "caret", "_"));
+    return l;
+  }
+
+  function renderInstant(){
+    if (finished) return;
+    finished = true;
+    boot.textContent = "";
+    BOOT.forEach(function(l){ boot.appendChild(lineEl(l, true)); });
+    boot.appendChild(el("div", "gap"));
+    BANNER.forEach(function(r){ boot.appendChild(bannerEl(r)); });
+    boot.appendChild(el("div", "gap"));
+    boot.appendChild(promptEl());
+  }
+
+  async function run(){
+    for (var i = 0; i < BOOT.length; i++) {
+      if (skip) return renderInstant();
+      var line = BOOT[i];
+      var l = lineEl(line, false);
+      boot.appendChild(l);
+      for (var s = 0; s < line.segs.length; s++) {
+        var sp = l.children[s], txt = line.segs[s].t;
+        for (var k = 0; k < txt.length; k++) {
+          if (skip) return renderInstant();
+          sp.textContent += txt[k];
+          await sleep(CHAR_MS + Math.random() * JITTER);
+        }
+      }
+      l.classList.remove("typing");
+      l.classList.add("lit");
+      await sleep(LINE_MS);
+    }
+    await sleep(PRE_BANNER);
+    if (skip) return renderInstant();
+    boot.appendChild(el("div", "gap"));
+    for (var b = 0; b < BANNER.length; b++) {
+      if (skip) return renderInstant();
+      boot.appendChild(bannerEl(BANNER[b]));
+      await sleep(BANNER_MS);
+    }
+    boot.appendChild(el("div", "gap"));
+    boot.appendChild(promptEl());
+    finished = true;
+  }
+
+  /* interactions */
+  term.addEventListener("click", function(){
+    if (!started || finished) return;
+    paused = !paused;
+    term.classList.toggle("paused", paused);
+  });
+  window.addEventListener("keydown", function(e){
+    if ((e.key === "s" || e.key === "S") && started && !finished) {
+      skip = true;
+      term.classList.remove("paused");
+      paused = false;
+    }
+  });
+
+  if (reduced) {
+    renderInstant();           /* no motion: everything up front */
+  } else {
+    var io = new IntersectionObserver(function(entries){
+      entries.forEach(function(e){
+        if (e.isIntersecting && !started) {
+          started = true;
+          io.disconnect();
+          run();
+        }
+      });
+    }, { threshold: 0.3 });
+    io.observe(term);
+  }
+})();
+</script>
+</body>
+</html>

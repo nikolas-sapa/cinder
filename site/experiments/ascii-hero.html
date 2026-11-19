@@ -1,0 +1,245 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark">
+<title>cinder · ascii-hero</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg:#0B0C0E;
+    --ink:#EDEDE8;
+    --muted:#9BA0A6;
+    --faint:#3D4249;
+    --ember:#FFB224;
+    --dim-ember:#5A4114;
+    --line:#1C1E22;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;padding:0}
+  body{
+    background:var(--bg);
+    color:var(--ink);
+    font-family:"JetBrains Mono",ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+    -webkit-font-smoothing:antialiased;
+  }
+
+  .page-tag{
+    position:fixed;top:18px;left:22px;z-index:3;
+    font-size:11px;letter-spacing:.14em;text-transform:uppercase;
+    color:var(--dim-ember);
+  }
+
+  .stage{position:relative;min-height:100vh;display:grid;place-items:center;overflow:hidden}
+
+  /* ---- ascii backdrop ---- */
+  .ascii{
+    position:absolute;inset:0;z-index:0;margin:0;
+    display:grid;place-items:center;
+    font-size:clamp(14px,3vw,46px);
+    line-height:1;font-weight:500;
+    color:var(--faint);
+    white-space:pre;
+    user-select:none;pointer-events:none;
+  }
+  .ascii .cell{transition:color 1.3s ease,text-shadow 1.3s ease,opacity 1.3s ease}
+  .ascii .cell.hot{color:var(--ember);opacity:.5}
+  .ascii .cell.glow{
+    color:var(--ember);opacity:1;
+    text-shadow:0 0 16px rgba(255,178,36,.45),0 0 4px rgba(255,178,36,.6);
+  }
+
+  /* ---- readability layer ---- */
+  .vignette{
+    position:absolute;inset:0;z-index:1;pointer-events:none;
+    background:
+      radial-gradient(58% 54% at 50% 54%,rgba(11,12,14,.94) 0%,rgba(11,12,14,.6) 48%,rgba(11,12,14,0) 78%),
+      linear-gradient(180deg,rgba(11,12,14,.7) 0%,rgba(11,12,14,0) 18%,rgba(11,12,14,0) 82%,rgba(11,12,14,.85) 100%);
+  }
+  .scan{
+    position:absolute;inset:0;z-index:1;pointer-events:none;
+    background:repeating-linear-gradient(0deg,rgba(237,237,232,.018) 0 1px,transparent 1px 3px);
+  }
+
+  /* ---- hero copy ---- */
+  .hero{position:relative;z-index:2;text-align:center;padding:48px 24px}
+  .eyebrow{
+    margin:0 0 30px;
+    font-size:12px;letter-spacing:.24em;text-transform:uppercase;
+    color:var(--muted);
+  }
+  .eyebrow b{color:var(--ember);font-weight:500}
+  h1{
+    margin:0;
+    font-weight:700;
+    font-size:clamp(30px,6.4vw,92px);
+    line-height:1.04;
+    letter-spacing:-.03em;
+  }
+  h1 .sl{color:var(--dim-ember);font-weight:400}
+  h1 .dot{color:var(--ember)}
+  .sub{
+    margin:30px auto 0;max-width:58ch;
+    color:var(--muted);
+    font-size:clamp(13px,1.1vw,15px);
+    line-height:1.75;
+  }
+  .prompt{margin:36px 0 0;font-size:13px;color:var(--muted);letter-spacing:.02em}
+  .prompt .ps1{color:var(--ember);margin-right:.6em}
+  .cursor{
+    display:inline-block;width:.6em;height:1.1em;
+    margin-left:3px;vertical-align:-.18em;
+    background:var(--ember);
+    animation:blink 1.1s steps(1) infinite;
+  }
+  @keyframes blink{50%{opacity:0}}
+
+  @media (prefers-reduced-motion: reduce){
+    .ascii .cell{transition:none}
+    .cursor{animation:none}
+  }
+</style>
+</head>
+<body>
+<div class="page-tag">exp / ascii-hero</div>
+
+<main class="stage">
+  <pre class="ascii" id="ascii" aria-hidden="true"></pre>
+  <div class="vignette" aria-hidden="true"></div>
+  <div class="scan" aria-hidden="true"></div>
+
+  <section class="hero">
+    <p class="eyebrow"><b>cinder</b>&nbsp;&nbsp;//&nbsp;&nbsp;e2e terminal messenger</p>
+    <h1>encrypted chat <span class="sl">/</span><br>your agents <span class="sl">/</span><br>can drive<span class="dot">.</span></h1>
+    <p class="sub">a rust messenger for the terminal.<br>end-to-end encrypted for humans, scriptable for the agents that work for them.</p>
+    <p class="prompt"><span class="ps1">$</span>cargo install cinder<span class="cursor"></span></p>
+  </section>
+</main>
+
+<script>
+  /* Hand-drawn letterforms: 6-row grids of full/half block glyphs.
+     Stems are 2 cells wide; terminals and bowls are tapered with
+     half-blocks so the logotype reads as drawn, not generated. */
+  var LETTERS = {
+    C: [
+      " \u2584██████\u2584 ",
+      "██▀    ▀▀ ",
+      "██        ",
+      "██        ",
+      "██\u2584    \u2584\u2584 ",
+      " ▀██████▀ "
+    ],
+    I: [
+      "████████",
+      " ▀▀██▀▀ ",
+      "   ██   ",
+      "   ██   ",
+      " \u2584\u2584██\u2584\u2584 ",
+      "████████"
+    ],
+    N: [
+      "███    ██",
+      "████   ██",
+      "██▀██  ██",
+      "██ ▀██ ██",
+      "██  ▀████",
+      "██   ▀███"
+    ],
+    D: [
+      "████████\u2584 ",
+      "██     ▀██",
+      "██      ██",
+      "██      ██",
+      "██     \u2584██",
+      "████████▀ "
+    ],
+    E: [
+      "█████████",
+      "██▀▀▀▀▀▀▀",
+      "█████▀   ",
+      "██       ",
+      "██\u2584\u2584\u2584\u2584\u2584\u2584\u2584",
+      "█████████"
+    ],
+    R: [
+      "████████\u2584 ",
+      "██     ▀██",
+      "██     \u2584██",
+      "████████▀ ",
+      "██   ▀██\u2584 ",
+      "██    ▀███"
+    ]
+  };
+
+  var GAP = "  ";
+  var order = ["C","I","N","D","E","R"];
+  var rows = [];
+  for (var r = 0; r < 6; r++) {
+    rows.push(order.map(function (k) {
+      var letter = LETTERS[k];
+      var w = Math.max.apply(null, letter.map(function (s) { return s.length; }));
+      var line = letter[r];
+      while (line.length < w) line += " ";
+      return line;
+    }).join(GAP));
+  }
+
+  /* Cells that stay ember permanently (row, col on the joined grid):
+     C open terminals, the N diagonal joint, E mid-bar tip, R bowl+leg tips. */
+  var HOT = [[1,7],[1,8],[4,8],[3,25],[2,50],[0,64],[5,62]];
+
+  var pre = document.getElementById("ascii");
+  var cells = new Map();
+
+  rows.forEach(function (row, r) {
+    for (var c = 0; c < row.length; c++) {
+      var ch = row[c];
+      if (ch === " ") {
+        pre.appendChild(document.createTextNode(" "));
+        continue;
+      }
+      var s = document.createElement("span");
+      s.className = "cell";
+      s.textContent = ch;
+      pre.appendChild(s);
+      cells.set(r + "," + c, s);
+    }
+    pre.appendChild(document.createTextNode("\n"));
+  });
+
+  HOT.forEach(function (rc) {
+    var s = cells.get(rc[0] + "," + rc[1]);
+    if (s) s.classList.add("hot");
+  });
+
+  /* Slow shimmer: a random cell flares ember then cools back to faint. */
+  var mq = window.matchMedia("(prefers-reduced-motion: reduce)");
+  var timer = null;
+  var all = Array.from(cells.values());
+
+  function tick() {
+    var s = all[(Math.random() * all.length) | 0];
+    if (s && !s.classList.contains("hot") && !s.classList.contains("glow")) {
+      s.classList.add("glow");
+      setTimeout(function () { s.classList.remove("glow"); }, 1200 + Math.random() * 800);
+    }
+    timer = setTimeout(tick, 300 + Math.random() * 800);
+  }
+
+  function setMotion() {
+    clearTimeout(timer);
+    if (mq.matches) {
+      all.forEach(function (s) { s.classList.remove("glow"); });
+    } else {
+      timer = setTimeout(tick, 500);
+    }
+  }
+
+  if (mq.addEventListener) mq.addEventListener("change", setMotion);
+  setMotion();
+</script>
+</body>
+</html>

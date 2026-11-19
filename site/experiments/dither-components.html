@@ -1,0 +1,479 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>cinder — dither components</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600&family=Inter:wght@400;500&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --ground:#0B0C0E; --panel:#15171B; --ink:#EDEDE8; --muted:#9BA0A6;
+    --faint:#3D4249; --line:#23262D; --ember:#FFB224; --dim-ember:#5A4114;
+    --disp:'Space Grotesk',system-ui,sans-serif;
+    --body:'Inter',system-ui,sans-serif;
+    --mono:'JetBrains Mono',ui-monospace,monospace;
+  }
+  *{box-sizing:border-box;margin:0}
+  body{background:var(--ground);color:var(--ink);font-family:var(--body);
+    font-size:14px;line-height:1.6;-webkit-font-smoothing:antialiased}
+  canvas{display:block;image-rendering:pixelated}
+
+  .page{min-height:100vh;display:flex;flex-direction:column}
+  header{padding:26px 32px;display:flex;justify-content:space-between;
+    align-items:baseline;border-bottom:1px solid var(--line);
+    font-family:var(--mono);font-size:13px}
+  .tag{color:var(--ember);font-weight:500}
+  .hint{color:var(--muted);font-size:11px;letter-spacing:.08em}
+  .wrap{max-width:880px;margin:0 auto;padding:0 28px;width:100%}
+  main{flex:1;padding-bottom:96px}
+
+  /* ---- intro ---------------------------------------------------- */
+  .intro{padding:64px 0 56px}
+  .kicker{font-family:var(--mono);font-size:10px;letter-spacing:.22em;
+    color:var(--ember);margin-bottom:18px}
+  h1{font-family:var(--disp);font-weight:600;font-size:clamp(28px,4.5vw,40px);
+    letter-spacing:-.01em;line-height:1.15;margin-bottom:14px}
+  .lede{color:var(--muted);max-width:52ch;font-size:14px}
+  .lede b{color:var(--ink);font-weight:500}
+
+  /* ---- section scaffolding -------------------------------------- */
+  section{padding:40px 0 8px}
+  .lab{display:flex;justify-content:space-between;align-items:baseline;
+    gap:16px;margin-bottom:14px;font-family:var(--mono);font-size:10px;
+    letter-spacing:.18em;flex-wrap:wrap}
+  .lab .l{color:var(--muted)}
+  .lab .l b{color:var(--ember);font-weight:500}
+  .lab .r{color:var(--faint)}
+  .stage{border:1px solid var(--line);background:var(--ground);position:relative}
+  .pad{padding:clamp(28px,5vw,52px) clamp(20px,5vw,56px)}
+  .stage-meta{border-top:1px solid var(--line);padding:10px 16px;
+    font-family:var(--mono);font-size:10px;letter-spacing:.05em;
+    color:var(--faint);display:flex;justify-content:space-between;
+    gap:16px;flex-wrap:wrap}
+  .stage-meta b{color:var(--muted);font-weight:400}
+
+  /* ---- 01 · divider: pure CSS Bayer layers ----------------------- */
+  .divider{position:relative;height:30px;--d:var(--faint)}
+  .divider i{position:absolute;inset:0;background-size:16px 16px;
+    background-position:50% 50%;background-repeat:repeat;
+    -webkit-mask-image:linear-gradient(90deg,transparent var(--a),#000 var(--a),#000 var(--b),transparent var(--b)));
+            mask-image:linear-gradient(90deg,transparent var(--a),#000 var(--a),#000 var(--b),transparent var(--b))}
+  /* each i carries one Bayer rank-pair (2 cells of a 4x4 matrix);
+     masks stagger so dot coverage accumulates toward the dense side */
+  .divider i:nth-child(1){--a:0%;--b:100%;background-image:
+    radial-gradient(circle at 2px 2px,var(--d) 0 1.4px,transparent 1.5px),
+    radial-gradient(circle at 10px 10px,var(--d) 0 1.4px,transparent 1.5px)}
+  .divider i:nth-child(2){--a:6%;--b:94%;background-image:
+    radial-gradient(circle at 10px 2px,var(--d) 0 1.4px,transparent 1.5px),
+    radial-gradient(circle at 2px 10px,var(--d) 0 1.4px,transparent 1.5px)}
+  .divider i:nth-child(3){--a:12%;--b:88%;background-image:
+    radial-gradient(circle at 6px 6px,var(--d) 0 1.4px,transparent 1.5px),
+    radial-gradient(circle at 14px 14px,var(--d) 0 1.4px,transparent 1.5px)}
+  .divider i:nth-child(4){--a:18%;--b:82%;background-image:
+    radial-gradient(circle at 14px 6px,var(--d) 0 1.4px,transparent 1.5px),
+    radial-gradient(circle at 6px 14px,var(--d) 0 1.4px,transparent 1.5px)}
+  .divider i:nth-child(5){--a:24%;--b:76%;background-image:
+    radial-gradient(circle at 6px 2px,var(--d) 0 1.4px,transparent 1.5px),
+    radial-gradient(circle at 14px 10px,var(--d) 0 1.4px,transparent 1.5px)}
+  .divider i:nth-child(6){--a:31%;--b:69%;background-image:
+    radial-gradient(circle at 14px 2px,var(--d) 0 1.4px,transparent 1.5px),
+    radial-gradient(circle at 6px 10px,var(--d) 0 1.4px,transparent 1.5px)}
+  .divider i:nth-child(7){--a:37%;--b:63%;background-image:
+    radial-gradient(circle at 2px 6px,var(--d) 0 1.4px,transparent 1.5px),
+    radial-gradient(circle at 10px 14px,var(--d) 0 1.4px,transparent 1.5px)}
+  .divider i:nth-child(8){--a:44%;--b:56%;background-image:
+    radial-gradient(circle at 10px 6px,var(--d) 0 1.4px,transparent 1.5px),
+    radial-gradient(circle at 2px 14px,var(--d) 0 1.4px,transparent 1.5px)}
+  /* one-directional variant: dense left, dissolves right */
+  .divider.fade-r i{-webkit-mask-image:linear-gradient(90deg,#000 var(--b),transparent var(--b));
+                    mask-image:linear-gradient(90deg,#000 var(--b),transparent var(--b))}
+  .divider.fade-r i:nth-child(1){--b:100%}.divider.fade-r i:nth-child(2){--b:88%}
+  .divider.fade-r i:nth-child(3){--b:76%}.divider.fade-r i:nth-child(4){--b:64%}
+  .divider.fade-r i:nth-child(5){--b:51%}.divider.fade-r i:nth-child(6){--b:39%}
+  .divider.fade-r i:nth-child(7){--b:26%}.divider.fade-r i:nth-child(8){--b:13%}
+  .demo-row{position:relative}
+  .demo-tag{position:absolute;right:0;top:-14px;font-family:var(--mono);
+    font-size:9px;letter-spacing:.16em;color:var(--faint)}
+  .dv + .dv{margin-top:34px}
+
+  /* ---- 02 · card burn -------------------------------------------- */
+  .card{position:relative;max-width:560px;background:var(--panel);
+    border:1px solid var(--line);border-top:none;
+    padding:34px 30px 22px}
+  .card canvas{position:absolute;top:0;left:-1px;right:-1px;height:64px;
+    width:calc(100% + 2px);pointer-events:none}
+  .card .kick{font-family:var(--mono);font-size:10px;letter-spacing:.2em;
+    color:var(--ember);margin-bottom:12px}
+  .card h3{font-family:var(--disp);font-weight:600;font-size:19px;
+    letter-spacing:-.01em;margin-bottom:8px}
+  .card p{color:var(--muted);font-size:13px;max-width:44ch}
+  .card .meta{margin-top:18px;padding-top:12px;border-top:1px solid var(--line);
+    display:flex;justify-content:space-between;font-family:var(--mono);
+    font-size:10px;letter-spacing:.12em;color:var(--faint)}
+  .card .meta b{color:var(--muted);font-weight:400}
+
+  /* ---- 03 · sweep button ------------------------------------------ */
+  .btn-row{display:flex;gap:20px;align-items:center;flex-wrap:wrap}
+  .btn{position:relative;display:inline-flex;align-items:center;gap:12px;
+    padding:15px 26px;border:1px solid var(--faint);background:var(--panel);
+    color:var(--ink);font-family:var(--mono);font-weight:500;font-size:11px;
+    letter-spacing:.24em;cursor:pointer;overflow:hidden;
+    transition:color .16s .09s,border-color .18s,background .18s}
+  .btn canvas{position:absolute;inset:0;width:100%;height:100%;
+    pointer-events:none}
+  .btn > span{position:relative;z-index:1;display:inline-flex;
+    align-items:center;gap:12px}
+  .btn .led{width:6px;height:6px;background:var(--ember);flex:none;
+    transition:background .18s}
+  .btn:hover,.btn:focus-visible{color:var(--ground);border-color:var(--ember)}
+  .btn:hover .led,.btn:focus-visible .led{background:var(--ground)}
+  .btn.alt{border-color:var(--line)}
+  .btn.alt .led{background:var(--faint)}
+  .btn.alt:hover,.btn.alt:focus-visible{color:var(--ink);border-color:var(--muted)}
+  .btn.alt:hover .led,.btn.alt:focus-visible .led{background:var(--ember)}
+  .btn:focus-visible{outline:1px solid var(--ember);outline-offset:3px}
+  .btn-note{font-family:var(--mono);font-size:10px;letter-spacing:.14em;
+    color:var(--faint)}
+
+  /* ---- 04 · edge dissolve ------------------------------------------ */
+  .dissolve{position:relative}
+  .dissolve canvas{width:100%;height:150px}
+  .hud{position:absolute;top:8px;left:12px;right:12px;display:flex;
+    justify-content:space-between;pointer-events:none;
+    font-family:var(--mono);font-size:9px;letter-spacing:.16em}
+  .hud .l{color:var(--muted);opacity:.8}
+  .hud .r{color:var(--dim-ember)}
+
+  /* ---- 05 · glyph badges ------------------------------------------- */
+  .chip-row{display:flex;gap:16px;flex-wrap:wrap;align-items:center}
+  .chip{display:inline-flex;align-items:center;gap:11px;padding:8px 15px 8px 9px;
+    border:1px solid var(--line);background:var(--panel);border-radius:2px;
+    font-family:var(--mono);font-weight:500;font-size:10px;
+    letter-spacing:.18em;color:var(--muted)}
+  .chip canvas{width:20px;height:20px;flex:none}
+  .chip b{color:var(--ink);font-weight:500}
+
+  /* ---- real page-bottom treatment ----------------------------------- */
+  .page-dissolve{position:relative}
+  .page-dissolve canvas{width:100%;height:190px}
+  footer{border-top:1px solid #1A1D22;padding:16px 32px;display:flex;
+    justify-content:space-between;gap:16px;flex-wrap:wrap;
+    font-family:var(--mono);font-size:10px;letter-spacing:.12em;
+    color:var(--faint)}
+  footer b{color:var(--muted);font-weight:400}
+
+  @media (prefers-reduced-motion:reduce){
+    *{animation:none!important;transition:none!important}
+    .btn canvas{display:none}
+    .btn:hover,.btn:focus-visible{background:var(--ember)}
+    .btn.alt:hover,.btn.alt:focus-visible{background:var(--faint)}
+  }
+</style>
+</head>
+<body>
+<div class="page">
+  <header>
+    <span class="tag">cinder / experiments</span>
+    <span class="hint">dither-components — ordered dither beyond the band</span>
+  </header>
+
+  <main class="wrap">
+    <div class="intro">
+      <p class="kicker">COMPONENT SHEET // B8×8 ORDERED</p>
+      <h1>Ordered dither, applied.</h1>
+      <p class="lede">Five treatments carrying the hero-band dither language into the
+        component layer. Density does the work: <b>edges dissolve, fills flood,
+        fields encode glyphs.</b> Bayer 8×8 on canvas, Bayer 4×4 as pure-CSS
+        masked tiles. Cells 2–4px. Motion gated on prefers-reduced-motion.</p>
+    </div>
+
+    <!-- 01 — SECTION DIVIDER -->
+    <section>
+      <div class="lab">
+        <span class="l"><b>// 01</b> — SECTION DIVIDER</span>
+        <span class="r">BAYER 4×4 · 8 MASKED TILES · NO JS</span>
+      </div>
+      <div class="stage">
+        <div class="pad" style="padding-top:44px;padding-bottom:8px">
+          <div class="dv demo-row">
+            <span class="demo-tag">CENTER-FOCUS</span>
+            <div class="divider" role="separator" aria-hidden="true">
+              <i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i>
+            </div>
+          </div>
+          <div class="dv demo-row" style="margin-top:44px">
+            <span class="demo-tag">L-DENSE → R-DISSOLVE</span>
+            <div class="divider fade-r" role="separator" aria-hidden="true">
+              <i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i>
+            </div>
+          </div>
+        </div>
+        <div class="stage-meta">
+          <span><b>each i</b> = 1 rank-pair (2 cells of 4×4 matrix), 16px tile ·
+            <b>mask</b> = hard-stop linear bands, staggered so coverage accumulates</span>
+          <span>DIV-4X4-08L</span>
+        </div>
+      </div>
+    </section>
+
+    <!-- 02 — CARD BURN -->
+    <section>
+      <div class="lab">
+        <span class="l"><b>// 02</b> — CARD / BORDER BURN</span>
+        <span class="r">CANVAS OVERLAY · 2PX CELLS · EMBER FLECKS</span>
+      </div>
+      <div class="stage">
+        <div class="pad">
+          <div class="card">
+            <canvas id="burn" aria-hidden="true"></canvas>
+            <p class="kick">SESSION // 7F3A — RELAY 02</p>
+            <h3>Sealed channel, verified peer</h3>
+            <p>X25519 handshake complete. Ratchet advanced, fingerprint matches the
+              pinned key. This panel's top edge is not a border — it is a dither
+              field that stops agreeing with itself.</p>
+            <div class="meta">
+              <span>E2E · X25519 · <b>12MS</b></span>
+              <span>FP <b>9A:44:F1:0B</b></span>
+            </div>
+          </div>
+        </div>
+        <div class="stage-meta">
+          <span><b>vfn</b>: edge solid until p=.5, ramp to 0 · interior bleed
+            4v(1−v)·tail · <b>ink</b>: line #23262D edge / faint scatter / ~7% ember</span>
+          <span>CRD-BURN-2PX</span>
+        </div>
+      </div>
+    </section>
+
+    <!-- 03 — SWEEP BUTTON -->
+    <section>
+      <div class="lab">
+        <span class="l"><b>// 03</b> — BUTTON / DITHER FLOOD</span>
+        <span class="r">HOVER SWEEP L→R · BAND 10 CELLS</span>
+      </div>
+      <div class="stage">
+        <div class="pad">
+          <div class="btn-row">
+            <button class="btn" data-fill="#FFB224" data-halo="#5A4114">
+              <canvas aria-hidden="true"></canvas>
+              <span><i class="led"></i>TRANSMIT</span>
+            </button>
+            <button class="btn alt" data-fill="#3D4249" data-halo="#23262D">
+              <canvas aria-hidden="true"></canvas>
+              <span><i class="led"></i>PURGE LOGS</span>
+            </button>
+            <span class="btn-note">HOVER / FOCUS — DENSITY SWEEPS, FILL FOLLOWS</span>
+          </div>
+        </div>
+        <div class="stage-meta">
+          <span><b>sweep</b>: E = s·(cols+18) − 9, ease .14 · v&gt;t → fill,
+            v·.45&gt;t → halo ahead of edge · <b>prm</b>: solid fill, canvas off</span>
+          <span>BTN-FLOOD-3PX</span>
+        </div>
+      </div>
+    </section>
+
+    <!-- 04 — EDGE DISSOLVE -->
+    <section>
+      <div class="lab">
+        <span class="l"><b>// 04</b> — EDGE DISSOLVE</span>
+        <span class="r">TONAL BANDS ×3 · 2% EMBER SPECKLE</span>
+      </div>
+      <div class="stage">
+        <div class="dissolve">
+          <canvas class="dissolve-cv" aria-hidden="true"></canvas>
+          <div class="hud">
+            <span class="l">FLOOR//NOISE — v = (y/h)^1.5</span>
+            <span class="r">UPWARD EROSION</span>
+          </div>
+        </div>
+        <div class="stage-meta">
+          <span><b>vfn</b>: (y/h)^1.5, dense floor → sparse top ·
+            <b>ink</b>: #3D4249 / #2E3238 / #22252B by band · live instance runs
+            at page foot</span>
+          <span>EDGE-DIS-3PX</span>
+        </div>
+      </div>
+    </section>
+
+    <!-- 05 — GLYPH BADGES -->
+    <section>
+      <div class="lab">
+        <span class="l"><b>// 05</b> — DITHER BADGE / CHIP</span>
+        <span class="r">10×10 FIELD · GLYPH v=.92 ON FIELD v=.13</span>
+      </div>
+      <div class="stage">
+        <div class="pad">
+          <div class="chip-row">
+            <span class="chip">
+              <canvas data-glyph="lock" data-ink="#FFB224" data-field="#33373E" aria-hidden="true"></canvas>
+              <span>E2E · <b>LINK SECURE</b></span>
+            </span>
+            <span class="chip">
+              <canvas data-glyph="prompt" data-ink="#9BA0A6" data-field="#2A2D33" aria-hidden="true"></canvas>
+              <span>SESSION · <b>ACTIVE</b></span>
+            </span>
+            <span class="chip">
+              <canvas data-glyph="relay" data-ink="#5A4114" data-field="#26292F" aria-hidden="true"></canvas>
+              <span>RELAY · <b>2 HOPS</b></span>
+            </span>
+          </div>
+        </div>
+        <div class="stage-meta">
+          <span><b>glyph</b> = dense cluster (v .92) in sparse field
+            (v .13 + jitter) · field twinkles at 180ms tick, off under prm</span>
+          <span>BDG-GLY-2PX</span>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <!-- live component 04 at page bottom -->
+  <div class="page-dissolve">
+    <canvas class="dissolve-cv" aria-hidden="true"></canvas>
+    <div class="hud">
+      <span class="l">PAGE//EDGE</span>
+      <span class="r">DISSOLVING ↑</span>
+    </div>
+  </div>
+  <footer>
+    <span><b>cinder</b> — dither component study</span>
+    <span>B8×8 ORDERED · CELL 2–4PX · PRM-SAFE · 0 DEPS</span>
+  </footer>
+</div>
+
+<script>
+const B8=[0,32,8,40,2,34,10,42,48,16,56,24,50,18,58,26,
+          12,44,4,36,14,46,6,38,60,28,52,20,62,30,54,22,
+          3,35,11,43,1,33,9,41,51,19,59,27,49,17,57,25,
+          15,47,7,39,13,45,5,37,63,31,55,23,61,29,53,21];
+const RM=matchMedia('(prefers-reduced-motion: reduce)');
+const INK='#EDEDE8',FNT='#3D4249',LIN='#23262D',EMB='#FFB224',DEM='#5A4114';
+
+function h2(x,y,s){
+  let n=(x*374761393+y*668265263+(s|0)*2246822519)>>>0;
+  n=Math.imul(n^(n>>>13),1274126177)>>>0;
+  return ((n^(n>>>16))>>>0)/4294967296;
+}
+
+/* shared ordered-dither painter: vfn(x,y,cols,rows)->0..1,
+   cfn(v,threshold,x,y)->css color|null */
+function paint(cv,cell,vfn,cfn){
+  const dpr=Math.min(devicePixelRatio||1,2);
+  const w=cv.clientWidth,h=cv.clientHeight;
+  if(!w||!h)return;
+  const W=Math.round(w*dpr),H=Math.round(h*dpr);
+  if(cv.width!==W||cv.height!==H){cv.width=W;cv.height=H;}
+  const g=cv.getContext('2d');
+  g.clearRect(0,0,W,H);
+  const s=cell*dpr,cols=Math.ceil(w/cell),rows=Math.ceil(h/cell);
+  for(let y=0;y<rows;y++)for(let x=0;x<cols;x++){
+    const v=vfn(x,y,cols,rows);
+    if(v<=0)continue;
+    const t=(B8[(y&7)*8+(x&7)]+.5)/64;
+    const c=cfn(v,t,x,y);
+    if(!c)continue;
+    g.fillStyle=c;
+    g.fillRect(Math.round(x*s),Math.round(y*s),Math.ceil(s),Math.ceil(s));
+  }
+}
+
+/* ---- 02 · card burn ---- */
+function paintBurn(){
+  const cv=document.getElementById('burn');
+  paint(cv,2,(x,y,c,r)=>{
+    const p=x/c;
+    const edge=p<.5?1:Math.max(0,1-(p-.5)/.42);
+    if(y===0)return edge;                              // the border itself
+    const bleed=Math.min(1,4*edge*(1-edge));           // peaks at break point
+    return bleed*Math.pow(Math.max(0,1-y/17),1.35);    // decays into the card
+  },(v,t,x,y)=>{
+    if(v<=t)return null;
+    if(v<.85&&h2(x,y,7)<.08)return EMB;                // sparks in scatter
+    return y===0?LIN:FNT;
+  });
+}
+
+/* ---- 03 · flood buttons ---- */
+function attachBtn(btn){
+  const cv=btn.querySelector('canvas');
+  const fill=btn.dataset.fill||EMB,halo=btn.dataset.halo||DEM;
+  let s=0,tgt=0,raf=null;
+  function draw(){
+    paint(cv,3,(x,y,c)=>{
+      const E=s*(c+18)-9;
+      return Math.min(1,Math.max(0,(E-x)/10));
+    },(v,t,x,y)=>{
+      if(v>t)return fill;
+      if(v*.45>t)return halo;                          // dim leading edge
+      if(h2(x,y)<.05)return '#26292F';                 // idle grain
+      return null;
+    });
+  }
+  function step(){
+    s+=(tgt-s)*.14;
+    if(Math.abs(tgt-s)<.004)s=tgt;
+    draw();
+    if(s!==tgt)raf=requestAnimationFrame(step);else raf=null;
+  }
+  function go(v){
+    tgt=v;
+    if(RM.matches){s=v;draw();return;}
+    if(!raf)raf=requestAnimationFrame(step);
+  }
+  btn.addEventListener('mouseenter',()=>go(1));
+  btn.addEventListener('mouseleave',()=>go(0));
+  btn.addEventListener('focus',()=>go(1));
+  btn.addEventListener('blur',()=>go(0));
+  draw();
+}
+
+/* ---- 04 · dissolve (shared: stage demo + page foot) ---- */
+function paintDissolve(){
+  document.querySelectorAll('.dissolve-cv').forEach(cv=>{
+    paint(cv,3,(x,y,c,r)=>Math.pow(y/r,1.5),(v,t,x,y)=>{
+      if(v<=t)return null;
+      const s=h2(x,y,3);
+      if(s<.018)return DEM;
+      if(s<.022)return EMB;
+      return v>.8?'#3D4249':v>.45?'#2E3238':'#22252B';
+    });
+  });
+}
+
+/* ---- 05 · glyph badges ---- */
+const GLYPHS={
+  lock:[  '01110','10001','10001','11111','11011','11011','11111'],
+  prompt:['10000','01100','10000','00000','11111'],
+  relay:[ '01010','00100','11111','00100','01010']
+};
+let bTick=0;
+function paintBadges(){
+  document.querySelectorAll('.chip canvas').forEach(cv=>{
+    const gl=GLYPHS[cv.dataset.glyph]||GLYPHS.lock;
+    const ink=cv.dataset.ink||EMB,fld=cv.dataset.field||FNT;
+    const gr=gl.length,gc=gl[0].length,ox=Math.round((10-gc)/2),oy=Math.round((10-gr)/2);
+    paint(cv,2,(x,y)=>{
+      const inG=y-oy>=0&&y-oy<gr&&x-ox>=0&&x-ox<gc&&gl[y-oy][x-ox]==='1';
+      if(inG)return .92;
+      return .13+.07*h2(x,y,bTick);
+    },(v,t,x,y)=>{
+      if(v<=t)return null;
+      const inG=y-oy>=0&&y-oy<gr&&x-ox>=0&&x-ox<gc&&gl[y-oy][x-ox]==='1';
+      return inG?ink:fld;
+    });
+  });
+}
+
+function paintStatics(){paintBurn();paintDissolve();paintBadges();}
+let rT=null;
+addEventListener('resize',()=>{clearTimeout(rT);rT=setTimeout(paintStatics,120);});
+
+document.querySelectorAll('.btn').forEach(attachBtn);
+paintStatics();
+if(!RM.matches)setInterval(()=>{bTick++;paintBadges();},180);
+</script>
+</body>
+</html>

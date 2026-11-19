@@ -73,28 +73,9 @@
   </div>
 </section>
 
-<!-- ============ EMBER FIELD — stars cooling into dither ============ -->
+<!-- ============ EMBER FIELD — live ordered-dither shader ============ -->
 <div class="ember-field" aria-hidden="true" data-reveal>
-  <svg class="stars" width="1328" height="38" viewBox="0 0 1328 38" preserveAspectRatio="xMidYMid slice">
-    <circle cx="88" cy="17" r="1.1" opacity=".55"/><circle cx="196" cy="29" r=".9" opacity=".4"/><circle cx="342" cy="11" r="1.3" opacity=".7"/><circle cx="470" cy="25" r=".9" opacity=".45"/><circle cx="605" cy="15" r="1.2" opacity=".6"/><circle cx="730" cy="31" r=".9" opacity=".35"/><circle cx="858" cy="19" r="1.1" opacity=".55"/><circle cx="995" cy="9" r="1.4" opacity=".75"/><circle cx="1120" cy="27" r=".9" opacity=".45"/><circle cx="1245" cy="14" r="1.2" opacity=".6"/><circle cx="38" cy="33" r=".8" opacity=".3"/><circle cx="530" cy="33" r=".8" opacity=".3"/><circle cx="780" cy="8" r=".8" opacity=".35"/>
-    <path class="tw" d="M 270,20 l0,-2.4 M 268.8,18.8 l2.4,0" stroke-width=".9" opacity=".5"/>
-    <path class="tw" d="M 660,12 l0,-2.4 M 658.8,10.8 l2.4,0" stroke-width=".9" opacity=".45" style="animation-delay:.7s"/>
-    <path d="M 1180,34 l0,-2.4 M 1178.8,32.8 l2.4,0" stroke-width=".9" opacity=".5"/>
-    <path d="M 420,26 l0,-4 M 416,22 l8,0" stroke-width="1" opacity=".55"/>
-    <path d="M 920,14 l0,-4 M 916,10 l8,0" stroke-width="1" opacity=".6"/>
-    <path class="tw big" d="M0,-5.5 L1.4,-1.4 L5.5,0 L1.4,1.4 L0,5.5 L-1.4,1.4 L-5.5,0 L-1.4,-1.4 Z" transform="translate(1050,18)"/>
-    <path class="tw big" d="M0,-4.5 L1.1,-1.1 L4.5,0 L1.1,1.1 L0,4.5 L-1.1,1.1 L-4.5,0 L-1.1,-1.1 Z" transform="translate(300,10)" style="animation-delay:1.1s"/>
-    <path d="M0,-4 L1,-1 L4,0 L1,1 L0,4 L-1,1 L-4,0 L-1,-1 Z" transform="translate(1290,26)" opacity=".65"/>
-  </svg>
-  <div class="band b2"></div>
-  <div class="band b4"></div>
-  <div class="band b6"></div>
-  <div class="band b8"></div>
-  <div class="band b10"></div>
-  <div class="band b12"></div>
-  <div class="band b14"></div>
-  <div class="molten"></div>
-  <div class="baseline"></div>
+  <canvas id="emberCanvas" height="168"></canvas>
 </div>
 
 <!-- ============ THE WIRE ============ -->
@@ -140,8 +121,8 @@
       </div>
       <aside class="sas">
         <p class="sas-kicker mono">sas — read aloud, don't type</p>
-        <div class="sas-cells" role="img" aria-label="Seven emoji short authentication string">
-          <span class="cell">🌋</span><span class="cell">🧭</span><span class="cell">🛰️</span><span class="cell">🗝️</span><span class="cell">🎛️</span><span class="cell hot">🔥</span><span class="cell">⚓</span>
+        <div class="sas-cells mono" role="img" aria-label="Seven-group numeric short authentication string">
+          <span class="cell">041</span><span class="cell">229</span><span class="cell">088</span><span class="cell">611</span><span class="cell">204</span><span class="cell hot">773</span><span class="cell">512</span>
         </div>
         <div class="fp-row">
           <svg class="fp" viewBox="0 0 96 96" role="img" aria-label="Peer fingerprint identicon">
@@ -164,7 +145,7 @@
         </div>
         <p class="numeric mono">numeric: 0417 · 2290 · 8861 · 1204</p>
         <p class="sas-note">Derived from the handshake hash + both static keys, sorted — both sides
-        compute the same string. An MITM would need to make you read different emoji.</p>
+        compute the same string. An MITM would need to make you read different numbers.</p>
       </aside>
     </div>
     <div class="meter" data-reveal>
@@ -197,14 +178,14 @@
           <p class="peer">operator</p>
           <p class="side-f dim">alt+1..9 · j/k · q quit<br>unread 2</p>
         </div>
-        <div class="pane">
+        <div class="pane" id="demo-pane">
           <p class="pane-h"><span class="amber">eidolon</span> <span class="dim">· verified</span><span class="pane-time dim">13:12</span></p>
           <p class="msg"><span class="dim">13:04</span>  <span class="amber">eidolon</span>  copy that</p>
           <p class="msg"><span class="dim">13:04</span>  <span class="amber">eidolon</span>  wheels up in ten</p>
           <p class="msg agent"><span class="dim">13:07</span>  <span class="amber">agent</span>   msg.send → id:ccfd7c · deduped:false</p>
-          <p class="msg dim"><span class="dim">13:12</span>  — sas verified · 7-emoji match · session pinned —</p>
+          <p class="msg dim"><span class="dim">13:12</span>  — sas verified · numeric match · session pinned —</p>
           <p class="msg out-msg"><span class="dim">13:13</span>  <span class="you">you</span> rendezvous at the NEM port, 0400</p>
-          <p class="prompt-line"><span class="prompt">&gt;</span> /finger <span class="caret" aria-hidden="true"></span></p>
+          <p class="prompt-line"><span class="prompt">&gt;</span> <span id="typed"></span><span class="caret" aria-hidden="true"></span></p>
         </div>
       </div>
     </div>

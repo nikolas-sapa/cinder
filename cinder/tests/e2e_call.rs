@@ -530,6 +530,12 @@ async fn ca11_relay_blind_to_calls() {
     let (a, b) = paired(tap, dir_a.path(), dir_b.path()).await;
     fast_caps(&a);
     fast_caps(&b);
+    // The tap is a userspace TCP proxy: under CI starvation a forwarding
+    // stall can exceed fast_caps' 1.5s media_dead and end the call mid-
+    // flight. Opacity is this test's purpose, not deadline semantics —
+    // keep the production 10s media_dead so the call survives proxy lag.
+    a.test_call_caps_mut().media_dead = Duration::from_secs(10);
+    b.test_call_caps_mut().media_dead = Duration::from_secs(10);
     a.test_media_factory(std::sync::Arc::new(call::null_devices));
     b.test_media_factory(std::sync::Arc::new(call::null_devices));
     let rec_a = Rec::attach(&a);
@@ -560,7 +566,14 @@ async fn ca11_relay_blind_to_calls() {
         if media_ok {
             break;
         }
-        assert_eq!(attempt, 0, "timed out waiting for media through tap");
+        let end = rec_a
+            .ended_reason(&call_id)
+            .unwrap_or_else(|| "still-live-or-no-event".into());
+        let stats = a
+            .test_call_stats(&call_id)
+            .map(|(tx, rx, _, _, _)| format!("tx={tx} rx={rx}"))
+            .unwrap_or_else(|| "no-stats".into());
+        assert_eq!(attempt, 0, "media through tap stalled: {stats} end={end}");
         let _ = a
             .call_hangup(CallIdParams {
                 call_id: Some(call_id.clone()),

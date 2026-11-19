@@ -1,0 +1,597 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>cinder — spec ledger v2</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600&family=Inter:wght@400;500&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --ground:#0B0C0E; --panel:#15171B; --card:#101216; --ink:#EDEDE8;
+    --muted:#9BA0A6; --dim:#5A616B; --faint:#3D4249; --line:#23262D;
+    --ember:#FFB224; --ember-dim:#5A4114; --danger:#FF6B5E;
+    --disp:'Space Grotesk',system-ui,sans-serif;
+    --body:'Inter',system-ui,sans-serif;
+    --mono:'JetBrains Mono',ui-monospace,monospace;
+  }
+  *{box-sizing:border-box;margin:0}
+  body{background:var(--ground);color:var(--ink);font-family:var(--body);
+    font-size:14px;line-height:1.6;-webkit-font-smoothing:antialiased}
+  .page{min-height:100vh;display:flex;flex-direction:column}
+  header{padding:26px 32px;display:flex;justify-content:space-between;
+    align-items:baseline;border-bottom:1px solid var(--line);
+    font-family:var(--mono);font-size:13px}
+  .tag{color:var(--ember);font-weight:500}
+  .hint{color:var(--muted);font-size:11px;letter-spacing:.08em}
+  .wrap{max-width:920px;margin:0 auto;padding:0 24px;width:100%}
+  main{flex:1;padding-bottom:96px}
+
+  /* ============ section head ============ */
+  .sl{padding:64px 0 8px}
+  .sl-strip{display:flex;align-items:center;gap:14px;
+    font-family:var(--mono);font-size:10px;letter-spacing:.2em;
+    color:var(--dim);text-transform:uppercase;margin-bottom:20px}
+  .sl-strip .tag2{color:var(--ember)}
+  .sl-strip .rule{flex:1;border-top:1px dashed var(--line)}
+  .sl-strip .meta{color:var(--faint);letter-spacing:.12em}
+  .all{font-family:var(--mono);font-size:10px;letter-spacing:.14em;
+    color:var(--muted);background:var(--card);border:1px solid var(--line);
+    border-radius:4px;padding:0 12px;min-height:44px;cursor:pointer;
+    white-space:nowrap}
+  .all:focus-visible{outline:2px solid var(--ember);outline-offset:2px}
+
+  .sl h2{font-family:var(--disp);font-weight:600;
+    font-size:clamp(30px,5vw,46px);line-height:1.08;
+    letter-spacing:-.02em;margin-bottom:14px}
+  .sl h2 em{font-style:normal;color:var(--ember)}
+  .lede{color:var(--muted);max-width:62ch;font-size:14.5px;line-height:1.65;
+    margin-bottom:26px}
+  .lede b{color:var(--ink);font-weight:500}
+  .lede code{font-family:var(--mono);font-size:12.5px;color:var(--ink);
+    background:var(--card);border:1px solid var(--line);
+    border-radius:4px;padding:1px 6px}
+
+  /* ============ signal-path schematic ============ */
+  .arch{border:1px solid var(--line);border-radius:8px;
+    background:var(--card);margin-bottom:34px;overflow:hidden}
+  .arch figcaption{padding:9px 14px;border-bottom:1px solid var(--line);
+    background:var(--panel);font-family:var(--mono);font-size:9.5px;
+    letter-spacing:.18em;color:var(--dim);text-transform:uppercase;
+    display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap}
+  .arch figcaption .rt{color:var(--faint);letter-spacing:.06em}
+  .arch pre{margin:0;padding:16px 18px;overflow-x:auto;
+    font-family:var(--mono);font-size:clamp(8.5px,2.6vw,12px);
+    line-height:1.7;color:var(--dim)}
+  .arch pre .u{color:var(--ink)}
+  .arch pre .a{color:var(--ember)}
+  .arch pre .w{color:var(--faint)}
+
+  /* ============ ledger ============ */
+  .ledger{list-style:none;padding:0;border-top:1px solid var(--line)}
+  .row{border-bottom:1px solid var(--line);position:relative}
+  .row::before{content:"";position:absolute;left:0;top:0;bottom:0;
+    width:2px;background:var(--ember);transform:scaleY(0);
+    transform-origin:top}
+  .row:hover::before,.row.open::before{transform:scaleY(1)}
+
+  .head{display:flex;align-items:center;gap:16px;width:100%;
+    min-height:60px;padding:14px 14px 14px 18px;background:none;
+    border:0;color:inherit;font:inherit;cursor:pointer;text-align:left;
+    -webkit-tap-highlight-color:transparent;touch-action:manipulation}
+  .head:focus-visible{outline:2px solid var(--ember);outline-offset:2px;
+    border-radius:2px}
+  .num{font-family:var(--mono);font-size:11px;color:var(--faint);
+    width:32px;flex:none}
+  .row:hover .num,.row.open .num{color:var(--ember)}
+  .title{font-family:var(--mono);font-size:14.5px;font-weight:500;
+    color:var(--ink);letter-spacing:-.01em;white-space:nowrap}
+  .lead{flex:1;height:1px;min-width:16px;
+    border-bottom:1px dotted var(--faint);transform:translateY(2px)}
+  .map{display:flex;align-items:center;gap:8px;flex:none;
+    font-family:var(--mono);font-size:11px}
+  .chip{padding:3px 9px;border:1px solid var(--line);border-radius:4px;
+    background:var(--card);color:var(--ink);white-space:nowrap}
+  .chip.a{color:var(--ember);border-color:rgba(255,178,36,.28);
+    background:rgba(255,178,36,.06)}
+  .x{color:var(--ember);font-size:12px}
+  .tgl{font-family:var(--mono);font-size:11px;color:var(--dim);
+    border:1px solid var(--line);border-radius:4px;padding:4px 7px;
+    min-width:34px;text-align:center;flex:none}
+  .tgl::before{content:"[+]"}
+  .row.open .tgl::before{content:"[-]"}
+  .row.open .tgl{color:var(--ember);border-color:rgba(255,178,36,.35)}
+
+  /* ============ expanded body ============ */
+  .body{padding:6px 18px 26px 66px}
+  .pair{display:grid;grid-template-columns:minmax(0,1fr) 34px minmax(0,1fr);
+    gap:14px;align-items:stretch}
+  .par{display:flex;flex-direction:column;align-items:center;
+    justify-content:center;gap:8px;color:var(--ember);
+    font-family:var(--mono);font-size:15px}
+  .par i{font-style:normal;font-size:8.5px;letter-spacing:.16em;
+    color:var(--faint);writing-mode:vertical-rl;text-transform:uppercase}
+
+  .side{display:flex;flex-direction:column;min-width:0;
+    border:1px solid var(--line);border-radius:8px;
+    background:var(--card);overflow:hidden}
+  .phead{display:flex;align-items:center;gap:8px;padding:9px 13px;
+    border-bottom:1px solid var(--line);background:var(--panel);
+    font-family:var(--mono);font-size:9.5px;letter-spacing:.16em;
+    text-transform:uppercase;color:var(--dim)}
+  .phead::before{content:"";width:7px;height:7px;border-radius:1px;
+    background:var(--faint);flex:none}
+  .side.agent .phead::before{background:var(--ember)}
+  .phead .pf{margin-left:auto;color:var(--faint);letter-spacing:.04em;
+    text-transform:none;white-space:nowrap}
+  .side pre{margin:0;padding:14px;overflow-x:auto;white-space:pre;
+    font-family:var(--mono);font-size:12.5px;line-height:1.75;
+    color:var(--muted);flex:1}
+  .side pre .p{color:var(--ink)}            /* prompt / user text */
+  .side pre .m{color:var(--ember)}          /* method / event names */
+  .side pre .g{color:var(--ember)}          /* wire glyphs → ← */
+  .side pre .c{color:var(--faint)}          /* # comments */
+  .side pre .s{color:var(--ink)}            /* ids, values, sas */
+  .side pre .v{color:var(--ink);font-weight:500} /* verified/trust */
+
+  /* spec plate */
+  .spec{list-style:none;margin:22px 0 0;padding:12px 16px;
+    border:1px dashed var(--line);border-radius:6px}
+  .spec li{display:flex;align-items:baseline;gap:10px;
+    padding:4px 0;font-family:var(--mono);font-size:11.5px}
+  .spec .k{color:var(--dim);flex:none;min-width:76px;
+    text-transform:uppercase;letter-spacing:.1em;font-size:10px}
+  .spec .d{flex:1;min-width:14px;height:1px;
+    border-bottom:1px dotted var(--faint)}
+  .spec .v2{color:var(--muted);text-align:right;white-space:nowrap}
+  .desc{margin:16px 4px 0;color:var(--muted);font-size:13.5px;
+    line-height:1.65;max-width:74ch}
+  .desc b{color:var(--ink);font-weight:500}
+  .desc code{font-family:var(--mono);font-size:12px;color:var(--ink)}
+
+  .foot{display:flex;align-items:center;gap:14px;margin-top:30px;
+    font-family:var(--mono);font-size:9.5px;letter-spacing:.16em;
+    color:var(--faint);text-transform:uppercase}
+  .foot .rule{flex:1;border-top:1px dashed var(--line)}
+  .foot .ok{color:var(--ember)}
+
+  /* ============ mobile ============ */
+  @media (max-width:700px){
+    .head{flex-wrap:wrap;row-gap:10px;min-height:56px}
+    .lead{display:none}
+    .tgl{margin-left:auto}
+    .map{order:3;flex-basis:100%;padding-left:48px}
+    .body{padding:6px 16px 24px 16px}
+    .pair{grid-template-columns:1fr}
+    .par{flex-direction:row;padding:2px 0}
+    .par i{writing-mode:horizontal-tb}
+    .par::before,.par::after{content:"";flex:1;
+      border-top:1px dashed var(--line)}
+    .side pre{font-size:11px}
+    .spec .v2{white-space:normal}
+  }
+  @media (max-width:460px){
+    .chip{font-size:10px;padding:2px 6px}
+    .map{padding-left:0}
+    .spec .k{min-width:60px}
+  }
+
+  /* ============ motion — only when allowed ============ */
+  @media (prefers-reduced-motion:no-preference){
+    .row::before{transition:transform .28s cubic-bezier(.2,.7,.2,1)}
+    .num{transition:color .2s}
+    .tgl{transition:color .2s,border-color .2s}
+    .head{transition:background .2s}
+    .head:hover{background:linear-gradient(90deg,
+      rgba(255,178,36,.05),transparent 55%)}
+    .row.open .body{animation:slin .4s cubic-bezier(.2,.7,.2,1)}
+    @keyframes slin{from{opacity:0;transform:translateY(-7px)}
+      to{opacity:1;transform:none}}
+    .all{transition:color .2s,border-color .2s}
+    .all:hover{color:var(--ember);border-color:rgba(255,178,36,.35)}
+  }
+</style>
+</head>
+<body>
+<div class="page">
+<header>
+  <span class="tag">cinder</span>
+  <span class="hint">experiments / spec-ledger v2</span>
+</header>
+<main class="wrap">
+
+<section class="sl" aria-labelledby="sl-h">
+  <div class="sl-strip">
+    <span class="tag2">02 — specification</span>
+    <span class="rule" aria-hidden="true"></span>
+    <span class="meta">ledger · 07 entries · all ship today</span>
+    <button class="all" id="allBtn" type="button" aria-pressed="false"
+      aria-label="expand all ledger entries">[+] all</button>
+  </div>
+
+  <h2 id="sl-h">one protocol, <em>two kinds of user</em></h2>
+  <p class="lede">Every capability below is <b>one typed JSON-RPC 2.0 method</b>.
+    The left pane is what the human sees in the TUI; the right pane is what the
+    machine sees — agent, wire, or relay. Same call, same event, no second-class
+    API. Click a row to open both surfaces.</p>
+
+  <figure class="arch">
+    <figcaption>
+      <span>signal path</span>
+      <span class="rt">equal clients · one bus</span>
+    </figcaption>
+<pre class="schematic" aria-hidden="true"><span class="w"> USER      SURFACE            WIRE                    </span>
+<span class="w"> </span><span class="u">human</span><span class="w"> ──▶ cinder tui ────┐                           </span>
+<span class="w">                          ├─▶ </span><span class="a">json-rpc 2.0</span><span class="w"> ═▶ cinder  </span>
+<span class="w"> </span><span class="u">agent</span><span class="w"> ──▶ cinder rpc ────┘    stdio · unix sock      </span></pre>
+  </figure>
+
+  <ol class="ledger">
+
+<!-- ─────────── 01 · agent-first json-rpc ─────────── -->
+    <li class="row">
+      <button class="head" type="button" aria-expanded="false" aria-controls="b1">
+        <span class="num">01</span>
+        <span class="title">agent-first json-rpc</span>
+        <span class="lead" aria-hidden="true"></span>
+        <span class="map">
+          <span class="chip h">type + ↵</span><span class="x" aria-hidden="true">⇄</span><span class="chip a">msg.send</span>
+        </span>
+        <span class="tgl" aria-hidden="true"></span>
+      </button>
+      <div class="body" id="b1" role="region" aria-label="agent-first json-rpc — both surfaces" hidden>
+        <div class="pair">
+          <div class="side">
+            <div class="phead">human · tui<span class="pf">input bar</span></div>
+<pre><span class="p">&gt; meet at the old port, 0400</span>
+<span class="p">~ sent: eidolon          … → ✓ → ✓✓</span></pre>
+          </div>
+          <div class="par" aria-hidden="true"><span>⇄</span><i>same call</i></div>
+          <div class="side agent">
+            <div class="phead">agent · json-rpc<span class="pf">ndjson</span></div>
+<pre><span class="g">→</span> {"id":10,"method":"<span class="m">msg.send</span>",
+   "params":{"to":"contact:9f3b12",
+   "body":"<span class="s">meet at the old port, 0400</span>",
+   "client_msg_id":"<span class="s">agent-0001</span>"}}
+<span class="g">←</span> {"id":10,"result":{
+   "msg_id":"<span class="s">msg:e01d7c</span>",
+   "state":"queued","deduped":false}}
+<span class="g">→</span> {"id":11,…retry same client_msg_id}
+<span class="g">←</span> {"id":11,"result":{
+   "msg_id":"<span class="s">msg:e01d7c</span>",
+   "state":"queued","<span class="s">deduped":true</span>}}</pre>
+          </div>
+        </div>
+        <ul class="spec">
+          <li><span class="k">stdio</span><span class="d"></span><span class="v2">cinder rpc · newline-delimited json</span></li>
+          <li><span class="k">daemon</span><span class="d"></span><span class="v2">unix socket · peer-cred auth</span></li>
+          <li><span class="k">surface</span><span class="d"></span><span class="v2">35 methods · 14 events</span></li>
+          <li><span class="k">schema</span><span class="d"></span><span class="v2">self-describing · rpc.describe</span></li>
+          <li><span class="k">sends</span><span class="d"></span><span class="v2">idempotent · client_msg_id</span></li>
+        </ul>
+        <p class="desc">Every TUI capability is a typed JSON-RPC 2.0 method —
+          <code>cinder rpc</code> frames ndjson on stdio, <code>cinder daemon</code>
+          serves the same calls to concurrent clients over a peer-cred unix
+          socket. Retry a <code>client_msg_id</code>, get the same
+          <code>msg_id</code> back with <code>deduped:true</code>.</p>
+      </div>
+    </li>
+
+<!-- ─────────── 02 · real noise ─────────── -->
+    <li class="row">
+      <button class="head" type="button" aria-expanded="false" aria-controls="b2">
+        <span class="num">02</span>
+        <span class="title">real noise, no ceremony</span>
+        <span class="lead" aria-hidden="true"></span>
+        <span class="map">
+          <span class="chip h">/status</span><span class="x" aria-hidden="true">⇄</span><span class="chip a">xx: e,ee,s,es</span>
+        </span>
+        <span class="tgl" aria-hidden="true"></span>
+      </button>
+      <div class="body" id="b2" role="region" aria-label="real noise — both surfaces" hidden>
+        <div class="pair">
+          <div class="side">
+            <div class="phead">human · tui<span class="pf">status line</span></div>
+<pre><span class="p">&gt; /status</span>
+~ link up · peer <span class="s">oyv4kqz3n5m2…</span>
+~ <span class="s">Noise_XX_25519_ChaChaPoly_BLAKE2s</span>
+~ mutual auth · fs · no tls</pre>
+          </div>
+          <div class="par" aria-hidden="true"><span>⇄</span><i>same wire</i></div>
+          <div class="side agent">
+            <div class="phead">wire · noise transcript<span class="pf">xx</span></div>
+<pre><span class="c">── handshake · frames ≤ 4096 B ──</span>
+<span class="g">→</span> <span class="m">Msg1</span>   e
+<span class="g">←</span> <span class="m">Msg2</span>   e, ee, s, es   <span class="c">· s sealed</span>
+<span class="g">→</span> <span class="m">Msg3</span>   s, se          <span class="c">· s sealed</span>
+<span class="c">── transport ─────────────────────</span>
+~ all frames opaque · ≤ 8210 B
+~ rekey every 1024 msgs</pre>
+          </div>
+        </div>
+        <ul class="spec">
+          <li><span class="k">pattern</span><span class="d"></span><span class="v2">Noise_XX_25519_ChaChaPoly_BLAKE2s</span></li>
+          <li><span class="k">impl</span><span class="d"></span><span class="v2">snow</span></li>
+          <li><span class="k">keys</span><span class="d"></span><span class="v2">mutual auth · fs · statics sealed</span></li>
+          <li><span class="k">transport</span><span class="d"></span><span class="v2">no tls · zeroized on drop</span></li>
+        </ul>
+        <p class="desc">Sessions run <b>Noise_XX_25519_ChaChaPoly_BLAKE2s</b> via
+          snow: mutual authentication, forward secrecy, and static keys that
+          are encrypted on the wire — the Msg2/Msg3 transcript above is the
+          whole ceremony. No TLS anywhere.</p>
+      </div>
+    </li>
+
+<!-- ─────────── 03 · blind relay ─────────── -->
+    <li class="row">
+      <button class="head" type="button" aria-expanded="false" aria-controls="b3">
+        <span class="num">03</span>
+        <span class="title">blind relay</span>
+        <span class="lead" aria-hidden="true"></span>
+        <span class="map">
+          <span class="chip h">peer-id route</span><span class="x" aria-hidden="true">⇄</span><span class="chip a">Msg{opaque}</span>
+        </span>
+        <span class="tgl" aria-hidden="true"></span>
+      </button>
+      <div class="body" id="b3" role="region" aria-label="blind relay — both surfaces" hidden>
+        <div class="pair">
+          <div class="side">
+            <div class="phead">human · tui<span class="pf">status line</span></div>
+<pre>~ relay connected · :7700
+~ route: by <span class="s">peer-id</span> only
+~ relay holds ciphertext +
+  token hashes — nothing else</pre>
+          </div>
+          <div class="par" aria-hidden="true"><span>⇄</span><i>blind</i></div>
+          <div class="side agent">
+            <div class="phead">relay · all it sees<span class="pf">opaque</span></div>
+<pre><span class="m">Msg</span>{to:<span class="s">peer:oyv4kq…</span>,
+    body:&lt;<span class="s">opaque ≤8210B</span>&gt;}
+<span class="m">MailboxOpen</span>{id:&lt;<span class="s">256-bit</span>&gt;,
+    h_deposit:<span class="s">SHA-256(token)</span>}
+<span class="c"># raw tokens never transit</span>
+<span class="c"># from: claimed, unverified</span></pre>
+          </div>
+        </div>
+        <ul class="spec">
+          <li><span class="k">routes</span><span class="d"></span><span class="v2">opaque frames · by peer-id</span></li>
+          <li><span class="k">holds</span><span class="d"></span><span class="v2">token hashes only · no keys</span></li>
+          <li><span class="k">proof</span><span class="d"></span><span class="v2">relay-blindness integration test</span></li>
+          <li><span class="k">caps</span><span class="d"></span><span class="v2">4096 mbx · 2048 inv · 2048 conns</span></li>
+        </ul>
+        <p class="desc">The relay routes <b>opaque ciphertext by peer-id</b> and
+          stores SHA-256 token hashes — it can't read, can't forge, can't MITM
+          a pinned contact. Blindness is asserted by an integration test, not
+          promised in a policy.</p>
+      </div>
+    </li>
+
+<!-- ─────────── 04 · accountless identity ─────────── -->
+    <li class="row">
+      <button class="head" type="button" aria-expanded="false" aria-controls="b4">
+        <span class="num">04</span>
+        <span class="title">accountless identity</span>
+        <span class="lead" aria-hidden="true"></span>
+        <span class="map">
+          <span class="chip h">peer:oyv4kq…</span><span class="x" aria-hidden="true">⇄</span><span class="chip a">session.hello</span>
+        </span>
+        <span class="tgl" aria-hidden="true"></span>
+      </button>
+      <div class="body" id="b4" role="region" aria-label="accountless identity — both surfaces" hidden>
+        <div class="pair">
+          <div class="side">
+            <div class="phead">human · tui<span class="pf">first run</span></div>
+<pre>~ no signup · no email · no phone
+~ you are <span class="s">peer:oyv4kqz3n5m2…</span>
+~ x25519 key · os keyring
+~ fallback: age-encrypted file</pre>
+          </div>
+          <div class="par" aria-hidden="true"><span>⇄</span><i>same id</i></div>
+          <div class="side agent">
+            <div class="phead">agent · json-rpc<span class="pf">hello</span></div>
+<pre><span class="g">→</span> {"id":1,"method":"<span class="m">session.hello</span>",
+   "params":{"protocol_version":[1],
+   "client":{"name":"my-agent"}}}
+<span class="g">←</span> {"id":1,"result":{"account":{
+   "peer_id":"<span class="s">peer:oyv4kqz3n5m2…</span>"},
+   "auth_method":"peer_uid"}}</pre>
+          </div>
+        </div>
+        <ul class="spec">
+          <li><span class="k">keypair</span><span class="d"></span><span class="v2">x25519</span></li>
+          <li><span class="k">peer-id</span><span class="d"></span><span class="v2">sha-256(pubkey)</span></li>
+          <li><span class="k">signup</span><span class="d"></span><span class="v2">no email · phone · path exists</span></li>
+          <li><span class="k">storage</span><span class="d"></span><span class="v2">os keyring · age-encrypted fallback</span></li>
+        </ul>
+        <p class="desc">Identity is an <b>X25519 keypair</b>; your peer-id is
+          <code>SHA-256(pubkey)</code>. No email, no phone, no signup — there is
+          no registration path at all. Keys live in the OS keyring with an
+          age-encrypted fallback.</p>
+      </div>
+    </li>
+
+<!-- ─────────── 05 · sas verification ─────────── -->
+    <li class="row">
+      <button class="head" type="button" aria-expanded="false" aria-controls="b5">
+        <span class="num">05</span>
+        <span class="title">sas verification</span>
+        <span class="lead" aria-hidden="true"></span>
+        <span class="map">
+          <span class="chip h">/verify</span><span class="x" aria-hidden="true">⇄</span><span class="chip a">ident.verify</span>
+        </span>
+        <span class="tgl" aria-hidden="true"></span>
+      </button>
+      <div class="body" id="b5" role="region" aria-label="sas verification — both surfaces" hidden>
+        <div class="pair">
+          <div class="side">
+            <div class="phead">human · tui<span class="pf">/finger</span></div>
+<pre><span class="p">&gt; /finger</span>
+  eidolon · peer:<span class="s">oyv4kq…</span>
+  trust ○ unverified
+  sas   <span class="s">44-19-07-82-56</span>
+<span class="p">&gt; /verify 44-19-07-82-56</span>
+~ trust <span class="v">● verified</span>
+~ key change ⇒ <span class="v">✕</span> · sends blocked</pre>
+          </div>
+          <div class="par" aria-hidden="true"><span>⇄</span><i>same sas</i></div>
+          <div class="side agent">
+            <div class="phead">agent · json-rpc<span class="pf">verify</span></div>
+<pre><span class="g">←</span> event <span class="m">security.identity_changed</span>
+   {"contact_id":"contact:9f3b12",
+    "trust":"<span class="s">key_changed</span>"}
+<span class="g">→</span> {"id":36,"method":"<span class="m">ident.verify</span>",
+   "params":{"contact_id":
+     "contact:9f3b12",
+     "sas":"<span class="s">44-19-07-82-56</span>"}}
+<span class="g">←</span> {"id":36,"result":{
+   "trust":"<span class="v">verified</span>"}}</pre>
+          </div>
+        </div>
+        <ul class="spec">
+          <li><span class="k">render</span><span class="d"></span><span class="v2">7 emoji · digit fallback (160-bit)</span></li>
+          <li><span class="k">binding</span><span class="d"></span><span class="v2">handshake hash + both statics, sorted</span></li>
+          <li><span class="k">key change</span><span class="d"></span><span class="v2">sends blocked until re-verify</span></li>
+          <li><span class="k">clears</span><span class="d"></span><span class="v2">ident.verify only</span></li>
+        </ul>
+        <p class="desc">SAS renders as <b>7 emoji or a digit string</b> bound to
+          the handshake hash and both static keys — compare it out-of-band
+          (digits carry 160 bits, the strong check). On any key change, sends
+          block loudly until <code>ident.verify</code> clears it. Never a
+          silent rebind.</p>
+      </div>
+    </li>
+
+<!-- ─────────── 06 · one-time links ─────────── -->
+    <li class="row">
+      <button class="head" type="button" aria-expanded="false" aria-controls="b6">
+        <span class="num">06</span>
+        <span class="title">one-time links</span>
+        <span class="lead" aria-hidden="true"></span>
+        <span class="map">
+          <span class="chip h">cinder id</span><span class="x" aria-hidden="true">⇄</span><span class="chip a">invite.create</span>
+        </span>
+        <span class="tgl" aria-hidden="true"></span>
+      </button>
+      <div class="body" id="b6" role="region" aria-label="one-time links — both surfaces" hidden>
+        <div class="pair">
+          <div class="side">
+            <div class="phead">human · shell<span class="pf">mint</span></div>
+<pre><span class="p">$ cinder id</span>
+~ link <span class="s">cinder://oyv4kq…@relay…</span>
+~   ?rendezvous=<span class="s">tok_m41x</span>
+~ single-use · burns on consume</pre>
+          </div>
+          <div class="par" aria-hidden="true"><span>⇄</span><i>one slot</i></div>
+          <div class="side agent">
+            <div class="phead">agent · json-rpc<span class="pf">invite</span></div>
+<pre><span class="g">→</span> {"id":34,"method":"<span class="m">invite.create</span>",
+   "params":{"label":"ops-agent",
+             "ttl_sec":86400}}
+<span class="g">←</span> {"id":34,"result":{"link":
+   "<span class="s">cinder://oyv4kq…@relay…
+    ?rendezvous=tok_m41x</span>"}}
+<span class="c"># replay ⇒ -32018 conflict</span></pre>
+          </div>
+        </div>
+        <ul class="spec">
+          <li><span class="k">format</span><span class="d"></span><span class="v2">cinder://&lt;pubkey&gt;@&lt;relay&gt;</span></li>
+          <li><span class="k">token</span><span class="d"></span><span class="v2">?rendezvous=&lt;token&gt;</span></li>
+          <li><span class="k">slot</span><span class="d"></span><span class="v2">single-use · ticket burns on consume</span></li>
+          <li><span class="k">replay</span><span class="d"></span><span class="v2">-32018 conflict · rejected</span></li>
+        </ul>
+        <p class="desc">
+          <code>cinder://&lt;pubkey&gt;@&lt;relay&gt;?rendezvous=&lt;token&gt;</code>
+          claims a <b>single rendezvous slot</b> — the ticket burns on consume.
+          An intercepted link can't be replayed, and a copied pubkey alone
+          can't reach you.</p>
+      </div>
+    </li>
+
+<!-- ─────────── 07 · offline mailboxes ─────────── -->
+    <li class="row">
+      <button class="head" type="button" aria-expanded="false" aria-controls="b7">
+        <span class="num">07</span>
+        <span class="title">offline mailboxes</span>
+        <span class="lead" aria-hidden="true"></span>
+        <span class="map">
+          <span class="chip h">… → ✓ parked</span><span class="x" aria-hidden="true">⇄</span><span class="chip a">msg_state</span>
+        </span>
+        <span class="tgl" aria-hidden="true"></span>
+      </button>
+      <div class="body" id="b7" role="region" aria-label="offline mailboxes — both surfaces" hidden>
+        <div class="pair">
+          <div class="side">
+            <div class="phead">human · tui<span class="pf">send glyphs</span></div>
+<pre><span class="p">&gt; see you at 0400</span>
+~ peer offline            … → <span class="s">✓</span>
+~ ✓ = parked in peer's mailbox
+~ peer fetched · ack       → <span class="v">✓✓</span></pre>
+          </div>
+          <div class="par" aria-hidden="true"><span>⇄</span><i>same event</i></div>
+          <div class="side agent">
+            <div class="phead">agent · json-rpc<span class="pf">events</span></div>
+<pre><span class="g">→</span> {"id":10,"method":"<span class="m">msg.send</span>",
+   "params":{"to":"contact:9f3b12",…}}
+<span class="g">←</span> {"id":10,"result":{"state":"queued"}}
+<span class="g">←</span> event <span class="m">msg_state</span> {"msg_id":
+   "<span class="s">msg:e01d7c</span>","state":"<span class="v">delivered</span>"}
+<span class="c"># mailbox: deposit+fetch need caps</span></pre>
+          </div>
+        </div>
+        <ul class="spec">
+          <li><span class="k">queue</span><span class="d"></span><span class="v2">bounded · ≤500 msgs · ≤4 MiB · ≤30 d</span></li>
+          <li><span class="k">id</span><span class="d"></span><span class="v2">random 256-bit · not from peer-id</span></li>
+          <li><span class="k">access</span><span class="d"></span><span class="v2">capability tokens: deposit + fetch</span></li>
+          <li><span class="k">fetch</span><span class="d"></span><span class="v2">non-destructive until mailboxack</span></li>
+        </ul>
+        <p class="desc">Offline peers get <b>bounded mailboxes</b> on the relay,
+          keyed by random 256-bit ids nobody can guess from a peer-id. Deposit
+          and fetch each need a capability token — open mailboxes would be a
+          spam vector — and fetch stays non-destructive until ack.</p>
+      </div>
+    </li>
+
+  </ol>
+
+  <div class="foot">
+    <span class="rule" aria-hidden="true"></span>
+    <span>no human-only calls · no agent-only calls · <span class="ok">parity 7/7</span></span>
+    <span class="rule" aria-hidden="true"></span>
+  </div>
+</section>
+</main>
+</div>
+
+<script>
+(function(){
+  "use strict";
+  var rows=[].slice.call(document.querySelectorAll(".row"));
+  var allBtn=document.getElementById("allBtn");
+
+  function setRow(row,open){
+    var head=row.querySelector(".head");
+    var body=row.querySelector(".body");
+    row.classList.toggle("open",open);
+    head.setAttribute("aria-expanded",open?"true":"false");
+    body.hidden=!open;
+  }
+
+  rows.forEach(function(row){
+    row.querySelector(".head").addEventListener("click",function(){
+      setRow(row,!row.classList.contains("open"));
+    });
+  });
+
+  allBtn.addEventListener("click",function(){
+    var open=allBtn.getAttribute("aria-pressed")!=="true";
+    allBtn.setAttribute("aria-pressed",open?"true":"false");
+    allBtn.setAttribute("aria-label",
+      (open?"collapse":"expand")+" all ledger entries");
+    allBtn.textContent=(open?"[-]":"[+]")+" all";
+    rows.forEach(function(r){setRow(r,open);});
+  });
+})();
+</script>
+</body>
+</html>

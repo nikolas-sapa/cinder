@@ -1,0 +1,667 @@
+<!doctype html>
+<!--
+  cinder · ascii-fsm v2
+  ------------------------------------------------------------------
+  Hand-set ASCII schematic of the cinder session state machine,
+  now interactive.
+
+  States      : INVITE HANDSHAKE SEALED VERIFIED UNVERIFIED WIPED DENIED
+  Happy path  : INVITE ──▶ HANDSHAKE ══▶ SEALED ──▶ VERIFIED
+  Side edges  : SEALED ──▶ UNVERIFIED (key change, sends blocked)
+                UNVERIFIED ──▶ VERIFIED (sas match)
+                VERIFIED ──▶ WIPED (chat.wipe)
+                any state ──▶ DENIED (contact.deny, terminal)
+  Self loop   : rekey on SEALED
+
+  Upgrades vs v1:
+    1. interactive — every state box is a <button data-state>; click or
+       Enter/Space lights its outgoing edges (data-edge spans) in ember
+       and names the edge set in the readout strip. Background click or
+       Escape resets. DENIED reports "no outgoing edges".
+    2. transition register — each marker step appends a mono line
+       "sealed ──▶ verified · /sas match" to a tiny scrolling log under
+       the diagram; selections are logged too.
+
+  Canvas      : main diagram 128 columns · rail variant 28 columns
+  Glyph set   : box-drawing (─│═┄┆━┃ corners+tees) + ▶▲▼●○ ·× only
+  Marker      : ● lit / ○ idle, JS steps 0..3 on the happy path,
+                gated on prefers-reduced-motion + IntersectionObserver
+                + document.visibilitychange
+  ------------------------------------------------------------------
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark">
+<title>cinder · ascii-fsm v2</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600&family=Inter:wght@400;500&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --ground:#0B0C0E;
+    --panel:#15171B;
+    --card:#101216;
+    --ink:#EDEDE8;
+    --muted:#9BA0A6;
+    --faint:#3D4249;
+    --line:#23262D;
+    --ember:#FFB224;
+    --ember-dim:#5A4114;
+    --danger:#FF6B5E;
+    --dim:#5A616B;
+    --mono:"JetBrains Mono",ui-monospace,SFMono-Regular,Menlo,monospace;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;padding:0}
+  body{
+    background:var(--ground);
+    color:var(--muted);
+    font:400 15px/1.6 "Inter",system-ui,sans-serif;
+    -webkit-font-smoothing:antialiased;
+    min-height:100vh;
+  }
+
+  .page{
+    max-width:88rem;
+    margin:0 auto;
+    padding:3.5rem 1.5rem 5rem;
+  }
+
+  /* ---------- header ---------- */
+  .hd{max-width:44rem}
+  .kick{
+    font:500 11px/1 var(--mono);
+    letter-spacing:.14em;
+    text-transform:uppercase;
+    color:var(--ember);
+    margin:0 0 .9rem;
+  }
+  .kick::before{content:"// "}
+  h1{
+    font:600 2.4rem/1.15 "Space Grotesk",system-ui,sans-serif;
+    color:var(--ink);
+    margin:0 0 .8rem;
+    letter-spacing:-.02em;
+  }
+  .sub{margin:0;font-size:.95rem;color:var(--muted)}
+  .sub code{
+    font:500 .85em var(--mono);
+    color:var(--ink);
+    background:var(--card);
+    border:1px solid var(--line);
+    border-radius:4px;
+    padding:.1em .4em;
+  }
+
+  /* ---------- instrument panel ---------- */
+  .panel{
+    margin:2.5rem 0 0;
+    background:var(--panel);
+    border:1px solid var(--line);
+    border-radius:10px;
+    overflow:hidden;
+  }
+  .bar{
+    display:flex;
+    align-items:center;
+    gap:.9rem;
+    padding:.65rem 1.1rem;
+    border-bottom:1px solid var(--line);
+    font:500 10.5px/1.4 var(--mono);
+    letter-spacing:.12em;
+    text-transform:uppercase;
+    color:var(--muted);
+    background:var(--card);
+  }
+  .tag{
+    color:var(--ember);
+    border:1px solid var(--ember-dim);
+    background:rgba(255,178,36,.06);
+    border-radius:4px;
+    padding:.2em .55em;
+    letter-spacing:.14em;
+  }
+  .bar .t{color:var(--faint);letter-spacing:.1em}
+  .bar .r{
+    margin-left:auto;
+    display:flex;
+    align-items:center;
+    gap:.5em;
+    color:var(--muted);
+  }
+  .bar .r i{
+    display:inline-block;
+    width:6px;height:6px;
+    border-radius:50%;
+    background:var(--ember);
+    box-shadow:0 0 8px rgba(255,178,36,.55);
+  }
+
+  /* ---------- schematic ---------- */
+  .scroll{
+    overflow-x:auto;
+    padding:1.6rem 1.8rem 1.5rem;
+  }
+  pre.fsm, pre.rail{
+    font:500 12px/1.55 var(--mono);
+    margin:0;
+    color:var(--muted);
+    font-variant-ligatures:none;
+  }
+
+  /* token palette inside the art */
+  .bx {color:var(--ink)}            /* state boxes            */
+  .arw{color:var(--faint)}          /* wires, tees, arrowheads */
+  .lbl{color:var(--muted)}          /* edge labels, dim mono   */
+  .lp {color:var(--ember-dim)}      /* rekey loop              */
+  .wrn{color:var(--ember)}          /* flagged UNVERIFIED      */
+  .den{color:var(--danger)}         /* DENIED + deny edge      */
+  .dnn{color:var(--danger);opacity:.55}
+  .dim{color:var(--faint)}          /* legend                  */
+  .ent{color:var(--ember)}          /* entry marker            */
+  .led{color:var(--faint);font-style:normal}
+  .led.on{color:var(--ember);text-shadow:0 0 9px rgba(255,178,36,.45)}
+
+  /* interactive state boxes */
+  .st{
+    appearance:none;
+    -webkit-appearance:none;
+    display:inline;
+    margin:0;padding:0;
+    border:0;
+    background:none;
+    font:inherit;
+    color:inherit;
+    letter-spacing:inherit;
+    cursor:pointer;
+    -webkit-tap-highlight-color:transparent;
+  }
+  .stc{cursor:pointer}
+  [data-state]:hover,
+  [data-state]:hover .bx{color:var(--ember)}
+  .st:focus-visible{
+    outline:none;
+    background:rgba(255,178,36,.08);
+    box-shadow:inset 0 0 0 1px var(--ember-dim);
+  }
+  [data-state].sel,
+  [data-state].sel .bx{
+    color:var(--ember);
+    text-shadow:0 0 8px rgba(255,178,36,.45);
+  }
+  [data-state="denied"].sel{
+    color:var(--danger);
+    text-shadow:0 0 8px rgba(255,107,94,.5);
+  }
+  .st::-moz-focus-inner{border:0;padding:0}
+
+  /* lit edges */
+  [data-edge].hot{
+    color:var(--ember);
+    text-shadow:0 0 8px rgba(255,178,36,.5);
+  }
+  [data-edge="deny"].hot{
+    color:var(--danger);
+    opacity:1;
+    text-shadow:0 0 8px rgba(255,107,94,.5);
+  }
+
+  /* ---------- inspection strip: readout + transition register ---------- */
+  .inspect{
+    margin:1.2rem 0 0;
+    background:var(--panel);
+    border:1px solid var(--line);
+    border-radius:10px;
+    overflow:hidden;
+  }
+  .readout{
+    display:flex;
+    align-items:baseline;
+    gap:.9em;
+    padding:.55rem 1.1rem;
+    border-bottom:1px solid var(--line);
+    background:var(--card);
+    font:500 11px/1.6 var(--mono);
+    color:var(--muted);
+    white-space:nowrap;
+    overflow-x:auto;
+  }
+  .readout .k{
+    color:var(--faint);
+    font-size:9.5px;
+    letter-spacing:.12em;
+    text-transform:uppercase;
+  }
+  .readout .v{color:var(--muted)}
+  .readout b{color:var(--ember);font-weight:500}
+  .readout i{color:var(--faint);font-style:normal}
+  .readout s{color:var(--faint);text-decoration:none}
+  .readout .nul{color:var(--danger)}
+
+  .log-h{
+    padding:.45rem 1.1rem 0;
+    font:500 9.5px/1.4 var(--mono);
+    letter-spacing:.12em;
+    text-transform:uppercase;
+    color:var(--faint);
+  }
+  .log-body{
+    max-height:7.6em;
+    overflow-y:auto;
+    padding:.2rem 1.1rem .65rem;
+    font:400 11px/1.55 var(--mono);
+    color:var(--muted);
+  }
+  .ll{white-space:nowrap}
+  .ll .t{display:inline-block;width:4.8em;color:var(--faint)}
+  .ll.sel .t{color:var(--ember-dim)}
+  .ll .a{color:var(--ember)}
+  .ll b{color:var(--ink);font-weight:500}
+  .ll .x{color:var(--faint)}
+
+  /* ---------- rail variant (<44rem) ---------- */
+  .rail-panel{display:none}
+  pre.rail{font-size:11.5px}
+
+  @media (max-width:44rem){
+    .panel{display:none}
+    .rail-panel{display:block}
+  }
+  @media (min-width:44.01rem) and (max-width:86rem){
+    pre.fsm{font-size:11px}
+  }
+
+  /* ---------- transition register ---------- */
+  .spec{
+    margin-top:1.2rem;
+    display:grid;
+    grid-template-columns:1fr 1.6fr;
+    gap:1.2rem;
+  }
+  .spec .card{
+    background:var(--panel);
+    border:1px solid var(--line);
+    border-radius:10px;
+    overflow:hidden;
+  }
+  .spec .hd2{
+    padding:.65rem 1.1rem;
+    border-bottom:1px solid var(--line);
+    font:500 10.5px/1.4 var(--mono);
+    letter-spacing:.12em;
+    text-transform:uppercase;
+    color:var(--muted);
+    background:var(--card);
+  }
+  .spec ul{list-style:none;margin:0;padding:.4rem 0}
+  .spec li{
+    display:flex;
+    align-items:baseline;
+    gap:.9rem;
+    padding:.42rem 1.1rem;
+    font:400 12px/1.5 var(--mono);
+  }
+  .spec li + li{border-top:1px dotted var(--line)}
+  .spec .s{width:6.5rem;flex:none;color:var(--ink)}
+  .spec .s::before{content:"○ ";color:var(--faint)}
+  .spec li.hot .s::before{content:"● ";color:var(--ember)}
+  .spec li.warn .s{color:var(--ember)}
+  .spec li.term .s{color:var(--danger)}
+  .spec .d{color:var(--muted)}
+  .spec .e{color:var(--ink);white-space:nowrap}
+  .spec .lbl{margin-left:auto;color:var(--muted);text-align:right}
+  .spec .e.den{color:var(--danger)}
+  .spec .e.wrn{color:var(--ember)}
+  .spec .x{color:var(--faint);white-space:nowrap}
+  .spec li[data-edge]{cursor:default}
+  @media (max-width:44rem){.spec{grid-template-columns:1fr}}
+
+  .foot{
+    margin:1.4rem 0 0;
+    font:400 11px/1.6 var(--mono);
+    color:var(--faint);
+    letter-spacing:.04em;
+  }
+  .foot b{color:var(--muted);font-weight:500}
+
+  .sr-only{
+    position:absolute;
+    width:1px;height:1px;
+    margin:-1px;padding:0;
+    overflow:hidden;
+    clip:rect(0 0 0 0);
+    white-space:nowrap;
+    border:0;
+  }
+</style>
+</head>
+<body>
+<main class="page">
+
+  <header class="hd">
+    <p class="kick">cinder / protocol internals</p>
+    <h1>Session state machine</h1>
+    <p class="sub">
+      Every cinder session is a small automaton: an <code>invite</code> link,
+      three <code>noise_xx</code> flights, a sealed transport, a trust flag.
+      Click a state to light its outgoing edges; the register below logs
+      each transition the marker takes. <code>denied</code> is absorbing —
+      there is no way back.
+    </p>
+  </header>
+
+  <figure class="panel" aria-labelledby="fsm-cap">
+    <figcaption class="bar" id="fsm-cap">
+      <span class="tag">fsm-02</span>
+      <span class="t">session · transport · trust</span>
+      <span class="r"><i></i>interactive</span>
+    </figcaption>
+    <div class="scroll">
+<pre class="fsm" id="fsm" aria-label="Interactive ASCII schematic of the cinder session state machine. Entry at INVITE, transitions to HANDSHAKE, SEALED, VERIFIED. SEALED loops on rekey, drops to UNVERIFIED on key change, which returns to VERIFIED on sas match. VERIFIED drops to WIPED on chat.wipe. Every state falls to DENIED on contact.deny. State buttons inspect outgoing edges.">
+                                                                                <span class="lp" data-edge="rekey">┌─ rekey ──┐</span>
+                                                                                <span class="lp" data-edge="rekey">▲</span>          <span class="lp" data-edge="rekey">▼</span>
+    <span class="bx stc" data-state="invite">┌──────────────┐</span><span class="lbl" data-edge="link"> cinder:// link </span><span class="bx stc" data-state="handshake">┌────────────────┐</span><span class="lbl" data-edge="noise"> noise_xx · 3 flights </span><span class="bx stc" data-state="sealed">┌────────────────┐</span><span class="lbl" data-edge="sas">   /sas match   </span><span class="bx stc" data-state="verified">┌────────────────┐</span>
+<span class="ent">●</span><span class="arw">──▶</span><button class="st" type="button" data-state="invite" aria-pressed="false" aria-label="INVITE — inspect outgoing edges"><span class="bx">│ </span><span class="led" data-i="0">○</span><span class="bx"> INVITE     │</span></button><span class="arw" data-edge="link">───────────────▶</span><button class="st" type="button" data-state="handshake" aria-pressed="false" aria-label="HANDSHAKE — inspect outgoing edges"><span class="bx">│ </span><span class="led" data-i="1">○</span><span class="bx"> HANDSHAKE    │</span></button><span class="arw" data-edge="noise">═════════════════════▶</span><button class="st" type="button" data-state="sealed" aria-pressed="false" aria-label="SEALED — inspect outgoing edges"><span class="bx">│ </span><span class="led" data-i="2">○</span><span class="bx"> SEALED       │</span></button><span class="arw" data-edge="sas">───────────────▶</span><button class="st" type="button" data-state="verified" aria-pressed="false" aria-label="VERIFIED — inspect outgoing edges"><span class="bx">│ </span><span class="led on" data-i="3">●</span><span class="bx"> VERIFIED     │</span></button>
+    <span class="bx stc" data-state="invite">└───────┬──────┘</span>                <span class="bx stc" data-state="handshake">└───────┬────────┘</span>                      <span class="bx stc" data-state="sealed">└─┬─────────┬────┘</span>                <span class="bx stc" data-state="verified">└─────────┬─────┬┘</span>
+            <span class="arw" data-edge="deny">│</span>                               <span class="arw" data-edge="deny">│</span>                                 <span class="arw" data-edge="deny">│</span>         <span class="arw" data-edge="keychg">│</span> <span class="wrn" data-edge="keychg">key change</span>               <span class="arw" data-edge="sasback">▲</span>    <span class="arw" data-edge="wipe">│</span>     <span class="arw" data-edge="deny">│</span>
+            <span class="arw" data-edge="deny">│</span>                               <span class="arw" data-edge="deny">│</span>                                 <span class="arw" data-edge="deny">│</span>         <span class="arw" data-edge="keychg">│</span>           <span class="arw" data-edge="sasback">┌─ </span><span class="lbl" data-edge="sasback">sas match</span><span class="arw" data-edge="sasback"> ──┘</span>    <span class="arw" data-edge="wipe">│</span>     <span class="arw" data-edge="deny">│</span>
+            <span class="arw" data-edge="deny">│</span>                               <span class="arw" data-edge="deny">│</span>                                 <span class="arw" data-edge="deny">│</span>         <span class="arw" data-edge="keychg">│</span>           <span class="arw" data-edge="sasback">│</span>                   <span class="arw" data-edge="wipe">│</span>     <span class="arw" data-edge="deny">│</span>
+            <span class="arw" data-edge="deny">│</span>                               <span class="arw" data-edge="deny">│</span>                                 <span class="arw" data-edge="deny">│</span>         <span class="arw" data-edge="keychg">▼</span>           <span class="arw" data-edge="sasback">│</span>         <span class="lbl" data-edge="wipe">chat.wipe</span> <span class="arw" data-edge="wipe">▼</span>     <span class="arw" data-edge="deny">│</span>
+            <span class="arw" data-edge="deny">│</span>                               <span class="arw" data-edge="deny">│</span>                                 <span class="arw" data-edge="deny">│</span> <span class="wrn stc" data-state="unverified">┏━━━━━━━━━━━━━━━━┓</span>  <span class="arw" data-edge="sasback">│</span>             <span class="bx stc" data-state="wiped">┌──────────┐</span><span class="arw" data-edge="deny">│</span>
+            <span class="arw" data-edge="deny">│</span>                               <span class="arw" data-edge="deny">│</span>                                 <span class="arw" data-edge="deny">│</span> <button class="st wrn" type="button" data-state="unverified" aria-pressed="false" aria-label="UNVERIFIED — sends blocked, inspect outgoing edges">┃ ! UNVERIFIED   ┃</button><span class="arw" data-edge="sasback">──┘</span>             <button class="st" type="button" data-state="wiped" aria-pressed="false" aria-label="WIPED — inspect outgoing edges"><span class="bx">│ </span><span class="led">○</span><span class="bx"> WIPED  │</span></button><span class="arw" data-edge="deny">│</span>
+            <span class="arw" data-edge="deny">│</span>                               <span class="arw" data-edge="deny">│</span>                                 <span class="arw" data-edge="deny">│</span> <span class="wrn stc" data-state="unverified">┃  sends blocked ┃</span>                <span class="bx stc" data-state="wiped">└─────┬────┘</span><span class="arw" data-edge="deny">│</span>
+            <span class="arw" data-edge="deny">│</span>                               <span class="arw" data-edge="deny">│</span>                                 <span class="arw" data-edge="deny">│</span> <span class="wrn stc" data-state="unverified">┗━━━━━┳━━━━━━━━━━┛</span>                      <span class="arw" data-edge="deny">│</span>     <span class="arw" data-edge="deny">│</span>
+            <span class="arw" data-edge="deny">│</span>                               <span class="arw" data-edge="deny">│</span>                                 <span class="arw" data-edge="deny">│</span>       <span class="arw" data-edge="deny">│</span>                                 <span class="arw" data-edge="deny">│</span>     <span class="arw" data-edge="deny">│</span>
+            <span class="arw" data-edge="deny">└─────────────────┬─────────────┴─</span><span class="den" data-edge="deny"> contact.deny · any state </span><span class="arw" data-edge="deny">──────┴───────┴─────────────────────────────────┴─────┘</span>
+                              <span class="arw" data-edge="deny">│</span>
+                              <span class="arw" data-edge="deny">▼</span>
+                      <span class="den stc" data-state="denied" data-edge="deny">┌┄┄┄┄┄┄┄┄┄┄┄┄┄┄┐</span>
+                      <button class="st den" type="button" data-state="denied" data-edge="deny" aria-pressed="false" aria-label="DENIED — terminal state, no outgoing edges">┆ × DENIED     ┆</button>
+                      <span class="den stc" data-state="denied" data-edge="deny">└┄┄┄┄┄┄┄┄┄┄┄┄┄┄┘</span>
+                      <span class="dnn" data-edge="deny">terminal · no un-deny</span>
+
+    <span class="dim">○ idle    ● active    ──▶ edge    ══▶ flight    ┄┄ terminal    click inspects · esc resets</span>
+</pre>
+    </div>
+  </figure>
+
+  <p class="sr-only">
+    Session state machine. States: invite, handshake, sealed, verified,
+    unverified, wiped, denied. Transitions: invite to handshake via cinder
+    link; handshake to sealed after three noise_xx flights; sealed loops on
+    rekey; sealed to verified on sas match; sealed to unverified on key
+    change, which blocks sends; unverified back to verified on sas match;
+    verified to wiped via chat.wipe; any state to denied via contact.deny.
+    Denied is terminal; there is no un-deny. Each state is a button that
+    highlights its outgoing edges and reports them in the readout below.
+  </p>
+
+  <figure class="panel rail-panel" aria-labelledby="rail-cap">
+    <figcaption class="bar" id="rail-cap">
+      <span class="tag">fsm-02</span>
+      <span class="t">session · rail</span>
+      <span class="r"><i></i>interactive</span>
+    </figcaption>
+    <div class="scroll">
+<pre class="rail" id="rail" aria-label="Interactive vertical list of session states: invite, handshake, sealed, unverified, verified, wiped, denied. State buttons inspect outgoing edges.">
+<span class="ent">●</span><span class="arw">──▶</span><span class="bx stc" data-state="invite">┌─────────────┐</span>
+    <button class="st" type="button" data-state="invite" aria-pressed="false" aria-label="INVITE — inspect outgoing edges"><span class="bx">│ </span><span class="led" data-i="0">○</span><span class="bx"> INVITE    │</span></button>
+    <span class="bx stc" data-state="invite">└───────┬─────┘</span>
+            <span class="arw" data-edge="link">│</span> <span class="lbl" data-edge="link">cinder:// link</span>
+            <span class="arw" data-edge="link">▼</span>
+    <span class="bx stc" data-state="handshake">┌─────────────┐</span>
+    <button class="st" type="button" data-state="handshake" aria-pressed="false" aria-label="HANDSHAKE — inspect outgoing edges"><span class="bx">│ </span><span class="led" data-i="1">○</span><span class="bx"> HANDSHAKE │</span></button>
+    <span class="bx stc" data-state="handshake">└───────┬─────┘</span>
+            <span class="arw" data-edge="noise">│</span> <span class="lbl" data-edge="noise">noise_xx</span>
+            <span class="arw" data-edge="noise">│</span> <span class="lbl" data-edge="noise">3 flights</span>
+            <span class="arw" data-edge="noise">▼</span>
+        <span class="lp" data-edge="rekey">┌ rekey  ┐</span>
+        <span class="lp" data-edge="rekey">▲</span>   <span class="arw" data-edge="noise">▼</span>    <span class="lp" data-edge="rekey">▼</span>
+    <span class="bx stc" data-state="sealed">┌─────────────┐</span>
+    <button class="st" type="button" data-state="sealed" aria-pressed="false" aria-label="SEALED — inspect outgoing edges"><span class="bx">│ </span><span class="led" data-i="2">○</span><span class="bx"> SEALED    │</span></button>
+    <span class="bx stc" data-state="sealed">└───────┬─────┘</span>
+            <span class="arw" data-edge="keychg">│</span> <span class="wrn" data-edge="keychg">key change</span>
+            <span class="arw" data-edge="keychg">▼</span>
+       <span class="wrn stc" data-state="unverified">┏━━━━━━━━━━━━━━┓</span>
+       <button class="st wrn" type="button" data-state="unverified" aria-pressed="false" aria-label="UNVERIFIED — sends blocked, inspect outgoing edges">┃ ! UNVERIFIED ┃</button>
+       <span class="wrn stc" data-state="unverified">┃ sends blocked┃</span>
+       <span class="wrn stc" data-state="unverified">┗━━━━━━━━┳━━━━━┛</span>
+                <span class="arw" data-edge="sasback">│</span> <span class="lbl" data-edge="sasback">sas match</span>
+                <span class="arw" data-edge="sasback">▼</span>
+    <span class="bx stc" data-state="verified">┌─────────────┐</span>
+    <button class="st" type="button" data-state="verified" aria-pressed="false" aria-label="VERIFIED — inspect outgoing edges"><span class="bx">│ </span><span class="led on" data-i="3">●</span><span class="bx"> VERIFIED  │</span></button>
+    <span class="bx stc" data-state="verified">└───────┬─────┘</span>
+            <span class="arw" data-edge="wipe">│</span> <span class="lbl" data-edge="wipe">chat.wipe</span>
+            <span class="arw" data-edge="wipe">▼</span>
+    <span class="bx stc" data-state="wiped">┌─────────────┐</span>
+    <button class="st" type="button" data-state="wiped" aria-pressed="false" aria-label="WIPED — inspect outgoing edges"><span class="bx">│ </span><span class="led">○</span><span class="bx"> WIPED     │</span></button>
+    <span class="bx stc" data-state="wiped">└───────┬─────┘</span>
+            <span class="arw" data-edge="deny">│</span> <span class="den" data-edge="deny">contact.deny</span>
+            <span class="arw" data-edge="deny">│</span> <span class="den" data-edge="deny">· any state</span>
+            <span class="den" data-edge="deny">▼</span>
+    <span class="den stc" data-state="denied" data-edge="deny">┌┄┄┄┄┄┄┄┄┄┄┄┄┄┐</span>
+    <button class="st den" type="button" data-state="denied" data-edge="deny" aria-pressed="false" aria-label="DENIED — terminal state, no outgoing edges">┆ × DENIED    ┆</button>
+    <span class="den stc" data-state="denied" data-edge="deny">└┄┄┄┄┄┄┄┄┄┄┄┄┄┘</span>
+      <span class="dnn" data-edge="deny">terminal · no un-deny</span>
+
+    <span class="dim">○ idle   ● active   click inspects</span>
+</pre>
+    </div>
+  </figure>
+
+  <section class="inspect" aria-label="Edge inspection and transition register">
+    <div class="readout" id="edge-read" role="status" aria-live="polite"></div>
+    <div class="log" aria-label="Transition register">
+      <div class="log-h">transition register</div>
+      <div class="log-body" id="log-body"></div>
+    </div>
+  </section>
+
+  <section class="spec" aria-label="State and transition reference">
+    <div class="card">
+      <div class="hd2">states</div>
+      <ul>
+        <li><span class="s">INVITE</span><span class="d">link issued, no keys yet</span></li>
+        <li><span class="s">HANDSHAKE</span><span class="d">noise_xx in flight</span></li>
+        <li class="hot"><span class="s">SEALED</span><span class="d">transport live, trust off</span></li>
+        <li class="hot"><span class="s">VERIFIED</span><span class="d">sas matched, trusted</span></li>
+        <li class="warn"><span class="s">UNVERIFIED</span><span class="d">key changed, sends blocked</span></li>
+        <li><span class="s">WIPED</span><span class="d">history destroyed, keys kept</span></li>
+        <li class="term"><span class="s">DENIED</span><span class="d">absorbing, no un-deny</span></li>
+      </ul>
+    </div>
+    <div class="card">
+      <div class="hd2">edges · hover to trace</div>
+      <ul>
+        <li data-edge="link"><span class="e">INVITE <span class="x">──▶</span> HANDSHAKE</span><span class="lbl">cinder:// link</span></li>
+        <li data-edge="noise"><span class="e">HANDSHAKE <span class="x">══▶</span> SEALED</span><span class="lbl">noise_xx · 3 flights</span></li>
+        <li data-edge="sas"><span class="e">SEALED <span class="x">──▶</span> VERIFIED</span><span class="lbl">/sas match</span></li>
+        <li data-edge="rekey"><span class="e">SEALED <span class="x">◀─┐</span> SEALED</span><span class="lbl">rekey (loop)</span></li>
+        <li data-edge="keychg"><span class="e wrn">SEALED <span class="x">──▶</span> UNVERIFIED</span><span class="lbl">key change · sends blocked</span></li>
+        <li data-edge="sasback"><span class="e">UNVERIFIED <span class="x">──▶</span> VERIFIED</span><span class="lbl">sas match</span></li>
+        <li data-edge="wipe"><span class="e">VERIFIED <span class="x">──▶</span> WIPED</span><span class="lbl">chat.wipe</span></li>
+        <li data-edge="deny"><span class="e den">any <span class="x">──▶</span> DENIED</span><span class="lbl">contact.deny · terminal</span></li>
+      </ul>
+    </div>
+  </section>
+
+  <p class="foot">
+    <b>notes</b> — hand-set schematic · every wire measured in columns ·
+    no emoji · box-drawing glyphs only · state boxes are buttons,
+    Enter/Space inspects, Esc resets · marker animation is
+    prefers-reduced-motion gated
+  </p>
+
+</main>
+
+<script>
+(() => {
+  const $ = (s, r = document) => [...r.querySelectorAll(s)];
+  const prm = matchMedia('(prefers-reduced-motion: reduce)');
+
+  /* ---------- transition register ---------- */
+  const logBody = document.getElementById('log-body');
+  let tickN = 0;
+  const appendLog = (cls, tag, html) => {
+    if (!logBody) return;
+    const div = document.createElement('div');
+    div.className = 'll ' + cls;
+    div.innerHTML = `<span class="t">${tag}</span>${html}`;
+    logBody.appendChild(div);
+    while (logBody.children.length > 24) logBody.firstChild.remove();
+    logBody.scrollTop = logBody.scrollHeight;
+  };
+  const stepLog = (a, arrow, b, note) =>
+    appendLog('step', 't+' + String(++tickN).padStart(2, '0'),
+      `${a} <span class="a">${arrow}</span> ${b} <span class="x">· ${note}</span>`);
+
+  /* ---------- edge inspection ---------- */
+  const EDGES = {                       /* outgoing edge set per state   */
+    invite:    ['link', 'deny'],
+    handshake: ['noise', 'deny'],
+    sealed:    ['rekey', 'sas', 'keychg', 'deny'],
+    unverified:['sasback', 'deny'],
+    verified:  ['wipe', 'deny'],
+    wiped:     ['deny'],
+    denied:    []
+  };
+  const OUT = {                         /* readout rows: arrow, to, via  */
+    link:    ['──▶', 'handshake',  'cinder:// link'],
+    noise:   ['══▶', 'sealed',     'noise_xx · 3 flights'],
+    rekey:   ['──▶', 'sealed',     'rekey · self-loop'],
+    sas:     ['──▶', 'verified',   '/sas match'],
+    keychg:  ['──▶', 'unverified', 'key change · sends blocked'],
+    sasback: ['──▶', 'verified',   'sas match'],
+    wipe:    ['──▶', 'wiped',      'chat.wipe'],
+    deny:    ['──▶', 'denied',     'contact.deny · terminal']
+  };
+  const readout = document.getElementById('edge-read');
+  let sel = null;
+
+  const applySel = () => {
+    for (const el of $('[data-edge].hot')) el.classList.remove('hot');
+    for (const el of $('[data-state].sel')) el.classList.remove('sel');
+    if (!sel) return;
+    for (const el of $(`[data-state="${sel}"]`)) el.classList.add('sel');
+    for (const e of EDGES[sel] || [])
+      for (const el of $(`[data-edge="${e}"]`)) el.classList.add('hot');
+  };
+  const renderReadout = () => {
+    if (!readout) return;
+    let inner;
+    if (!sel) {
+      inner = '<span class="v">· · ·</span><span class="k">edges</span>' +
+              '<span class="v">click a state · enter/space inspects · esc resets</span>';
+    } else {
+      const es = (EDGES[sel] || []).map(e => OUT[e]);
+      inner = `<span class="v"><b>${sel}</b></span><span class="k">edges ${es.length || '0'}</span>` +
+        (es.length
+          ? '<span class="v">' + es.map(([a, to, via]) =>
+              `${a} <b>${to}</b> <i>· ${via}</i>`).join(' <s>│</s> ') + '</span>'
+          : '<span class="v"><span class="nul">terminal</span> <i>· no outgoing edges</i></span>');
+    }
+    readout.innerHTML = '<span class="k">inspect</span>' + inner;
+  };
+  const select = s => {
+    sel = (sel === s) ? null : s;
+    applySel();
+    for (const b of $('.st'))
+      b.setAttribute('aria-pressed', String(b.dataset.state === sel));
+    renderReadout();
+    if (sel)
+      appendLog('sel', 'sel',
+        `inspect <b>${sel}</b> <span class="x">· ${EDGES[sel].length} out-edges</span>`);
+  };
+  const reset = () => {
+    if (!sel) return;
+    sel = null;
+    applySel();
+    for (const b of $('.st')) b.setAttribute('aria-pressed', 'false');
+    renderReadout();
+  };
+
+  for (const pre of $('pre.fsm, pre.rail'))
+    pre.addEventListener('click', e => {
+      const t = e.target.closest('[data-state]');
+      t ? select(t.dataset.state) : reset();
+    });
+  document.addEventListener('keydown', e => { if (e.key === 'Escape') reset(); });
+
+  /* spec card rows trace their edge in the schematic on hover */
+  for (const li of $('.spec li[data-edge]')) {
+    li.addEventListener('mouseenter', () => {
+      for (const el of $(`[data-edge="${li.dataset.edge}"]`)) el.classList.add('hot');
+    });
+    li.addEventListener('mouseleave', applySel);
+  }
+
+  /* ---------- marker stepping ---------- */
+  const leds = $('.led[data-i]');
+  const PATH = [
+    ['invite',    '──▶', 'handshake', 'cinder:// link'],
+    ['handshake', '══▶', 'sealed',    'noise_xx · 3 flights'],
+    ['sealed',    '──▶', 'verified',  '/sas match']
+  ];
+  let cur = 0, prev = -1, timer = null, visible = false;
+  const paint = () => {
+    for (const l of leds) {
+      const on = +l.dataset.i === cur;
+      l.classList.toggle('on', on);
+      l.textContent = on ? '●' : '○';
+    }
+  };
+  const step = () => {
+    if (prev >= 0) {
+      if (cur === 0 && prev === 3)
+        appendLog('rst', '···', '<span class="x">cycle reset · re-enter invite</span>');
+      else { const [a, ar, b, n] = PATH[prev]; stepLog(a, ar, b, n); }
+    }
+    paint();
+    prev = cur;
+    cur = (cur + 1) % 4;
+  };
+  const park = () => { cur = 3; prev = -1; paint(); };
+
+  const start = () => {
+    if (timer || prm.matches || !visible || document.hidden) return;
+    timer = setInterval(step, 1100);
+  };
+  const stop = () => { clearInterval(timer); timer = null; };
+
+  if ('IntersectionObserver' in window) {
+    const io = new IntersectionObserver(es => {
+      visible = es.some(x => x.isIntersecting);
+      visible ? start() : stop();
+    }, { threshold: .1 });
+    for (const id of ['fsm', 'rail']) {
+      const el = document.getElementById(id);
+      if (el) io.observe(el);
+    }
+  } else visible = true;
+
+  document.addEventListener('visibilitychange',
+    () => document.hidden ? stop() : start());
+
+  const onPrm = () => {
+    if (prm.matches) {
+      stop(); park();
+      appendLog('prm', 'prm', '<span class="x">marker parked · prefers-reduced-motion</span>');
+    } else start();
+  };
+  prm.addEventListener ? prm.addEventListener('change', onPrm)
+                     : prm.addListener(onPrm);
+
+  renderReadout();
+  if (prm.matches) {
+    park();
+    appendLog('prm', 'prm', '<span class="x">marker parked · prefers-reduced-motion</span>');
+  } else {
+    step();
+    start();
+  }
+})();
+</script>
+</body>
+</html>

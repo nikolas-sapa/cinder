@@ -14,11 +14,11 @@ copyBtn.addEventListener("click", async () => {
     ta.remove();
   }
   copyBtn.classList.add("copied");
-  copyBtn.querySelector(".copy-label").textContent = "copied";
+  copyBtn.querySelector(".cc-l").textContent = "[ ✓ copied ]";
   setTimeout(() => {
     copyBtn.classList.remove("copied");
-    copyBtn.querySelector(".copy-label").textContent = "copy";
-  }, 1600);
+    copyBtn.querySelector(".cc-l").textContent = "[ copy ]";
+  }, 1500);
 });
 
 const io = new IntersectionObserver(
@@ -302,9 +302,6 @@ if (transcript && input) {
       input.focus();
     };
     kc.addEventListener("click", press);
-    kc.addEventListener("keydown", (e) => {
-      if (e.key === "Enter" || e.key === " ") { e.preventDefault(); press(); }
-    });
   });
   loadPeer("eidolon");
 }
@@ -461,13 +458,13 @@ function attachFlood(btn){
       return Math.min(1,Math.max(0,(E-x)/10));
     },(v,t,x,y)=>{
       if(v>t)return fill;
-      if(v*.45>t)return halo;
-      if(h2d(x,y)<.05)return '#26292F';
+      if(v*.45>t)return h2d(x,y,5)<.14?'#FFB224':halo;
+      if(h2d(x,y)<.045)return '#26292F';
       return null;
     });
   }
   function step(){
-    s+=(tgt-s)*.14;
+    s+=(tgt-s)*.18;
     if(Math.abs(tgt-s)<.004)s=tgt;
     draw();
     if(s!==tgt)raf=requestAnimationFrame(step);else raf=null;
@@ -477,10 +474,13 @@ function attachFlood(btn){
     if(PRM.matches){s=v;draw();return;}
     if(!raf)raf=requestAnimationFrame(step);
   }
+  const hot=()=>btn.matches(':hover')||document.activeElement===btn;
   btn.addEventListener('mouseenter',()=>go(1));
   btn.addEventListener('mouseleave',()=>go(0));
   btn.addEventListener('focus',()=>go(1));
   btn.addEventListener('blur',()=>go(0));
+  btn.addEventListener('pointerdown',()=>go(.85));
+  btn.addEventListener('pointerup',()=>go(hot()?1:0));
   draw();
 }
 document.querySelectorAll('.btn-primary[data-fill]').forEach(attachFlood);
@@ -1683,99 +1683,6 @@ if (reduced) warmup(STATIC_T, 90);
 start();
 })();
 
-/* ---------- ascii map packet pulse ---------- */
-(function(){
-  "use strict";
-  var pkt = document.getElementById("pkt");
-  if (!pkt) return;
-  var prm = matchMedia("(prefers-reduced-motion: reduce)");
-  var wide = matchMedia("(min-width: 44rem)");
-
-  var LEGS = [[18, 35], [59, 75]];
-  var STEP_MS = 60, HOLD_MS = 450, REST_MS = 1400;
-  var leg = 0, col = LEGS[0][0], timer = null;
-  function place(){
-    pkt.style.left = col + "ch";
-  }
-  function tick(){
-    var range = LEGS[leg];
-    col += 1;
-    if (col > range[1]){
-      pkt.classList.remove("on");
-      if (leg === 0){
-        leg = 1; col = LEGS[1][0];
-        timer = setTimeout(function(){ pkt.classList.add("on"); place(); arm(); }, HOLD_MS);
-      } else {
-        leg = 0; col = LEGS[0][0];
-        timer = setTimeout(function(){ pkt.classList.add("on"); place(); arm(); }, REST_MS);
-      }
-      return;
-    }
-    place();
-    arm();
-  }
-  function arm(){ timer = setTimeout(tick, STEP_MS); }
-  function start(){
-    if (timer || prm.matches || !wide.matches) return;
-    col = LEGS[0][0]; leg = 0;
-    pkt.classList.add("on");
-    place();
-    arm();
-  }
-  function stop(){
-    if (timer){ clearTimeout(timer); timer = null; }
-    pkt.classList.remove("on");
-  }
-  function gate(){ (prm.matches || !wide.matches) ? stop() : start(); }
-  prm.addEventListener("change", gate);
-  wide.addEventListener("change", gate);
-  document.addEventListener("visibilitychange", function(){
-    if (document.hidden) stop(); else gate();
-  });
-  gate();
-})();
-
-/* ---------- fsm marker stepping ---------- */
-(function(){
-  var leds = [].slice.call(document.querySelectorAll('pre.fsm .led[data-i], pre.rail .led[data-i]'));
-  if (!leds.length) return;
-  var STATES = ['invite','handshake','sealed','verified'];
-  var stateEl = document.getElementById('fsmState');
-  var mq = matchMedia('(prefers-reduced-motion: reduce)');
-  if (mq.matches) return;
-  var cur = 0;
-  var tick = function(){
-    for (var i = 0; i < leds.length; i++) {
-      var l = leds[i];
-      var on = +l.dataset.i === cur;
-      l.classList.toggle('on', on);
-      l.textContent = on ? '●' : '○';
-    }
-    if (stateEl) stateEl.textContent = STATES[cur];
-    cur = (cur + 1) % 4;
-  };
-  tick();
-  setInterval(tick, 1100);
-})();
-
-/* ---------- expandable spec ledger ---------- */
-(function(){
-  var rows = document.querySelectorAll('.ledger .row[aria-expanded]');
-  if (!rows.length) return;
-  function toggle(r){
-    r.setAttribute('aria-expanded', r.getAttribute('aria-expanded') === 'true' ? 'false' : 'true');
-  }
-  rows.forEach(function(r){
-    r.addEventListener('click', function(e){
-      if (e.target.closest('a')) return;
-      toggle(r);
-    });
-    r.addEventListener('keydown', function(e){
-      if (e.key === 'Enter' || e.key === ' '){ e.preventDefault(); toggle(r); }
-    });
-  });
-})();
-
 /* ---------- voice call card ---------- */
 (function(){
 'use strict';
@@ -2330,4 +2237,445 @@ function renderStatic(){
   seqDisp = seqTarget;
   drawSeq();
 }
+})();
+
+/* ---------- ascii topology board v2 — pov toggle + jitter ---------- */
+(function(){
+  "use strict";
+  var board = document.getElementById("board");
+  var btn = document.getElementById("viewBtn");
+  if (!board || !btn) return;
+
+  var pres = Array.prototype.slice.call(board.querySelectorAll("pre[data-v]"));
+  var prm = matchMedia("(prefers-reduced-motion: reduce)");
+  var wide = matchMedia("(min-width: 44rem)");
+  var inView = false, hovered = false, pov = "t";
+
+  /* ---------- pov toggle ---------- */
+  var vt = btn.querySelector(".vt"), vr = btn.querySelector(".vr");
+  function setPov(v){
+    pov = v;
+    board.dataset.pov = v;
+    pres.forEach(function(p){ p.hidden = p.dataset.v !== v; });
+    vt.classList.toggle("on", v === "t");
+    vr.classList.toggle("on", v === "r");
+    btn.setAttribute("aria-pressed", v === "r" ? "true" : "false");
+    gateAll();
+  }
+  btn.addEventListener("click", function(){ setPov(pov === "t" ? "r" : "t"); });
+  document.addEventListener("keydown", function(e){
+    if (e.key === "v" && !e.metaKey && !e.ctrlKey && !e.altKey){
+      var t = e.target;
+      if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable)) return;
+      setPov(pov === "t" ? "r" : "t");
+    }
+  });
+
+  /* ---------- packets ---------- */
+  // desktop wire rows: fwd row idx7 (top 10.5em), rev row idx8 (top 12em).
+  // fwd legs cols 18..34 / 59..74 ; rev legs (relay->peer relay->you) 74..60 / 34..19
+  var STEP_MS = 60, HOLD_MS = 450, REST_MS = 1500, TRAIL = 2;
+  function Packet(hEl, tEl, legs, phase){
+    this.h = hEl; this.t = tEl; this.legs = legs; this.phase = phase;
+    this.leg = 0; this.pos = 0; this.timer = null; this.started = false;
+  }
+  Packet.prototype.place = function(){
+    var p = this.pos, tr = p + (this.legs.dir > 0 ? -TRAIL : TRAIL);
+    this.h.style.left = p + "ch";
+    if (tr >= this.legs.ranges[this.leg][0] && tr <= this.legs.ranges[this.leg][1]){
+      this.t.style.left = tr + "ch";
+      this.t.classList.add("on");
+    } else this.t.classList.remove("on");
+  };
+  Packet.prototype.tick = function(){
+    var rg = this.legs.ranges[this.leg], dir = this.legs.dir;
+    this.pos += dir;
+    var done = dir > 0 ? this.pos > rg[1] : this.pos < rg[0];
+    if (done){
+      this.h.classList.remove("on"); this.t.classList.remove("on");
+      if (this.leg === 0){
+        this.leg = 1; this.pos = this.legs.ranges[1][dir > 0 ? 0 : 1];
+        this.arm(HOLD_MS);
+      } else {
+        this.leg = 0; this.pos = this.legs.ranges[0][dir > 0 ? 0 : 1];
+        this.started = false;                 // full cycle done
+        this.arm(REST_MS + this.phase);
+      }
+      return;
+    }
+    this.place();
+    this.arm(STEP_MS);
+  };
+  Packet.prototype.arm = function(ms){
+    var self = this;
+    this.timer = setTimeout(function(){
+      self.h.classList.add("on"); self.place(); self.tick();
+    }, ms);
+  };
+  Packet.prototype.start = function(){
+    if (this.timer) return;
+    if (!this.started){
+      this.leg = 0;
+      this.pos = this.legs.ranges[0][this.legs.dir > 0 ? 0 : 1];
+      this.started = true;
+    }
+    this.h.classList.add("on"); this.place(); this.arm(this.phase && !this.ran ? (this.ran = true, this.phase) : 0);
+  };
+  Packet.prototype.stop = function(){
+    if (this.timer){ clearTimeout(this.timer); this.timer = null; }
+    this.h.classList.remove("on"); this.t.classList.remove("on");
+  };
+
+  var pkFwd = new Packet(
+    document.getElementById("pkH"), document.getElementById("pkT"),
+    { dir: 1, ranges: [[18, 34], [59, 74]] }, 0);
+  var pkRev = new Packet(
+    document.getElementById("rkH"), document.getElementById("rkT"),
+    { dir: -1, ranges: [[60, 74], [19, 34]] }, 700);
+
+  /* ---------- instrument readouts (demo values) ---------- */
+  var S = { rtt: 24, q: 3, rx: 1.0, tx: 0.4, up: 41 };
+  function fmtUp(s){
+    var m = Math.floor(s / 60), ss = s % 60;
+    return (m < 10 ? "0" : "") + m + ":" + (ss < 10 ? "0" : "") + ss;
+  }
+  function clamp(v, lo, hi){ return Math.min(hi, Math.max(lo, v)); }
+  function tickReadouts(){
+    S.rtt = clamp(Math.round(S.rtt + (Math.random() - 0.5) * 5), 17, 39);
+    S.q = clamp(S.q + (Math.random() < 0.3 ? (Math.random() < 0.5 ? -1 : 1) : 0), 2, 6);
+    S.rx = clamp(S.rx + (Math.random() - 0.5) * 0.3, 0.6, 1.5);
+    S.tx = clamp(S.tx + (Math.random() - 0.5) * 0.2, 0.2, 0.7);
+    S.up += 1;
+    set(".j-rtt", String(S.rtt));
+    set(".j-q", String(S.q));
+    set(".j-rx", S.rx.toFixed(1));
+    set(".j-tx", S.tx.toFixed(1));
+    set(".j-upt", fmtUp(S.up));
+  }
+  function set(sel, txt){
+    var els = board.querySelectorAll(sel);
+    for (var i = 0; i < els.length; i++) els[i].textContent = txt;
+  }
+  var ledOn = true;
+  function tickLed(){
+    ledOn = !ledOn;
+    var els = board.querySelectorAll(".j-led");
+    for (var i = 0; i < els.length; i++)
+      els[i].className = ledOn ? "e j-led" : "d j-led";
+  }
+
+  /* ---------- master gate ---------- */
+  var roT = null, ledT = null;
+  function animated(){ return inView && !document.hidden && !prm.matches; }
+  function gateAll(){
+    var run = animated();
+    var pkRun = run && wide.matches && pov === "t" && !hovered;
+    if (run){
+      if (!roT) roT = setInterval(tickReadouts, 1400);
+      if (!ledT) ledT = setInterval(tickLed, 900);
+    } else {
+      if (roT){ clearInterval(roT); roT = null; }
+      if (ledT){ clearInterval(ledT); ledT = null; }
+    }
+    pkRun ? (pkFwd.start(), pkRev.start()) : (pkFwd.stop(), pkRev.stop());
+  }
+
+  var io = new IntersectionObserver(function(es){
+    inView = es[0].isIntersecting;
+    gateAll();
+  }, { threshold: 0.15 });
+  io.observe(board);
+
+  board.addEventListener("mouseenter", function(){ hovered = true; gateAll(); });
+  board.addEventListener("mouseleave", function(){ hovered = false; gateAll(); });
+  document.addEventListener("visibilitychange", gateAll);
+  prm.addEventListener("change", gateAll);
+  wide.addEventListener("change", gateAll);
+  gateAll();
+})();
+
+/* ---------- session fsm v2 — edge inspection + register ---------- */
+(() => {
+  const $ = (s, r = document) => [...r.querySelectorAll(s)];
+  const prm = matchMedia('(prefers-reduced-motion: reduce)');
+
+  /* ---------- transition register ---------- */
+  const logBody = document.getElementById('log-body');
+  let tickN = 0;
+  const appendLog = (cls, tag, html) => {
+    if (!logBody) return;
+    const div = document.createElement('div');
+    div.className = 'll ' + cls;
+    div.innerHTML = `<span class="t">${tag}</span>${html}`;
+    logBody.appendChild(div);
+    while (logBody.children.length > 24) logBody.firstChild.remove();
+    logBody.scrollTop = logBody.scrollHeight;
+  };
+  const stepLog = (a, arrow, b, note) =>
+    appendLog('step', 't+' + String(++tickN).padStart(2, '0'),
+      `${a} <span class="a">${arrow}</span> ${b} <span class="x">· ${note}</span>`);
+
+  /* ---------- edge inspection ---------- */
+  const EDGES = {                       /* outgoing edge set per state   */
+    invite:    ['link', 'deny'],
+    handshake: ['noise', 'deny'],
+    sealed:    ['rekey', 'sas', 'keychg', 'deny'],
+    unverified:['sasback', 'deny'],
+    verified:  ['wipe', 'deny'],
+    wiped:     ['deny'],
+    denied:    []
+  };
+  const OUT = {                         /* readout rows: arrow, to, via  */
+    link:    ['──▶', 'handshake',  'cinder:// link'],
+    noise:   ['══▶', 'sealed',     'noise_xx · 3 flights'],
+    rekey:   ['──▶', 'sealed',     'rekey · self-loop'],
+    sas:     ['──▶', 'verified',   '/sas match'],
+    keychg:  ['──▶', 'unverified', 'key change · sends blocked'],
+    sasback: ['──▶', 'verified',   'sas match'],
+    wipe:    ['──▶', 'wiped',      'chat.wipe'],
+    deny:    ['──▶', 'denied',     'contact.deny · terminal']
+  };
+  const readout = document.getElementById('edge-read');
+  let sel = null;
+
+  const applySel = () => {
+    for (const el of $('[data-edge].hot')) el.classList.remove('hot');
+    for (const el of $('[data-state].sel')) el.classList.remove('sel');
+    if (!sel) return;
+    for (const el of $(`[data-state="${sel}"]`)) el.classList.add('sel');
+    for (const e of EDGES[sel] || [])
+      for (const el of $(`[data-edge="${e}"]`)) el.classList.add('hot');
+  };
+  const renderReadout = () => {
+    if (!readout) return;
+    let inner;
+    if (!sel) {
+      inner = '<span class="v">· · ·</span><span class="k">edges</span>' +
+              '<span class="v">click a state · enter/space inspects · esc resets</span>';
+    } else {
+      const es = (EDGES[sel] || []).map(e => OUT[e]);
+      inner = `<span class="v"><b>${sel}</b></span><span class="k">edges ${es.length || '0'}</span>` +
+        (es.length
+          ? '<span class="v">' + es.map(([a, to, via]) =>
+              `${a} <b>${to}</b> <i>· ${via}</i>`).join(' <s>│</s> ') + '</span>'
+          : '<span class="v"><span class="nul">terminal</span> <i>· no outgoing edges</i></span>');
+    }
+    readout.innerHTML = '<span class="k">inspect</span>' + inner;
+  };
+  const select = s => {
+    sel = (sel === s) ? null : s;
+    applySel();
+    for (const b of $('.st'))
+      b.setAttribute('aria-pressed', String(b.dataset.state === sel));
+    renderReadout();
+    if (sel)
+      appendLog('sel', 'sel',
+        `inspect <b>${sel}</b> <span class="x">· ${EDGES[sel].length} out-edges</span>`);
+  };
+  const reset = () => {
+    if (!sel) return;
+    sel = null;
+    applySel();
+    for (const b of $('.st')) b.setAttribute('aria-pressed', 'false');
+    renderReadout();
+  };
+
+  for (const pre of $('pre.fsm, pre.rail'))
+    pre.addEventListener('click', e => {
+      const t = e.target.closest('[data-state]');
+      t ? select(t.dataset.state) : reset();
+    });
+  document.addEventListener('keydown', e => { if (e.key === 'Escape') reset(); });
+
+  /* spec card rows trace their edge in the schematic on hover */
+  for (const li of $('.spec li[data-edge]')) {
+    li.addEventListener('mouseenter', () => {
+      for (const el of $(`[data-edge="${li.dataset.edge}"]`)) el.classList.add('hot');
+    });
+    li.addEventListener('mouseleave', applySel);
+  }
+
+  /* ---------- marker stepping ---------- */
+  const leds = $('.led[data-i]');
+  const PATH = [
+    ['invite',    '──▶', 'handshake', 'cinder:// link'],
+    ['handshake', '══▶', 'sealed',    'noise_xx · 3 flights'],
+    ['sealed',    '──▶', 'verified',  '/sas match']
+  ];
+  let cur = 0, prev = -1, timer = null, visible = false;
+  const paint = () => {
+    for (const l of leds) {
+      const on = +l.dataset.i === cur;
+      l.classList.toggle('on', on);
+      l.textContent = on ? '●' : '○';
+    }
+  };
+  const step = () => {
+    if (prev >= 0) {
+      if (cur === 0 && prev === 3)
+        appendLog('rst', '···', '<span class="x">cycle reset · re-enter invite</span>');
+      else { const [a, ar, b, n] = PATH[prev]; stepLog(a, ar, b, n); }
+    }
+    paint();
+    prev = cur;
+    cur = (cur + 1) % 4;
+  };
+  const park = () => { cur = 3; prev = -1; paint(); };
+
+  const start = () => {
+    if (timer || prm.matches || !visible || document.hidden) return;
+    timer = setInterval(step, 1100);
+  };
+  const stop = () => { clearInterval(timer); timer = null; };
+
+  if ('IntersectionObserver' in window) {
+    const io = new IntersectionObserver(es => {
+      visible = es.some(x => x.isIntersecting);
+      visible ? start() : stop();
+    }, { threshold: .1 });
+    for (const id of ['fsm', 'rail']) {
+      const el = document.getElementById(id);
+      if (el) io.observe(el);
+    }
+  } else visible = true;
+
+  document.addEventListener('visibilitychange',
+    () => document.hidden ? stop() : start());
+
+  const onPrm = () => {
+    if (prm.matches) {
+      stop(); park();
+      appendLog('prm', 'prm', '<span class="x">marker parked · prefers-reduced-motion</span>');
+    } else start();
+  };
+  prm.addEventListener ? prm.addEventListener('change', onPrm)
+                     : prm.addListener(onPrm);
+
+  renderReadout();
+  if (prm.matches) {
+    park();
+    appendLog('prm', 'prm', '<span class="x">marker parked · prefers-reduced-motion</span>');
+  } else {
+    step();
+    start();
+  }
+})();
+
+/* ---------- mega footer v2 ---------- */
+(() => {
+  "use strict";
+  const footer = document.querySelector(".fm2");
+  const mq = window.matchMedia("(prefers-reduced-motion: reduce)");
+
+  /* ---- uptime counter (fake boot offset, labelled demo) ---- */
+  const upEl = document.getElementById("upt");
+  const upBase = 4*3600 + 17*60 + 33;
+  const t0 = Date.now();
+  const p2 = n => String(n).padStart(2, "0");
+  function tickUptime(){
+    const s = upBase + Math.floor((Date.now() - t0) / 1000);
+    upEl.textContent = p2(Math.floor(s/3600)) + ":" + p2(Math.floor(s/60)%60) + ":" + p2(s%60);
+  }
+
+  /* ---- starfield: two pre layers, rows rotated left ---- */
+  const host = document.getElementById("sf");
+  const farEl = document.getElementById("sfFar");
+  const nearEl = document.getElementById("sfNear");
+  const ROWS = 5;
+  function makeRows(cols, density, chars){
+    const rows = [];
+    for(let r = 0; r < ROWS; r++){
+      let s = "";
+      for(let c = 0; c < cols; c++){
+        s += Math.random() < density
+          ? chars[Math.floor(Math.random() * chars.length)] : " ";
+      }
+      rows.push(s);
+    }
+    return rows;
+  }
+  let far = [], near = [], farAcc = 0, nearAcc = 0;
+  function buildStars(){
+    const fs = parseFloat(getComputedStyle(farEl).fontSize);
+    const cols = Math.ceil(host.clientWidth / (fs * 0.6)) + 30;
+    far  = makeRows(cols, 0.06,  "······.+");
+    near = makeRows(cols, 0.016, "*+");
+    farEl.textContent  = far.join("\n");
+    nearEl.textContent = near.join("\n");
+  }
+  const rot = rows => rows.map(s => s.slice(1) + s[0]);
+  function drift(){
+    farAcc += 0.16; nearAcc += 0.55;
+    let dirty = false;
+    while(farAcc >= 1){ far = rot(far); farAcc -= 1; dirty = true; }
+    if(dirty){ farEl.textContent = far.join("\n"); dirty = false; }
+    while(nearAcc >= 1){ near = rot(near); nearAcc -= 1; dirty = true; }
+    if(dirty) nearEl.textContent = near.join("\n");
+  }
+
+  /* ---- gate: intersecting && !hidden && motion-ok → .fm-live + timers ---- */
+  let inView = false, live = false, timers = [];
+  function start(){
+    if(live) return;
+    live = true;
+    footer.classList.add("fm-live");
+    timers.push(setInterval(drift, 140), setInterval(tickUptime, 1000));
+    tickUptime();
+  }
+  function stop(){
+    if(!live) return;
+    live = false;
+    footer.classList.remove("fm-live");
+    timers.forEach(clearInterval);
+    timers = [];
+  }
+  function gate(){
+    (inView && !document.hidden && !mq.matches) ? start() : stop();
+  }
+  if("IntersectionObserver" in window){
+    new IntersectionObserver(es => {
+      inView = es[0].isIntersecting; gate();
+    }, {threshold: 0.02}).observe(footer);
+  } else { inView = true; }
+  document.addEventListener("visibilitychange", gate);
+  if(mq.addEventListener) mq.addEventListener("change", gate);
+  else mq.addListener(gate);
+
+  buildStars();
+  tickUptime();
+  let rsz;
+  window.addEventListener("resize", () => {
+    clearTimeout(rsz);
+    rsz = setTimeout(buildStars, 200);
+  });
+})();
+
+/* ---------- spec ledger v2 ---------- */
+(function(){
+  "use strict";
+  var rows=[].slice.call(document.querySelectorAll(".sl .row"));
+  var allBtn=document.getElementById("allBtn");
+
+  function setRow(row,open){
+    var head=row.querySelector(".head");
+    var body=row.querySelector(".body");
+    row.classList.toggle("open",open);
+    head.setAttribute("aria-expanded",open?"true":"false");
+    body.hidden=!open;
+  }
+
+  rows.forEach(function(row){
+    row.querySelector(".head").addEventListener("click",function(){
+      setRow(row,!row.classList.contains("open"));
+    });
+  });
+
+  allBtn.addEventListener("click",function(){
+    var open=allBtn.getAttribute("aria-pressed")!=="true";
+    allBtn.setAttribute("aria-pressed",open?"true":"false");
+    allBtn.setAttribute("aria-label",
+      (open?"collapse":"expand")+" all ledger entries");
+    allBtn.textContent=(open?"[-]":"[+]")+" all";
+    rows.forEach(function(r){setRow(r,open);});
+  });
 })();

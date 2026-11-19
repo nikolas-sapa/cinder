@@ -1,0 +1,444 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark">
+<title>cinder · ascii-map v2</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600&family=Inter:wght@400;500&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --ground:#0B0C0E;
+    --panel:#15171B;
+    --card:#101216;
+    --ink:#EDEDE8;
+    --muted:#9BA0A6;
+    --faint:#3D4249;
+    --line:#23262D;
+    --ember:#FFB224;
+    --ember-dim:#5A4114;
+    --danger:#FF6B5E;
+    --dim:#5A616B;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;padding:0}
+  body{
+    background:var(--ground);
+    color:var(--muted);
+    font:400 15px/1.6 "Inter",system-ui,sans-serif;
+    -webkit-font-smoothing:antialiased;
+    min-height:100vh;
+    padding:12vh 20px 96px;
+  }
+  ::selection{background:var(--ember-dim);color:var(--ink)}
+
+  .page-tag{
+    position:fixed;top:18px;left:22px;
+    font:500 11px/1 "JetBrains Mono",ui-monospace,Menlo,Consolas,monospace;
+    letter-spacing:.14em;text-transform:uppercase;
+    color:var(--ember-dim);
+  }
+
+  main{max-width:880px;margin:0 auto}
+
+  h1{
+    font-family:"Space Grotesk","Inter",sans-serif;
+    font-size:clamp(38px,5.6vw,58px);line-height:.95;
+    letter-spacing:-.02em;font-weight:600;text-transform:uppercase;
+    color:var(--ink);margin:0;
+  }
+  h1 .tick{color:var(--ember)}
+  .lede{margin-top:16px;color:var(--muted);max-width:56ch}
+  .lede code{
+    font-family:"JetBrains Mono",monospace;font-size:12px;color:var(--ink);
+    background:var(--panel);border:1px solid var(--line);
+    border-radius:3px;padding:1px 5px;
+  }
+  .lede kbd{
+    font-family:"JetBrains Mono",monospace;font-size:11px;color:var(--ember);
+    background:var(--card);border:1px solid var(--ember-dim);
+    border-radius:3px;padding:1px 5px;
+  }
+
+  /* ---- schematic board ---- */
+  .board{
+    position:relative;
+    margin-top:42px;
+    border:1px solid var(--line);
+    border-radius:10px;
+    background:
+      repeating-linear-gradient(0deg,rgba(255,255,255,.012) 0 1px,transparent 1px 3px),
+      var(--panel);
+    box-shadow:0 30px 80px rgba(0,0,0,.55),0 0 0 1px rgba(255,255,255,.02) inset;
+    padding:30px 34px 32px;
+    overflow-x:auto;
+  }
+  .screw{
+    position:absolute;font:400 11px/1 "JetBrains Mono",monospace;
+    color:var(--faint);user-select:none;
+  }
+  .screw.tl{top:9px;left:11px}
+  .screw.bl{bottom:9px;left:11px}
+  .screw.br{bottom:9px;right:11px}
+
+  .viewbtn{
+    position:absolute;top:8px;right:11px;
+    font:500 11px/1.2 "JetBrains Mono",ui-monospace,monospace;
+    letter-spacing:.06em;
+    color:var(--dim);background:var(--card);
+    border:1px solid var(--line);border-radius:3px;
+    padding:3px 7px;cursor:pointer;
+  }
+  .viewbtn:hover{border-color:var(--ember-dim);color:var(--muted)}
+  .viewbtn:focus-visible{outline:1px solid var(--ember);outline-offset:2px}
+  .viewbtn .vt,.viewbtn .vr{color:var(--faint);transition:color .15s}
+  .viewbtn .on{color:var(--ember)}
+
+  .art{position:relative;display:inline-block}
+
+  pre{
+    margin:0;
+    font:400 13px/1.5 "JetBrains Mono",ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+    letter-spacing:0;
+    white-space:pre;
+    color:var(--muted);
+    user-select:text;
+    font-variant-ligatures:none;
+    font-feature-settings:"liga" 0,"calt" 0;
+  }
+  pre[hidden]{display:none !important}
+  .m-mobile{display:none}
+
+  /* ---- ink colors ---- */
+  .e{color:var(--ember)}
+  .i{color:var(--ink)}
+  .m{color:var(--muted)}
+  .f{color:var(--faint)}
+  .d{color:var(--ember-dim)}
+  .g{color:var(--danger)}
+  .dd{color:var(--dim)}
+
+  /* ---- traveling packets (JS positions in ch units) ---- */
+  .pkt{
+    position:absolute;left:0;
+    pointer-events:none;
+    display:none;
+    font:inherit;
+  }
+  .pkt.head{color:var(--ember);text-shadow:0 0 9px rgba(255,178,36,.45)}
+  .pkt.trail{color:var(--ember-dim)}
+  .pkt.on{display:block}
+  .pkt.fwd{top:10.5em}
+  .pkt.rev{top:12em}
+
+  .keys{
+    margin-top:16px;
+    font:500 11px/1.5 "JetBrains Mono",ui-monospace,Menlo,Consolas,monospace;
+    letter-spacing:.08em;color:var(--ember-dim);text-align:center;
+  }
+  .keys b{color:var(--muted);font-weight:500}
+
+  .sr{
+    position:absolute;width:1px;height:1px;
+    overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap;
+  }
+
+  @media (prefers-reduced-motion:reduce){
+    .board{transition:none}
+    .pkt{display:none !important}
+    .viewbtn .vt,.viewbtn .vr{transition:none}
+  }
+  @media (max-width:44rem){
+    body{padding:14vh 14px 80px}
+    .board{padding:26px 14px 24px}
+    .viewbtn{top:6px}
+    .m-desktop,.pkt{display:none}
+    .m-mobile{display:block;font-size:clamp(8px,2.55vw,12px)}
+  }
+</style>
+</head>
+<body>
+
+<div class="page-tag">cinder / experiments / ascii-map v2</div>
+
+<main>
+  <h1>ciphertext<br>path<span class="tick">.</span></h1>
+  <p class="lede">what actually crosses the wire. peers handshake with
+  <code>noise_xx</code> end-to-end; the relay in the middle is a blind courier —
+  it routes opaque frames, keeps bounded mailboxes for offline peers, and never
+  holds a key. press <kbd>v</kbd> or the view chip to see what the relay sees.</p>
+
+  <section class="board" id="board" data-pov="t">
+    <span class="screw tl">+</span>
+    <button class="viewbtn" id="viewBtn" type="button" aria-pressed="false"
+      aria-label="Toggle relay point of view"
+      title="flip point of view (v)"><span class="vt on">transport</span>|<span class="vr">relay</span>&nbsp;v</button>
+    <span class="screw bl">+</span><span class="screw br">+</span>
+    <p class="sr">Topology diagram with two switchable views. Transport view:
+    YOU, peer-id 4d2e…f18c, runs a Noise_XX x25519 handshake to the blind
+    relay, which routes opaque ciphertext onward to PEER, peer-id 9c1f…aa07.
+    Relay view (press v): the same path as the relay sees it — anonymous
+    connections, frame sizes and timing deltas only; all payloads render as
+    unreadable dithered blocks. The relay keeps bounded mailboxes for offline
+    peers and stores no keys. Status readouts are demo values.</p>
+    <div class="art">
+      <pre class="m-desktop" data-v="t" aria-hidden="true"><span class="f">┌── </span><span class="e">fig·03 · ciphertext path</span> <span class="f">────────────────────────────────────────</span><span class="d"> view:transport · [v] </span><span class="f">┐</span>
+<span class="f">│</span> <span class="f">link</span> <span class="e j-led">●</span><span class="f"> up</span>     <span class="f">rtt</span> <span class="i j-rtt">24</span><span class="f">ms</span>   <span class="f">q</span> <span class="i j-q">3</span><span class="f">/64</span>   <span class="f">rx</span> <span class="i j-rx">1.0</span><span class="f">kB/s</span>      <span class="f">tx</span> <span class="i j-tx">0.4</span><span class="f">kB/s</span>    <span class="f">t+</span><span class="i j-upt">00:41</span>       <span class="d">demo</span>       <span class="f">│</span>
+<span class="f">│</span>                                                                                          <span class="f">│</span>
+<span class="f">│</span>   <span class="d">●</span> pin: peer static key <span class="d">╌╌╌╌╌┐</span>             invite: <span class="i">cinder://9c1f…aa07</span> · one-time <span class="d">╌┐</span>     <span class="f">│</span>
+<span class="f">│</span>                               <span class="d">│</span>                                                    <span class="d">│</span>     <span class="f">│</span>
+<span class="f">│</span>                               <span class="d">│</span>   <span class="f">┌─────────────────────┐</span>                          <span class="d">│</span>     <span class="f">│</span>
+<span class="f">│</span>  <span class="f">┌─────────────┐</span>              <span class="d">│</span>   <span class="f">│</span> <span class="e">●</span><span class="i"> BLIND RELAY</span>       <span class="f">│</span>                 <span class="f">┌────────┬────┐│</span>
+<span class="f">│</span>  <span class="f">│</span> <span class="e">●</span><span class="i"> YOU</span>       <span class="f">│</span>── noise_xx ──<span class="d">┬</span>──▶<span class="f">│</span> routes ciphertext   <span class="f">│</span>── ciphertext ──▶<span class="f">│</span> <span class="e">●</span><span class="i"> PEER</span>      <span class="f">││</span>
+<span class="f">│</span>  <span class="f">│</span> <span class="f">4d2e…f18c</span>   <span class="f">│</span>◀── x25519 ───────<span class="f">│</span> sees: <span class="g">░░▒▒▓</span> opaque  <span class="f">│</span>◀─── replies ────<span class="f">│</span> <span class="f">9c1f…aa07</span>   <span class="f">││</span>
+<span class="f">│</span>  <span class="f">└─────────────┘</span>                  <span class="f">└──────────┬──────────┘</span>                 <span class="f">└─────────────┘│</span>
+<span class="f">│</span>                                              <span class="f">│</span><span class="d"> queued</span>                                    <span class="f">│</span>
+<span class="f">│</span>   relay sees: timing · size · nothing else <span class="d">╌▶</span><span class="f">│</span>                                           <span class="f">│</span>
+<span class="f">│</span>                                   <span class="f">┌──────────┬─────────┐</span>                                 <span class="f">│</span>
+<span class="f">│</span>                                   <span class="f">│</span> <span class="e">●</span><span class="i"> MAILBOX</span><span class="f"> mbx·7e3d</span> <span class="f">│</span>                                 <span class="f">│</span>
+<span class="f">│</span>                                   <span class="f">│</span> <span class="e">▓▓▓</span><span class="f">░░░░░░░░░</span> 3/64  <span class="f">│</span>                                 <span class="f">│</span>
+<span class="f">│</span>                                   <span class="f">└────────────────────┘</span>                                 <span class="f">│</span>
+<span class="f">│▓▒··</span>                                                                                  <span class="f"> ░▒▓│</span>
+<span class="f">│</span>  ─<span class="f"> wire</span>   <span class="d">╌</span><span class="f"> callout</span>   <span class="e">●</span><span class="f"> endpoint</span>   <span class="g">▒</span><span class="f"> attacker-visible</span>           <span class="f">relay keeps no keys</span>      <span class="f">│</span>
+<span class="f">│</span>                                                                                          <span class="f">│</span>
+<span class="f">└──────────────────────────────────────────────────────────────────────────────────────────┘</span></pre>
+      <pre class="m-desktop" data-v="r" hidden aria-hidden="true"><span class="f">┌── </span><span class="e">fig·03 · ciphertext path</span> <span class="f">────────────────────────────────────────</span><span class="d"> view:relay-pov · [v] </span><span class="f">┐</span>
+<span class="f">│</span> <span class="f">link</span> <span class="e j-led">●</span><span class="f"> up</span>     <span class="f">rtt</span> <span class="i j-rtt">24</span><span class="f">ms</span>   <span class="f">q</span> <span class="i j-q">3</span><span class="f">/64</span>   <span class="f">rx</span> <span class="i j-rx">1.0</span><span class="f">kB/s</span>      <span class="f">tx</span> <span class="i j-tx">0.4</span><span class="f">kB/s</span>    <span class="f">t+</span><span class="i j-upt">00:41</span>       <span class="d">demo</span>       <span class="f">│</span>
+<span class="f">│</span>                                                                                          <span class="f">│</span>
+<span class="f">│</span>   <span class="d">●</span> metadata: Δt·size·dir <span class="d">╌╌╌╌┐</span>                    identities: none · keys: none  <span class="d">╌┐</span>     <span class="f">│</span>
+<span class="f">│</span>                               <span class="d">│</span>                                                    <span class="d">│</span>     <span class="f">│</span>
+<span class="f">│</span>                               <span class="d">│</span>   <span class="f">┌─────────────────────┐</span>                          <span class="d">│</span>     <span class="f">│</span>
+<span class="f">│</span>  <span class="f">┌─────────────┐</span>              <span class="d">│</span>   <span class="f">│</span> <span class="e">●</span><span class="i"> BLIND RELAY</span>       <span class="f">│</span>                 <span class="f">┌────────┬────┐│</span>
+<span class="f">│</span>  <span class="f">│</span> <span class="f">○</span><span class="i"> conn a</span>    <span class="f">│</span>─ Δt41ms·512B <span class="d">┬</span>──▶<span class="f">│</span> sees: Δt·len·dir    <span class="f">│</span>─ Δt9ms·512B ───▶<span class="f">│</span> <span class="f">○</span><span class="i"> conn b</span>    <span class="f">││</span>
+<span class="f">│</span>  <span class="f">│</span> <span class="g">░░▒▒▓</span>       <span class="f">│</span>◀── Δt63ms·512B ──<span class="f">│</span> fwd <span class="g">·░░▓▓</span> · no keys <span class="f">│</span>◀── Δt51ms·512B ─<span class="f">│</span> <span class="g">░░▒▒▓</span>       <span class="f">││</span>
+<span class="f">│</span>  <span class="f">└─────────────┘</span>                  <span class="f">└──────────┬──────────┘</span>                 <span class="f">└─────────────┘│</span>
+<span class="f">│</span>                                              <span class="f">│</span><span class="d"> queued</span>                                    <span class="f">│</span>
+<span class="f">│</span>   payload: 0B readable · envelope only     <span class="d">╌▶</span><span class="f">│</span>                                           <span class="f">│</span>
+<span class="f">│</span>                                   <span class="f">┌──────────┬─────────┐</span>                                 <span class="f">│</span>
+<span class="f">│</span>                                   <span class="f">│</span> <span class="f">○</span><span class="i"> MAILBOX</span> sealed   <span class="f">│</span>                                 <span class="f">│</span>
+<span class="f">│</span>                                   <span class="f">│</span> <span class="g">░░▒▒▓</span> · opaque     <span class="f">│</span>                                 <span class="f">│</span>
+<span class="f">│</span>                                   <span class="f">└────────────────────┘</span>                                 <span class="f">│</span>
+<span class="f">│▓▒··</span>                                                                                  <span class="f"> ░▒▓│</span>
+<span class="f">│</span>  Δt<span class="f"> timing·</span> 512B<span class="f"> size</span>   <span class="g">░▒▓</span><span class="f"> unreadable</span>   <span class="f">○ anonymous</span>            <span class="f">relay keeps no keys</span>      <span class="f">│</span>
+<span class="f">│</span>                                                                                          <span class="f">│</span>
+<span class="f">└──────────────────────────────────────────────────────────────────────────────────────────┘</span></pre>
+      <pre class="m-mobile" data-v="t" aria-hidden="true"><span class="f">┌── </span><span class="e">ciphertext path</span> <span class="f">─────────────────────────┐</span>
+<span class="f">│</span> transport view · blind relay   <span class="d">[v]:relay</span>   <span class="f">│</span>
+<span class="f">│</span> <span class="e j-led">●</span> <span class="f">rtt</span> <span class="i j-rtt">24</span><span class="f">ms · q</span> <span class="i j-q">3</span><span class="f">/64</span>                    <span class="d">demo</span><span class="f">│</span>
+<span class="f">│</span>                                            <span class="f">│</span>
+<span class="f">│</span>  <span class="f">┌───────────┐</span>                             <span class="f">│</span>
+<span class="f">│</span>  <span class="f">│</span> <span class="e">●</span><span class="i"> YOU</span>     <span class="f">│</span>                             <span class="f">│</span>
+<span class="f">│</span>  <span class="f">│</span> <span class="f">4d2e…f18c</span> <span class="f">│</span>                             <span class="f">│</span>
+<span class="f">│</span>  <span class="f">└─────┬─────┘</span>                             <span class="f">│</span>
+<span class="f">│</span>        <span class="f">│</span> noise_xx · e2e                    <span class="f">│</span>
+<span class="f">│</span>        <span class="f">▼</span>                                   <span class="f">│</span>
+<span class="f">│</span>  <span class="f">┌─────┬─────────────┐</span>                     <span class="f">│</span>
+<span class="f">│</span>  <span class="f">│</span> <span class="e">●</span><span class="i"> BLIND RELAY</span>     <span class="f">│</span>  <span class="d">╌▶</span> <span class="g">relay sees:</span>     <span class="f">│</span>
+<span class="f">│</span>  <span class="f">│</span>  routes <span class="g">·▒▓</span> only  <span class="f">│</span>     <span class="g">Δt · len · dir</span>  <span class="f">│</span>
+<span class="f">│</span>  <span class="f">└─────┬───────────┬─┘</span>     <span class="g">0B readable</span>     <span class="f">│</span>
+<span class="f">│</span>        <span class="f">│</span> ciphertext<span class="f">│</span><span class="d"> queued</span>                <span class="f">│</span>
+<span class="f">│</span>        <span class="f">▼</span>           <span class="f">│</span>                       <span class="f">│</span>
+<span class="f">│</span>  <span class="f">┌─────┬─────┐</span>     <span class="f">│</span> <span class="f">┌───────────────────┐</span> <span class="f">│</span>
+<span class="f">│</span>  <span class="f">│</span> <span class="e">●</span><span class="i"> PEER</span>    <span class="f">│</span>     <span class="f">└─┤</span> <span class="e">●</span><span class="i"> MAILBOX</span><span class="f"> mbx·7e3d│</span> <span class="f">│</span>
+<span class="f">│</span>  <span class="f">│</span> <span class="f">9c1f…aa07</span> <span class="f">│</span>       <span class="f">│</span> <span class="e">▓▓▓</span><span class="f">░░░░</span> 3/64      <span class="f">│</span> <span class="f">│</span>
+<span class="f">│</span>  <span class="f">└───────────┘</span>       <span class="f">└───────────────────┘</span> <span class="f">│</span>
+<span class="f">│▓▒··</span>                                    <span class="f"> ░▒▓│</span>
+<span class="f">│</span> ─<span class="f"> wire</span> <span class="f">·</span> <span class="d">╌</span><span class="f"> callout</span> <span class="f">·</span> <span class="g">▒</span><span class="f"> relay-seen</span>          <span class="f">│</span>
+<span class="f">│</span> <span class="d">●</span> invite <span class="i">cinder://9c1f…aa07</span> ·1x            <span class="f">│</span>
+<span class="f">│</span> <span class="f">pin: peer static key · no keys at relay</span>    <span class="f">│</span>
+<span class="f">└────────────────────────────────────────────┘</span></pre>
+      <pre class="m-mobile" data-v="r" hidden aria-hidden="true"><span class="f">┌── </span><span class="e">relay pov</span> <span class="f">───────────────────────────────┐</span>
+<span class="f">│</span> adversary · metadata only      <span class="d">[v]:transp</span>  <span class="f">│</span>
+<span class="f">│</span> <span class="e j-led">●</span> <span class="f">rtt</span> <span class="i j-rtt">24</span><span class="f">ms · q</span> <span class="i j-q">3</span><span class="f">/64</span>                    <span class="d">demo</span><span class="f">│</span>
+<span class="f">│</span>                                            <span class="f">│</span>
+<span class="f">│</span>  <span class="f">┌───────────┐</span>                             <span class="f">│</span>
+<span class="f">│</span>  <span class="f">│</span> <span class="f">○</span><span class="i"> conn a</span>  <span class="f">│</span>                             <span class="f">│</span>
+<span class="f">│</span>  <span class="f">│</span> <span class="g">░░▒▒▓</span>     <span class="f">│</span>                             <span class="f">│</span>
+<span class="f">│</span>  <span class="f">└─────┬─────┘</span>                             <span class="f">│</span>
+<span class="f">│</span>        <span class="f">│</span> Δt41ms·512B                       <span class="f">│</span>
+<span class="f">│</span>        <span class="f">▼</span>                                   <span class="f">│</span>
+<span class="f">│</span>  <span class="f">┌─────┬─────────────┐</span>                     <span class="f">│</span>
+<span class="f">│</span>  <span class="f">│</span> <span class="e">●</span><span class="i"> BLIND RELAY</span>     <span class="f">│</span>  <span class="d">╌▶</span> <span class="g">relay sees:</span>     <span class="f">│</span>
+<span class="f">│</span>  <span class="f">│</span>  fwd <span class="g">·▒▓</span> no keys  <span class="f">│</span>     <span class="g">Δt · len · dir</span>  <span class="f">│</span>
+<span class="f">│</span>  <span class="f">└─────┬───────────┬─┘</span>     <span class="g">0B readable</span>     <span class="f">│</span>
+<span class="f">│</span>        <span class="f">│</span> Δt9ms·512B<span class="f">│</span><span class="d"> sealed</span>                <span class="f">│</span>
+<span class="f">│</span>        <span class="f">▼</span>           <span class="f">│</span>                       <span class="f">│</span>
+<span class="f">│</span>  <span class="f">┌─────┬─────┐</span>     <span class="f">│</span> <span class="f">┌───────────────────┐</span> <span class="f">│</span>
+<span class="f">│</span>  <span class="f">│</span> <span class="f">○</span><span class="i"> conn b</span>  <span class="f">│</span>     <span class="f">└─┤</span> <span class="f">○</span><span class="i"> MAILBOX</span> sealed  <span class="f">│</span> <span class="f">│</span>
+<span class="f">│</span>  <span class="f">│</span> <span class="g">░░▒▒▓</span>     <span class="f">│</span>       <span class="f">│</span> <span class="g">·▒▓</span> · opaque      <span class="f">│</span> <span class="f">│</span>
+<span class="f">│</span>  <span class="f">└───────────┘</span>       <span class="f">└───────────────────┘</span> <span class="f">│</span>
+<span class="f">│▓▒··</span>                                    <span class="f"> ░▒▓│</span>
+<span class="f">│</span> Δt<span class="f"> timing</span> <span class="f">·</span> B<span class="f"> size</span> <span class="f">·</span> <span class="g">▒</span><span class="f"> opaque</span>              <span class="f">│</span>
+<span class="f">│</span> <span class="f">○ anonymous</span>                                <span class="f">│</span>
+<span class="f">│</span> <span class="f">relay keeps no keys</span>                        <span class="f">│</span>
+<span class="f">└────────────────────────────────────────────┘</span></pre>
+      <span class="pkt head fwd" id="pkH" aria-hidden="true">▪</span>
+      <span class="pkt trail fwd" id="pkT" aria-hidden="true">·</span>
+      <span class="pkt head rev" id="rkH" aria-hidden="true">▪</span>
+      <span class="pkt trail rev" id="rkT" aria-hidden="true">·</span>
+    </div>
+  </section>
+
+  <div class="keys">fig·03 · <b>noise_xx</b> is end-to-end — the relay forwards <b>opaque frames</b>, sees timing+size only, keeps no keys · readouts are <b>demo</b></div>
+</main>
+
+<script>
+(function(){
+  "use strict";
+  var board = document.getElementById("board");
+  var btn = document.getElementById("viewBtn");
+  if (!board || !btn) return;
+
+  var pres = Array.prototype.slice.call(board.querySelectorAll("pre[data-v]"));
+  var prm = matchMedia("(prefers-reduced-motion: reduce)");
+  var wide = matchMedia("(min-width: 44rem)");
+  var inView = false, hovered = false, pov = "t";
+
+  /* ---------- pov toggle ---------- */
+  var vt = btn.querySelector(".vt"), vr = btn.querySelector(".vr");
+  function setPov(v){
+    pov = v;
+    board.dataset.pov = v;
+    pres.forEach(function(p){ p.hidden = p.dataset.v !== v; });
+    vt.classList.toggle("on", v === "t");
+    vr.classList.toggle("on", v === "r");
+    btn.setAttribute("aria-pressed", v === "r" ? "true" : "false");
+    gateAll();
+  }
+  btn.addEventListener("click", function(){ setPov(pov === "t" ? "r" : "t"); });
+  document.addEventListener("keydown", function(e){
+    if (e.key === "v" && !e.metaKey && !e.ctrlKey && !e.altKey){
+      var t = e.target;
+      if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable)) return;
+      setPov(pov === "t" ? "r" : "t");
+    }
+  });
+
+  /* ---------- packets ---------- */
+  // desktop wire rows: fwd row idx7 (top 10.5em), rev row idx8 (top 12em).
+  // fwd legs cols 18..34 / 59..74 ; rev legs (relay->peer relay->you) 74..60 / 34..19
+  var STEP_MS = 60, HOLD_MS = 450, REST_MS = 1500, TRAIL = 2;
+  function Packet(hEl, tEl, legs, phase){
+    this.h = hEl; this.t = tEl; this.legs = legs; this.phase = phase;
+    this.leg = 0; this.pos = 0; this.timer = null; this.started = false;
+  }
+  Packet.prototype.place = function(){
+    var p = this.pos, tr = p + (this.legs.dir > 0 ? -TRAIL : TRAIL);
+    this.h.style.left = p + "ch";
+    if (tr >= this.legs.ranges[this.leg][0] && tr <= this.legs.ranges[this.leg][1]){
+      this.t.style.left = tr + "ch";
+      this.t.classList.add("on");
+    } else this.t.classList.remove("on");
+  };
+  Packet.prototype.tick = function(){
+    var rg = this.legs.ranges[this.leg], dir = this.legs.dir;
+    this.pos += dir;
+    var done = dir > 0 ? this.pos > rg[1] : this.pos < rg[0];
+    if (done){
+      this.h.classList.remove("on"); this.t.classList.remove("on");
+      if (this.leg === 0){
+        this.leg = 1; this.pos = this.legs.ranges[1][dir > 0 ? 0 : 1];
+        this.arm(HOLD_MS);
+      } else {
+        this.leg = 0; this.pos = this.legs.ranges[0][dir > 0 ? 0 : 1];
+        this.started = false;                 // full cycle done
+        this.arm(REST_MS + this.phase);
+      }
+      return;
+    }
+    this.place();
+    this.arm(STEP_MS);
+  };
+  Packet.prototype.arm = function(ms){
+    var self = this;
+    this.timer = setTimeout(function(){
+      self.h.classList.add("on"); self.place(); self.tick();
+    }, ms);
+  };
+  Packet.prototype.start = function(){
+    if (this.timer) return;
+    if (!this.started){
+      this.leg = 0;
+      this.pos = this.legs.ranges[0][this.legs.dir > 0 ? 0 : 1];
+      this.started = true;
+    }
+    this.h.classList.add("on"); this.place(); this.arm(this.phase && !this.ran ? (this.ran = true, this.phase) : 0);
+  };
+  Packet.prototype.stop = function(){
+    if (this.timer){ clearTimeout(this.timer); this.timer = null; }
+    this.h.classList.remove("on"); this.t.classList.remove("on");
+  };
+
+  var pkFwd = new Packet(
+    document.getElementById("pkH"), document.getElementById("pkT"),
+    { dir: 1, ranges: [[18, 34], [59, 74]] }, 0);
+  var pkRev = new Packet(
+    document.getElementById("rkH"), document.getElementById("rkT"),
+    { dir: -1, ranges: [[60, 74], [19, 34]] }, 700);
+
+  /* ---------- instrument readouts (demo values) ---------- */
+  var S = { rtt: 24, q: 3, rx: 1.0, tx: 0.4, up: 41 };
+  function fmtUp(s){
+    var m = Math.floor(s / 60), ss = s % 60;
+    return (m < 10 ? "0" : "") + m + ":" + (ss < 10 ? "0" : "") + ss;
+  }
+  function clamp(v, lo, hi){ return Math.min(hi, Math.max(lo, v)); }
+  function tickReadouts(){
+    S.rtt = clamp(Math.round(S.rtt + (Math.random() - 0.5) * 5), 17, 39);
+    S.q = clamp(S.q + (Math.random() < 0.3 ? (Math.random() < 0.5 ? -1 : 1) : 0), 2, 6);
+    S.rx = clamp(S.rx + (Math.random() - 0.5) * 0.3, 0.6, 1.5);
+    S.tx = clamp(S.tx + (Math.random() - 0.5) * 0.2, 0.2, 0.7);
+    S.up += 1;
+    set(".j-rtt", String(S.rtt));
+    set(".j-q", String(S.q));
+    set(".j-rx", S.rx.toFixed(1));
+    set(".j-tx", S.tx.toFixed(1));
+    set(".j-upt", fmtUp(S.up));
+  }
+  function set(sel, txt){
+    var els = board.querySelectorAll(sel);
+    for (var i = 0; i < els.length; i++) els[i].textContent = txt;
+  }
+  var ledOn = true;
+  function tickLed(){
+    ledOn = !ledOn;
+    var els = board.querySelectorAll(".j-led");
+    for (var i = 0; i < els.length; i++)
+      els[i].className = ledOn ? "e j-led" : "d j-led";
+  }
+
+  /* ---------- master gate ---------- */
+  var roT = null, ledT = null;
+  function animated(){ return inView && !document.hidden && !prm.matches; }
+  function gateAll(){
+    var run = animated();
+    var pkRun = run && wide.matches && pov === "t" && !hovered;
+    if (run){
+      if (!roT) roT = setInterval(tickReadouts, 1400);
+      if (!ledT) ledT = setInterval(tickLed, 900);
+    } else {
+      if (roT){ clearInterval(roT); roT = null; }
+      if (ledT){ clearInterval(ledT); ledT = null; }
+    }
+    pkRun ? (pkFwd.start(), pkRev.start()) : (pkFwd.stop(), pkRev.stop());
+  }
+
+  var io = new IntersectionObserver(function(es){
+    inView = es[0].isIntersecting;
+    gateAll();
+  }, { threshold: 0.15 });
+  io.observe(board);
+
+  board.addEventListener("mouseenter", function(){ hovered = true; gateAll(); });
+  board.addEventListener("mouseleave", function(){ hovered = false; gateAll(); });
+  document.addEventListener("visibilitychange", gateAll);
+  prm.addEventListener("change", gateAll);
+  wide.addEventListener("change", gateAll);
+  gateAll();
+})();
+</script>
+
+</body>
+</html>

@@ -59,11 +59,7 @@
     <div class="install mono" data-reveal>
       <span class="prompt" aria-hidden="true">$</span>
       <code id="install-cmd">cargo install --locked --git https://github.com/nikolas-sapa/cinder cinder cinder-relay</code>
-      <button class="copy" id="copy-btn" aria-label="Copy install command">
-        <svg class="ic-copy" viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="9" width="12" height="12" rx="2" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" fill="none" stroke="currentColor" stroke-width="1.6"/></svg>
-        <svg class="ic-check" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 12.5l5 5L20 6.5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
-        <span class="copy-label">copy</span>
-      </button>
+      <button class="copychip mono" id="copy-btn" aria-label="Copy install command"><span class="cc-l">[ copy ]</span></button>
     </div>
 
     <div class="ctas" data-reveal>
@@ -242,63 +238,117 @@
       </div>
     </div>
 
-    <div class="board map-board" data-reveal>
-      <span class="screw tl">+</span><span class="screw tr">+</span>
-      <span class="screw bl">+</span><span class="screw br">+</span>
-      <p class="sr">Topology diagram: YOU, peer-id 4d2e…f18c, runs a Noise_XX x25519
-      handshake to the blind relay, which routes opaque ciphertext onward to PEER,
-      peer-id 9c1f…aa07. The relay sees only timing and size, nothing else. A
-      mailbox queue mbx·7e3d hangs off the relay holding frames for offline peers.
-      Peers pin each other's static key and meet through one-time cinder:// invite
-      links.</p>
-      <div class="art">
-        <pre class="m-desktop" aria-hidden="true"><span class="f">┌── </span><span class="e">fig·02</span><span class="f"> · ciphertext path ─ transport view ─────────────────────────────────────────────┐</span>
+    <div class="board map-board" id="board" data-pov="t" data-reveal>
+    <span class="screw tl">+</span>
+    <button class="viewbtn" id="viewBtn" type="button" aria-pressed="false"
+      aria-label="Toggle relay point of view"
+      title="flip point of view (v)"><span class="vt on">transport</span>|<span class="vr">relay</span>&nbsp;v</button>
+    <span class="screw bl">+</span><span class="screw br">+</span>
+    <p class="sr">Topology diagram with two switchable views. Transport view:
+    YOU, peer-id 4d2e…f18c, runs a Noise_XX x25519 handshake to the blind
+    relay, which routes opaque ciphertext onward to PEER, peer-id 9c1f…aa07.
+    Relay view (press v): the same path as the relay sees it — anonymous
+    connections, frame sizes and timing deltas only; all payloads render as
+    unreadable dithered blocks. The relay keeps bounded mailboxes for offline
+    peers and stores no keys. Status readouts are demo values.</p>
+    <div class="art">
+      <pre class="m-desktop" data-v="t" aria-hidden="true"><span class="f">┌── </span><span class="e">fig·03 · ciphertext path</span> <span class="f">────────────────────────────────────────</span><span class="d"> view:transport · [v] </span><span class="f">┐</span>
+<span class="f">│</span> <span class="f">link</span> <span class="e j-led">●</span><span class="f"> up</span>     <span class="f">rtt</span> <span class="i j-rtt">24</span><span class="f">ms</span>   <span class="f">q</span> <span class="i j-q">3</span><span class="f">/64</span>   <span class="f">rx</span> <span class="i j-rx">1.0</span><span class="f">kB/s</span>      <span class="f">tx</span> <span class="i j-tx">0.4</span><span class="f">kB/s</span>    <span class="f">t+</span><span class="i j-upt">00:41</span>       <span class="d">demo</span>       <span class="f">│</span>
 <span class="f">│</span>                                                                                          <span class="f">│</span>
-<span class="f">│</span>   <span class="d">●</span><span class="m"> pin: peer static key </span><span class="d">╌╌╌╌╌╌┐</span>            <span class="m">invite: </span><span class="i">cinder://9c1f…aa07</span><span class="m"> · one-time </span><span class="d">╌┐</span>     <span class="f">│</span>
+<span class="f">│</span>   <span class="d">●</span> pin: peer static key <span class="d">╌╌╌╌╌┐</span>             invite: <span class="i">cinder://9c1f…aa07</span> · one-time <span class="d">╌┐</span>     <span class="f">│</span>
 <span class="f">│</span>                               <span class="d">│</span>                                                    <span class="d">│</span>     <span class="f">│</span>
 <span class="f">│</span>                               <span class="d">│</span>   <span class="f">┌─────────────────────┐</span>                          <span class="d">│</span>     <span class="f">│</span>
-<span class="f">│</span>  <span class="f">┌─────────────┐</span>              <span class="d">│</span>   <span class="f">│</span> <span class="e">● </span><span class="i">BLIND RELAY</span>       <span class="f">│</span>                 <span class="f">┌────────</span><span class="d">┬</span><span class="f">────┐│</span>
-<span class="f">│</span>  <span class="f">│</span> <span class="e">● </span><span class="i">YOU</span>       <span class="f">│</span><span class="m">── noise_xx ──</span><span class="d">┬</span><span class="m">──▶</span><span class="f">│</span> <span class="m">routes ciphertext</span>   <span class="f">│</span><span class="m">── ciphertext ──▶</span><span class="f">│</span> <span class="e">● </span><span class="i">PEER</span>      <span class="f">││</span>
-<span class="f">│</span>  <span class="f">│</span> <span class="f">4d2e…f18c</span>   <span class="f">│◀── x25519 ───────│</span> <span class="m">sees: </span><span class="g">▒▒▒</span><span class="m"> opaque</span>    <span class="f">│◀─── replies ────│</span> <span class="f">9c1f…aa07</span>   <span class="f">││</span>
+<span class="f">│</span>  <span class="f">┌─────────────┐</span>              <span class="d">│</span>   <span class="f">│</span> <span class="e">●</span><span class="i"> BLIND RELAY</span>       <span class="f">│</span>                 <span class="f">┌────────┬────┐│</span>
+<span class="f">│</span>  <span class="f">│</span> <span class="e">●</span><span class="i"> YOU</span>       <span class="f">│</span>── noise_xx ──<span class="d">┬</span>──▶<span class="f">│</span> routes ciphertext   <span class="f">│</span>── ciphertext ──▶<span class="f">│</span> <span class="e">●</span><span class="i"> PEER</span>      <span class="f">││</span>
+<span class="f">│</span>  <span class="f">│</span> <span class="f">4d2e…f18c</span>   <span class="f">│</span>◀── x25519 ───────<span class="f">│</span> sees: <span class="g">░░▒▒▓</span> opaque  <span class="f">│</span>◀─── replies ────<span class="f">│</span> <span class="f">9c1f…aa07</span>   <span class="f">││</span>
 <span class="f">│</span>  <span class="f">└─────────────┘</span>                  <span class="f">└──────────┬──────────┘</span>                 <span class="f">└─────────────┘│</span>
 <span class="f">│</span>                                              <span class="f">│</span><span class="d"> queued</span>                                    <span class="f">│</span>
-<span class="f">│</span>   <span class="g">relay sees: timing · size · nothing else ╌▶</span><span class="f">│</span>                                           <span class="f">│</span>
+<span class="f">│</span>   relay sees: timing · size · nothing else <span class="d">╌▶</span><span class="f">│</span>                                           <span class="f">│</span>
 <span class="f">│</span>                                   <span class="f">┌──────────┬─────────┐</span>                                 <span class="f">│</span>
-<span class="f">│</span>                                   <span class="f">│</span> <span class="e">● </span><span class="i">MAILBOX</span><span class="f"> mbx·7e3d</span> <span class="f">│</span>                                 <span class="f">│</span>
-<span class="f">│</span>                                   <span class="f">│</span> <span class="e">▓▓▓</span><span class="f">░░░░░░░░░</span><span class="m"> 3/64</span>  <span class="f">│</span>                                 <span class="f">│</span>
+<span class="f">│</span>                                   <span class="f">│</span> <span class="e">●</span><span class="i"> MAILBOX</span><span class="f"> mbx·7e3d</span> <span class="f">│</span>                                 <span class="f">│</span>
+<span class="f">│</span>                                   <span class="f">│</span> <span class="e">▓▓▓</span><span class="f">░░░░░░░░░</span> 3/64  <span class="f">│</span>                                 <span class="f">│</span>
 <span class="f">│</span>                                   <span class="f">└────────────────────┘</span>                                 <span class="f">│</span>
-<span class="f">│</span>                                                                                          <span class="f">│</span>
-<span class="f">│</span>   <span class="m">─</span><span class="f"> wire   </span><span class="d">╌</span><span class="f"> callout   </span><span class="e">●</span><span class="f"> endpoint   </span><span class="g">▒</span><span class="f"> attacker-visible</span>             <span class="f">relay keeps no keys</span>   <span class="f">│</span>
+<span class="f">│▓▒··</span>                                                                                  <span class="f"> ░▒▓│</span>
+<span class="f">│</span>  ─<span class="f"> wire</span>   <span class="d">╌</span><span class="f"> callout</span>   <span class="e">●</span><span class="f"> endpoint</span>   <span class="g">▒</span><span class="f"> attacker-visible</span>           <span class="f">relay keeps no keys</span>      <span class="f">│</span>
 <span class="f">│</span>                                                                                          <span class="f">│</span>
 <span class="f">└──────────────────────────────────────────────────────────────────────────────────────────┘</span></pre>
-        <pre class="m-mobile" aria-hidden="true"><span class="f">┌── </span><span class="e">ciphertext path</span><span class="f"> ─────────────────────────┐</span>
-<span class="f">│</span> <span class="f">transport view · relay is blind</span>            <span class="f">│</span>
+      <pre class="m-desktop" data-v="r" hidden aria-hidden="true"><span class="f">┌── </span><span class="e">fig·03 · ciphertext path</span> <span class="f">────────────────────────────────────────</span><span class="d"> view:relay-pov · [v] </span><span class="f">┐</span>
+<span class="f">│</span> <span class="f">link</span> <span class="e j-led">●</span><span class="f"> up</span>     <span class="f">rtt</span> <span class="i j-rtt">24</span><span class="f">ms</span>   <span class="f">q</span> <span class="i j-q">3</span><span class="f">/64</span>   <span class="f">rx</span> <span class="i j-rx">1.0</span><span class="f">kB/s</span>      <span class="f">tx</span> <span class="i j-tx">0.4</span><span class="f">kB/s</span>    <span class="f">t+</span><span class="i j-upt">00:41</span>       <span class="d">demo</span>       <span class="f">│</span>
+<span class="f">│</span>                                                                                          <span class="f">│</span>
+<span class="f">│</span>   <span class="d">●</span> metadata: Δt·size·dir <span class="d">╌╌╌╌┐</span>                    identities: none · keys: none  <span class="d">╌┐</span>     <span class="f">│</span>
+<span class="f">│</span>                               <span class="d">│</span>                                                    <span class="d">│</span>     <span class="f">│</span>
+<span class="f">│</span>                               <span class="d">│</span>   <span class="f">┌─────────────────────┐</span>                          <span class="d">│</span>     <span class="f">│</span>
+<span class="f">│</span>  <span class="f">┌─────────────┐</span>              <span class="d">│</span>   <span class="f">│</span> <span class="e">●</span><span class="i"> BLIND RELAY</span>       <span class="f">│</span>                 <span class="f">┌────────┬────┐│</span>
+<span class="f">│</span>  <span class="f">│</span> <span class="f">○</span><span class="i"> conn a</span>    <span class="f">│</span>─ Δt41ms·512B <span class="d">┬</span>──▶<span class="f">│</span> sees: Δt·len·dir    <span class="f">│</span>─ Δt9ms·512B ───▶<span class="f">│</span> <span class="f">○</span><span class="i"> conn b</span>    <span class="f">││</span>
+<span class="f">│</span>  <span class="f">│</span> <span class="g">░░▒▒▓</span>       <span class="f">│</span>◀── Δt63ms·512B ──<span class="f">│</span> fwd <span class="g">·░░▓▓</span> · no keys <span class="f">│</span>◀── Δt51ms·512B ─<span class="f">│</span> <span class="g">░░▒▒▓</span>       <span class="f">││</span>
+<span class="f">│</span>  <span class="f">└─────────────┘</span>                  <span class="f">└──────────┬──────────┘</span>                 <span class="f">└─────────────┘│</span>
+<span class="f">│</span>                                              <span class="f">│</span><span class="d"> queued</span>                                    <span class="f">│</span>
+<span class="f">│</span>   payload: 0B readable · envelope only     <span class="d">╌▶</span><span class="f">│</span>                                           <span class="f">│</span>
+<span class="f">│</span>                                   <span class="f">┌──────────┬─────────┐</span>                                 <span class="f">│</span>
+<span class="f">│</span>                                   <span class="f">│</span> <span class="f">○</span><span class="i"> MAILBOX</span> sealed   <span class="f">│</span>                                 <span class="f">│</span>
+<span class="f">│</span>                                   <span class="f">│</span> <span class="g">░░▒▒▓</span> · opaque     <span class="f">│</span>                                 <span class="f">│</span>
+<span class="f">│</span>                                   <span class="f">└────────────────────┘</span>                                 <span class="f">│</span>
+<span class="f">│▓▒··</span>                                                                                  <span class="f"> ░▒▓│</span>
+<span class="f">│</span>  Δt<span class="f"> timing·</span> 512B<span class="f"> size</span>   <span class="g">░▒▓</span><span class="f"> unreadable</span>   <span class="f">○ anonymous</span>            <span class="f">relay keeps no keys</span>      <span class="f">│</span>
+<span class="f">│</span>                                                                                          <span class="f">│</span>
+<span class="f">└──────────────────────────────────────────────────────────────────────────────────────────┘</span></pre>
+      <pre class="m-mobile" data-v="t" aria-hidden="true"><span class="f">┌── </span><span class="e">ciphertext path</span> <span class="f">─────────────────────────┐</span>
+<span class="f">│</span> transport view · blind relay   <span class="d">[v]:relay</span>   <span class="f">│</span>
+<span class="f">│</span> <span class="e j-led">●</span> <span class="f">rtt</span> <span class="i j-rtt">24</span><span class="f">ms · q</span> <span class="i j-q">3</span><span class="f">/64</span>                    <span class="d">demo</span><span class="f">│</span>
 <span class="f">│</span>                                            <span class="f">│</span>
 <span class="f">│</span>  <span class="f">┌───────────┐</span>                             <span class="f">│</span>
-<span class="f">│</span>  <span class="f">│</span> <span class="e">● </span><span class="i">YOU</span>     <span class="f">│</span>                             <span class="f">│</span>
+<span class="f">│</span>  <span class="f">│</span> <span class="e">●</span><span class="i"> YOU</span>     <span class="f">│</span>                             <span class="f">│</span>
 <span class="f">│</span>  <span class="f">│</span> <span class="f">4d2e…f18c</span> <span class="f">│</span>                             <span class="f">│</span>
 <span class="f">│</span>  <span class="f">└─────┬─────┘</span>                             <span class="f">│</span>
-<span class="f">│</span>        <span class="f">│</span><span class="m"> noise_xx</span>                          <span class="f">│</span>
+<span class="f">│</span>        <span class="f">│</span> noise_xx · e2e                    <span class="f">│</span>
 <span class="f">│</span>        <span class="f">▼</span>                                   <span class="f">│</span>
 <span class="f">│</span>  <span class="f">┌─────┬─────────────┐</span>                     <span class="f">│</span>
-<span class="f">│</span>  <span class="f">│</span> <span class="e">● </span><span class="i">BLIND RELAY</span>     <span class="f">│</span> <span class="g">╌▶ relay sees:</span>      <span class="f">│</span>
-<span class="f">│</span>  <span class="f">│</span> <span class="m">routes </span><span class="g">▒▒▒</span><span class="m"> only</span>   <span class="f">│</span>   <span class="g">timing · size ·</span>   <span class="f">│</span>
-<span class="f">│</span>  <span class="f">└─────┬───────────┬─┘</span>   <span class="g">nothing else</span>      <span class="f">│</span>
-<span class="f">│</span>        <span class="f">│</span><span class="m"> ciphertext</span><span class="f">│</span><span class="d"> queued</span>                <span class="f">│</span>
-<span class="f">│</span>        <span class="f">▼           │</span>                       <span class="f">│</span>
-<span class="f">│</span>  <span class="f">┌─────┬─────┐     │ ┌───────────────────┐</span> <span class="f">│</span>
-<span class="f">│</span>  <span class="f">│</span> <span class="e">● </span><span class="i">PEER</span>    <span class="f">│</span>     <span class="f">└─├</span> <span class="e">● </span><span class="i">MAILBOX</span><span class="f"> mbx·7e3d│</span> <span class="f">│</span>
-<span class="f">│</span>  <span class="f">│</span> <span class="f">9c1f…aa07</span> <span class="f">│</span>       <span class="f">│</span> <span class="e">▓▓▓</span><span class="f">░░░░</span><span class="m"> 3/64</span>      <span class="f">│</span> <span class="f">│</span>
+<span class="f">│</span>  <span class="f">│</span> <span class="e">●</span><span class="i"> BLIND RELAY</span>     <span class="f">│</span>  <span class="d">╌▶</span> <span class="g">relay sees:</span>     <span class="f">│</span>
+<span class="f">│</span>  <span class="f">│</span>  routes <span class="g">·▒▓</span> only  <span class="f">│</span>     <span class="g">Δt · len · dir</span>  <span class="f">│</span>
+<span class="f">│</span>  <span class="f">└─────┬───────────┬─┘</span>     <span class="g">0B readable</span>     <span class="f">│</span>
+<span class="f">│</span>        <span class="f">│</span> ciphertext<span class="f">│</span><span class="d"> queued</span>                <span class="f">│</span>
+<span class="f">│</span>        <span class="f">▼</span>           <span class="f">│</span>                       <span class="f">│</span>
+<span class="f">│</span>  <span class="f">┌─────┬─────┐</span>     <span class="f">│</span> <span class="f">┌───────────────────┐</span> <span class="f">│</span>
+<span class="f">│</span>  <span class="f">│</span> <span class="e">●</span><span class="i"> PEER</span>    <span class="f">│</span>     <span class="f">└─┤</span> <span class="e">●</span><span class="i"> MAILBOX</span><span class="f"> mbx·7e3d│</span> <span class="f">│</span>
+<span class="f">│</span>  <span class="f">│</span> <span class="f">9c1f…aa07</span> <span class="f">│</span>       <span class="f">│</span> <span class="e">▓▓▓</span><span class="f">░░░░</span> 3/64      <span class="f">│</span> <span class="f">│</span>
 <span class="f">│</span>  <span class="f">└───────────┘</span>       <span class="f">└───────────────────┘</span> <span class="f">│</span>
-<span class="f">│</span>                                            <span class="f">│</span>
-<span class="f">│</span>   <span class="d">●</span><span class="m"> invite </span><span class="i">cinder://9c1f…aa07</span>              <span class="f">│</span>
-<span class="f">│</span>   <span class="f">one-time link · pin: peer static key</span>     <span class="f">│</span>
-<span class="f">│</span>   <span class="m">─</span><span class="f"> wire · </span><span class="d">╌</span><span class="f"> callout · </span><span class="g">▒</span><span class="f"> attacker</span>          <span class="f">│</span>
+<span class="f">│▓▒··</span>                                    <span class="f"> ░▒▓│</span>
+<span class="f">│</span> ─<span class="f"> wire</span> <span class="f">·</span> <span class="d">╌</span><span class="f"> callout</span> <span class="f">·</span> <span class="g">▒</span><span class="f"> relay-seen</span>          <span class="f">│</span>
+<span class="f">│</span> <span class="d">●</span> invite <span class="i">cinder://9c1f…aa07</span> ·1x            <span class="f">│</span>
+<span class="f">│</span> <span class="f">pin: peer static key · no keys at relay</span>    <span class="f">│</span>
 <span class="f">└────────────────────────────────────────────┘</span></pre>
-        <span class="pkt" id="pkt" aria-hidden="true">▪</span>
-      </div>
-      <div class="map-keys mono">fig·02 · <b>noise_xx</b> handshake is end-to-end — the relay forwards <b>opaque frames</b>, stores no keys</div>
+      <pre class="m-mobile" data-v="r" hidden aria-hidden="true"><span class="f">┌── </span><span class="e">relay pov</span> <span class="f">───────────────────────────────┐</span>
+<span class="f">│</span> adversary · metadata only      <span class="d">[v]:transp</span>  <span class="f">│</span>
+<span class="f">│</span> <span class="e j-led">●</span> <span class="f">rtt</span> <span class="i j-rtt">24</span><span class="f">ms · q</span> <span class="i j-q">3</span><span class="f">/64</span>                    <span class="d">demo</span><span class="f">│</span>
+<span class="f">│</span>                                            <span class="f">│</span>
+<span class="f">│</span>  <span class="f">┌───────────┐</span>                             <span class="f">│</span>
+<span class="f">│</span>  <span class="f">│</span> <span class="f">○</span><span class="i"> conn a</span>  <span class="f">│</span>                             <span class="f">│</span>
+<span class="f">│</span>  <span class="f">│</span> <span class="g">░░▒▒▓</span>     <span class="f">│</span>                             <span class="f">│</span>
+<span class="f">│</span>  <span class="f">└─────┬─────┘</span>                             <span class="f">│</span>
+<span class="f">│</span>        <span class="f">│</span> Δt41ms·512B                       <span class="f">│</span>
+<span class="f">│</span>        <span class="f">▼</span>                                   <span class="f">│</span>
+<span class="f">│</span>  <span class="f">┌─────┬─────────────┐</span>                     <span class="f">│</span>
+<span class="f">│</span>  <span class="f">│</span> <span class="e">●</span><span class="i"> BLIND RELAY</span>     <span class="f">│</span>  <span class="d">╌▶</span> <span class="g">relay sees:</span>     <span class="f">│</span>
+<span class="f">│</span>  <span class="f">│</span>  fwd <span class="g">·▒▓</span> no keys  <span class="f">│</span>     <span class="g">Δt · len · dir</span>  <span class="f">│</span>
+<span class="f">│</span>  <span class="f">└─────┬───────────┬─┘</span>     <span class="g">0B readable</span>     <span class="f">│</span>
+<span class="f">│</span>        <span class="f">│</span> Δt9ms·512B<span class="f">│</span><span class="d"> sealed</span>                <span class="f">│</span>
+<span class="f">│</span>        <span class="f">▼</span>           <span class="f">│</span>                       <span class="f">│</span>
+<span class="f">│</span>  <span class="f">┌─────┬─────┐</span>     <span class="f">│</span> <span class="f">┌───────────────────┐</span> <span class="f">│</span>
+<span class="f">│</span>  <span class="f">│</span> <span class="f">○</span><span class="i"> conn b</span>  <span class="f">│</span>     <span class="f">└─┤</span> <span class="f">○</span><span class="i"> MAILBOX</span> sealed  <span class="f">│</span> <span class="f">│</span>
+<span class="f">│</span>  <span class="f">│</span> <span class="g">░░▒▒▓</span>     <span class="f">│</span>       <span class="f">│</span> <span class="g">·▒▓</span> · opaque      <span class="f">│</span> <span class="f">│</span>
+<span class="f">│</span>  <span class="f">└───────────┘</span>       <span class="f">└───────────────────┘</span> <span class="f">│</span>
+<span class="f">│▓▒··</span>                                    <span class="f"> ░▒▓│</span>
+<span class="f">│</span> Δt<span class="f"> timing</span> <span class="f">·</span> B<span class="f"> size</span> <span class="f">·</span> <span class="g">▒</span><span class="f"> opaque</span>              <span class="f">│</span>
+<span class="f">│</span> <span class="f">○ anonymous</span>                                <span class="f">│</span>
+<span class="f">│</span> <span class="f">relay keeps no keys</span>                        <span class="f">│</span>
+<span class="f">└────────────────────────────────────────────┘</span></pre>
+      <span class="pkt head fwd" id="pkH" aria-hidden="true">▪</span>
+      <span class="pkt trail fwd" id="pkT" aria-hidden="true">·</span>
+      <span class="pkt head rev" id="rkH" aria-hidden="true">▪</span>
+      <span class="pkt trail rev" id="rkT" aria-hidden="true">·</span>
     </div>
+  </div>
+
 
     <div class="panel" id="panel" data-reveal>
       <div class="p-head">
@@ -373,9 +423,9 @@
           <p class="peer" data-peer="operator" role="button" tabindex="0">operator</p>
           <p class="side-h" style="margin-top:14px">DEMO</p>
           <div class="kcs" role="group" aria-label="Command keycaps">
-            <span class="kc" data-cmd="/help" role="button" tabindex="0">/help</span>
-            <span class="kc" data-cmd="/sas" role="button" tabindex="0">/sas</span>
-            <span class="kc" data-cmd="/deny" role="button" tabindex="0">/deny</span>
+            <button class="kc" data-cmd="/help" type="button">/help</button>
+            <button class="kc" data-cmd="/sas" type="button">/sas</button>
+            <button class="kc kc--ember" data-cmd="/deny" type="button">/deny</button>
           </div>
           <p class="side-f dim">click a peer · type a command<br>or press a keycap</p>
         </div>
@@ -451,92 +501,365 @@
 <!-- ============ SPECIFICATION LEDGER ============ -->
 <section class="features" id="features">
   <div class="wrap">
-    <div class="sec-head">
-      <p class="kicker mono">02 — specification</p>
-      <h2>one protocol, two kinds of user</h2>
-      <p class="sec-side">everything below ships today</p>
-    </div>
-    <div class="ledger" data-reveal>
-      <div class="row" role="button" tabindex="0" aria-expanded="false">
-        <span class="num mono">01<span class="xind" aria-hidden="true"></span></span>
-        <h3>agent-first JSON-RPC</h3>
-        <div class="rcol">
-          <p class="desc">Every TUI capability is a method on a typed JSON-RPC 2.0 socket.
-          <code>cinder rpc</code> speaks newline-delimited frames on stdio;
-          <code>cinder daemon</code> serves the same protocol to concurrent clients over a peer-cred
-          unix socket. Sends are idempotent — retry a client_msg_id, get the same msg_id back.</p>
-          <p class="xtra mono">35 methods · 14 event kinds · errors carry retryable + hint ·
-          unix-socket peers authenticate by kernel cred</p>
+<div class="sl" aria-labelledby="sl-h">
+  <div class="sl-strip">
+    <span class="tag2">02 — specification</span>
+    <span class="rule" aria-hidden="true"></span>
+    <span class="meta">ledger · 07 entries · all ship today</span>
+    <button class="all" id="allBtn" type="button" aria-pressed="false"
+      aria-label="expand all ledger entries">[+] all</button>
+  </div>
+
+  <h2 id="sl-h">one protocol, <em>two kinds of user</em></h2>
+  <p class="lede">Every capability below is <b>one typed JSON-RPC 2.0 method</b>.
+    The left pane is what the human sees in the TUI; the right pane is what the
+    machine sees — agent, wire, or relay. Same call, same event, no second-class
+    API. Click a row to open both surfaces.</p>
+
+  <figure class="arch">
+    <figcaption>
+      <span>signal path</span>
+      <span class="rt">equal clients · one bus</span>
+    </figcaption>
+<pre class="schematic" aria-hidden="true"><span class="w"> USER      SURFACE            WIRE                    </span>
+<span class="w"> </span><span class="u">human</span><span class="w"> ──▶ cinder tui ────┐                           </span>
+<span class="w">                          ├─▶ </span><span class="a">json-rpc 2.0</span><span class="w"> ═▶ cinder  </span>
+<span class="w"> </span><span class="u">agent</span><span class="w"> ──▶ cinder rpc ────┘    stdio · unix sock      </span></pre>
+  </figure>
+
+  <ol class="ledger">
+
+<!-- ─────────── 01 · agent-first json-rpc ─────────── -->
+    <li class="row">
+      <button class="head" type="button" aria-expanded="false" aria-controls="b1">
+        <span class="num">01</span>
+        <span class="title">agent-first json-rpc</span>
+        <span class="lead" aria-hidden="true"></span>
+        <span class="map">
+          <span class="chip h">type + ↵</span><span class="x" aria-hidden="true">⇄</span><span class="chip a">msg.send</span>
+        </span>
+        <span class="tgl" aria-hidden="true"></span>
+      </button>
+      <div class="body" id="b1" role="region" aria-label="agent-first json-rpc — both surfaces" hidden>
+        <div class="pair">
+          <div class="side">
+            <div class="phead">human · tui<span class="pf">input bar</span></div>
+<pre><span class="p">&gt; meet at the old port, 0400</span>
+<span class="p">~ sent: eidolon          … → ✓ → ✓✓</span></pre>
+          </div>
+          <div class="par" aria-hidden="true"><span>⇄</span><i>same call</i></div>
+          <div class="side agent">
+            <div class="phead">agent · json-rpc<span class="pf">ndjson</span></div>
+<pre><span class="g">→</span> {"id":10,"method":"<span class="m">msg.send</span>",
+   "params":{"to":"contact:9f3b12",
+   "body":"<span class="s">meet at the old port, 0400</span>",
+   "client_msg_id":"<span class="s">agent-0001</span>"}}
+<span class="g">←</span> {"id":10,"result":{
+   "msg_id":"<span class="s">msg:e01d7c</span>",
+   "state":"queued","deduped":false}}
+<span class="g">→</span> {"id":11,…retry same client_msg_id}
+<span class="g">←</span> {"id":11,"result":{
+   "msg_id":"<span class="s">msg:e01d7c</span>",
+   "state":"queued","<span class="s">deduped":true</span>}}</pre>
+          </div>
         </div>
+        <ul class="spec">
+          <li><span class="k">stdio</span><span class="d"></span><span class="v2">cinder rpc · newline-delimited json</span></li>
+          <li><span class="k">daemon</span><span class="d"></span><span class="v2">unix socket · peer-cred auth</span></li>
+          <li><span class="k">surface</span><span class="d"></span><span class="v2">35 methods · 14 events</span></li>
+          <li><span class="k">schema</span><span class="d"></span><span class="v2">self-describing · rpc.describe</span></li>
+          <li><span class="k">sends</span><span class="d"></span><span class="v2">idempotent · client_msg_id</span></li>
+        </ul>
+        <p class="desc">Every TUI capability is a typed JSON-RPC 2.0 method —
+          <code>cinder rpc</code> frames ndjson on stdio, <code>cinder daemon</code>
+          serves the same calls to concurrent clients over a peer-cred unix
+          socket. Retry a <code>client_msg_id</code>, get the same
+          <code>msg_id</code> back with <code>deduped:true</code>.</p>
       </div>
-      <div class="row" role="button" tabindex="0" aria-expanded="false">
-        <span class="num mono">02<span class="xind" aria-hidden="true"></span></span>
-        <h3>real noise, no ceremony</h3>
-        <div class="rcol">
-          <p class="desc"><code>Noise_XX_25519_ChaChaPoly_BLAKE2s</code> via snow. Mutual authentication,
-        forward secrecy against later key theft, static keys encrypted on the wire. One pattern,
-        one suite — nothing to negotiate, nothing to downgrade. No TLS anywhere.</p>
-          <p class="xtra mono">snow · static keys encrypted in flight 3 · rekey every 1024 msgs ·
-          zeroized on drop</p>
+    </li>
+
+<!-- ─────────── 02 · real noise ─────────── -->
+    <li class="row">
+      <button class="head" type="button" aria-expanded="false" aria-controls="b2">
+        <span class="num">02</span>
+        <span class="title">real noise, no ceremony</span>
+        <span class="lead" aria-hidden="true"></span>
+        <span class="map">
+          <span class="chip h">/status</span><span class="x" aria-hidden="true">⇄</span><span class="chip a">xx: e,ee,s,es</span>
+        </span>
+        <span class="tgl" aria-hidden="true"></span>
+      </button>
+      <div class="body" id="b2" role="region" aria-label="real noise — both surfaces" hidden>
+        <div class="pair">
+          <div class="side">
+            <div class="phead">human · tui<span class="pf">status line</span></div>
+<pre><span class="p">&gt; /status</span>
+~ link up · peer <span class="s">oyv4kqz3n5m2…</span>
+~ <span class="s">Noise_XX_25519_ChaChaPoly_BLAKE2s</span>
+~ mutual auth · fs · no tls</pre>
+          </div>
+          <div class="par" aria-hidden="true"><span>⇄</span><i>same wire</i></div>
+          <div class="side agent">
+            <div class="phead">wire · noise transcript<span class="pf">xx</span></div>
+<pre><span class="c">── handshake · frames ≤ 4096 B ──</span>
+<span class="g">→</span> <span class="m">Msg1</span>   e
+<span class="g">←</span> <span class="m">Msg2</span>   e, ee, s, es   <span class="c">· s sealed</span>
+<span class="g">→</span> <span class="m">Msg3</span>   s, se          <span class="c">· s sealed</span>
+<span class="c">── transport ─────────────────────</span>
+~ all frames opaque · ≤ 8210 B
+~ rekey every 1024 msgs</pre>
+          </div>
         </div>
+        <ul class="spec">
+          <li><span class="k">pattern</span><span class="d"></span><span class="v2">Noise_XX_25519_ChaChaPoly_BLAKE2s</span></li>
+          <li><span class="k">impl</span><span class="d"></span><span class="v2">snow</span></li>
+          <li><span class="k">keys</span><span class="d"></span><span class="v2">mutual auth · fs · statics sealed</span></li>
+          <li><span class="k">transport</span><span class="d"></span><span class="v2">no tls · zeroized on drop</span></li>
+        </ul>
+        <p class="desc">Sessions run <b>Noise_XX_25519_ChaChaPoly_BLAKE2s</b> via
+          snow: mutual authentication, forward secrecy, and static keys that
+          are encrypted on the wire — the Msg2/Msg3 transcript above is the
+          whole ceremony. No TLS anywhere.</p>
       </div>
-      <div class="row" role="button" tabindex="0" aria-expanded="false">
-        <span class="num mono">03<span class="xind" aria-hidden="true"></span></span>
-        <h3>blind relay</h3>
-        <div class="rcol">
-          <p class="desc">The relay routes opaque ciphertext by peer-id and holds no keys — it can't
-        read, can't forge, can't MITM a pinned contact. Relay-blindness is asserted by an
-        integration test, not by a promise.</p>
-          <p class="xtra mono">opaque frames only · relay holds no keys · global caps:
-        4096 mailboxes · 2048 invites · 2048 conns</p>
+    </li>
+
+<!-- ─────────── 03 · blind relay ─────────── -->
+    <li class="row">
+      <button class="head" type="button" aria-expanded="false" aria-controls="b3">
+        <span class="num">03</span>
+        <span class="title">blind relay</span>
+        <span class="lead" aria-hidden="true"></span>
+        <span class="map">
+          <span class="chip h">peer-id route</span><span class="x" aria-hidden="true">⇄</span><span class="chip a">Msg{opaque}</span>
+        </span>
+        <span class="tgl" aria-hidden="true"></span>
+      </button>
+      <div class="body" id="b3" role="region" aria-label="blind relay — both surfaces" hidden>
+        <div class="pair">
+          <div class="side">
+            <div class="phead">human · tui<span class="pf">status line</span></div>
+<pre>~ relay connected · :7700
+~ route: by <span class="s">peer-id</span> only
+~ relay holds ciphertext +
+  token hashes — nothing else</pre>
+          </div>
+          <div class="par" aria-hidden="true"><span>⇄</span><i>blind</i></div>
+          <div class="side agent">
+            <div class="phead">relay · all it sees<span class="pf">opaque</span></div>
+<pre><span class="m">Msg</span>{to:<span class="s">peer:oyv4kq…</span>,
+    body:&lt;<span class="s">opaque ≤8210B</span>&gt;}
+<span class="m">MailboxOpen</span>{id:&lt;<span class="s">256-bit</span>&gt;,
+    h_deposit:<span class="s">SHA-256(token)</span>}
+<span class="c"># raw tokens never transit</span>
+<span class="c"># from: claimed, unverified</span></pre>
+          </div>
         </div>
+        <ul class="spec">
+          <li><span class="k">routes</span><span class="d"></span><span class="v2">opaque frames · by peer-id</span></li>
+          <li><span class="k">holds</span><span class="d"></span><span class="v2">token hashes only · no keys</span></li>
+          <li><span class="k">proof</span><span class="d"></span><span class="v2">relay-blindness integration test</span></li>
+          <li><span class="k">caps</span><span class="d"></span><span class="v2">4096 mbx · 2048 inv · 2048 conns</span></li>
+        </ul>
+        <p class="desc">The relay routes <b>opaque ciphertext by peer-id</b> and
+          stores SHA-256 token hashes — it can't read, can't forge, can't MITM
+          a pinned contact. Blindness is asserted by an integration test, not
+          promised in a policy.</p>
       </div>
-      <div class="row" role="button" tabindex="0" aria-expanded="false">
-        <span class="num mono">04<span class="xind" aria-hidden="true"></span></span>
-        <h3>accountless identity</h3>
-        <div class="rcol">
-          <p class="desc">Your identity is an X25519 keypair; your peer-id is
-        <code>SHA-256(pubkey)</code>. No email, no phone number, no signup. Keys live in the OS
-        keyring with an age-encrypted fallback.</p>
-          <p class="xtra mono">keypair = identity · no registration path exists · os keyring /
-        age-encrypted fallback</p>
+    </li>
+
+<!-- ─────────── 04 · accountless identity ─────────── -->
+    <li class="row">
+      <button class="head" type="button" aria-expanded="false" aria-controls="b4">
+        <span class="num">04</span>
+        <span class="title">accountless identity</span>
+        <span class="lead" aria-hidden="true"></span>
+        <span class="map">
+          <span class="chip h">peer:oyv4kq…</span><span class="x" aria-hidden="true">⇄</span><span class="chip a">session.hello</span>
+        </span>
+        <span class="tgl" aria-hidden="true"></span>
+      </button>
+      <div class="body" id="b4" role="region" aria-label="accountless identity — both surfaces" hidden>
+        <div class="pair">
+          <div class="side">
+            <div class="phead">human · tui<span class="pf">first run</span></div>
+<pre>~ no signup · no email · no phone
+~ you are <span class="s">peer:oyv4kqz3n5m2…</span>
+~ x25519 key · os keyring
+~ fallback: age-encrypted file</pre>
+          </div>
+          <div class="par" aria-hidden="true"><span>⇄</span><i>same id</i></div>
+          <div class="side agent">
+            <div class="phead">agent · json-rpc<span class="pf">hello</span></div>
+<pre><span class="g">→</span> {"id":1,"method":"<span class="m">session.hello</span>",
+   "params":{"protocol_version":[1],
+   "client":{"name":"my-agent"}}}
+<span class="g">←</span> {"id":1,"result":{"account":{
+   "peer_id":"<span class="s">peer:oyv4kqz3n5m2…</span>"},
+   "auth_method":"peer_uid"}}</pre>
+          </div>
         </div>
+        <ul class="spec">
+          <li><span class="k">keypair</span><span class="d"></span><span class="v2">x25519</span></li>
+          <li><span class="k">peer-id</span><span class="d"></span><span class="v2">sha-256(pubkey)</span></li>
+          <li><span class="k">signup</span><span class="d"></span><span class="v2">no email · phone · path exists</span></li>
+          <li><span class="k">storage</span><span class="d"></span><span class="v2">os keyring · age-encrypted fallback</span></li>
+        </ul>
+        <p class="desc">Identity is an <b>X25519 keypair</b>; your peer-id is
+          <code>SHA-256(pubkey)</code>. No email, no phone, no signup — there is
+          no registration path at all. Keys live in the OS keyring with an
+          age-encrypted fallback.</p>
       </div>
-      <div class="row" role="button" tabindex="0" aria-expanded="false">
-        <span class="num mono">05<span class="xind" aria-hidden="true"></span></span>
-        <h3>SAS verification</h3>
-        <div class="rcol">
-          <p class="desc">Compare a 7-group numeric short authentication string out-of-band and an invite-link
-        MITM has nowhere to hide. If a key ever changes, sending blocks loudly until you
-        re-verify. Never a silent rebind.</p>
-          <p class="xtra mono">7 groups · derived from handshake hash + both statics, sorted ·
-        key change → sends blocked</p>
+    </li>
+
+<!-- ─────────── 05 · sas verification ─────────── -->
+    <li class="row">
+      <button class="head" type="button" aria-expanded="false" aria-controls="b5">
+        <span class="num">05</span>
+        <span class="title">sas verification</span>
+        <span class="lead" aria-hidden="true"></span>
+        <span class="map">
+          <span class="chip h">/verify</span><span class="x" aria-hidden="true">⇄</span><span class="chip a">ident.verify</span>
+        </span>
+        <span class="tgl" aria-hidden="true"></span>
+      </button>
+      <div class="body" id="b5" role="region" aria-label="sas verification — both surfaces" hidden>
+        <div class="pair">
+          <div class="side">
+            <div class="phead">human · tui<span class="pf">/finger</span></div>
+<pre><span class="p">&gt; /finger</span>
+  eidolon · peer:<span class="s">oyv4kq…</span>
+  trust ○ unverified
+  sas   <span class="s">44-19-07-82-56</span>
+<span class="p">&gt; /verify 44-19-07-82-56</span>
+~ trust <span class="v">● verified</span>
+~ key change ⇒ <span class="v">✕</span> · sends blocked</pre>
+          </div>
+          <div class="par" aria-hidden="true"><span>⇄</span><i>same sas</i></div>
+          <div class="side agent">
+            <div class="phead">agent · json-rpc<span class="pf">verify</span></div>
+<pre><span class="g">←</span> event <span class="m">security.identity_changed</span>
+   {"contact_id":"contact:9f3b12",
+    "trust":"<span class="s">key_changed</span>"}
+<span class="g">→</span> {"id":36,"method":"<span class="m">ident.verify</span>",
+   "params":{"contact_id":
+     "contact:9f3b12",
+     "sas":"<span class="s">44-19-07-82-56</span>"}}
+<span class="g">←</span> {"id":36,"result":{
+   "trust":"<span class="v">verified</span>"}}</pre>
+          </div>
         </div>
+        <ul class="spec">
+          <li><span class="k">render</span><span class="d"></span><span class="v2">7 emoji · digit fallback (160-bit)</span></li>
+          <li><span class="k">binding</span><span class="d"></span><span class="v2">handshake hash + both statics, sorted</span></li>
+          <li><span class="k">key change</span><span class="d"></span><span class="v2">sends blocked until re-verify</span></li>
+          <li><span class="k">clears</span><span class="d"></span><span class="v2">ident.verify only</span></li>
+        </ul>
+        <p class="desc">SAS renders as <b>7 emoji or a digit string</b> bound to
+          the handshake hash and both static keys — compare it out-of-band
+          (digits carry 160 bits, the strong check). On any key change, sends
+          block loudly until <code>ident.verify</code> clears it. Never a
+          silent rebind.</p>
       </div>
-      <div class="row" role="button" tabindex="0" aria-expanded="false">
-        <span class="num mono">06<span class="xind" aria-hidden="true"></span></span>
-        <h3>one-time links</h3>
-        <div class="rcol">
-          <p class="desc"><code>cinder://&lt;pubkey&gt;@&lt;relay&gt;?rendezvous=&lt;token&gt;</code>
-        is a single-use invite slot. An intercepted link can't be replayed, and a copied pubkey
-        alone can't reach you.</p>
-          <p class="xtra mono">single-use rendezvous slot · ticket burns on consume ·
-        replayed links rejected</p>
+    </li>
+
+<!-- ─────────── 06 · one-time links ─────────── -->
+    <li class="row">
+      <button class="head" type="button" aria-expanded="false" aria-controls="b6">
+        <span class="num">06</span>
+        <span class="title">one-time links</span>
+        <span class="lead" aria-hidden="true"></span>
+        <span class="map">
+          <span class="chip h">cinder id</span><span class="x" aria-hidden="true">⇄</span><span class="chip a">invite.create</span>
+        </span>
+        <span class="tgl" aria-hidden="true"></span>
+      </button>
+      <div class="body" id="b6" role="region" aria-label="one-time links — both surfaces" hidden>
+        <div class="pair">
+          <div class="side">
+            <div class="phead">human · shell<span class="pf">mint</span></div>
+<pre><span class="p">$ cinder id</span>
+~ link <span class="s">cinder://oyv4kq…@relay…</span>
+~   ?rendezvous=<span class="s">tok_m41x</span>
+~ single-use · burns on consume</pre>
+          </div>
+          <div class="par" aria-hidden="true"><span>⇄</span><i>one slot</i></div>
+          <div class="side agent">
+            <div class="phead">agent · json-rpc<span class="pf">invite</span></div>
+<pre><span class="g">→</span> {"id":34,"method":"<span class="m">invite.create</span>",
+   "params":{"label":"ops-agent",
+             "ttl_sec":86400}}
+<span class="g">←</span> {"id":34,"result":{"link":
+   "<span class="s">cinder://oyv4kq…@relay…
+    ?rendezvous=tok_m41x</span>"}}
+<span class="c"># replay ⇒ -32018 conflict</span></pre>
+          </div>
         </div>
+        <ul class="spec">
+          <li><span class="k">format</span><span class="d"></span><span class="v2">cinder://&lt;pubkey&gt;@&lt;relay&gt;</span></li>
+          <li><span class="k">token</span><span class="d"></span><span class="v2">?rendezvous=&lt;token&gt;</span></li>
+          <li><span class="k">slot</span><span class="d"></span><span class="v2">single-use · ticket burns on consume</span></li>
+          <li><span class="k">replay</span><span class="d"></span><span class="v2">-32018 conflict · rejected</span></li>
+        </ul>
+        <p class="desc">
+          <code>cinder://&lt;pubkey&gt;@&lt;relay&gt;?rendezvous=&lt;token&gt;</code>
+          claims a <b>single rendezvous slot</b> — the ticket burns on consume.
+          An intercepted link can't be replayed, and a copied pubkey alone
+          can't reach you.</p>
       </div>
-      <div class="row" role="button" tabindex="0" aria-expanded="false">
-        <span class="num mono">07<span class="xind" aria-hidden="true"></span></span>
-        <h3>offline mailboxes</h3>
-        <div class="rcol">
-          <p class="desc">Bounded per-mailbox queues on the relay hold ciphertext for offline peers.
-        Mailbox ids are random 256-bit; deposit and fetch need capability tokens — open mailboxes
-        would be a spam vector.</p>
-          <p class="xtra mono">bounded queues · 256-bit ids · capability tokens for
-        deposit + fetch</p>
+    </li>
+
+<!-- ─────────── 07 · offline mailboxes ─────────── -->
+    <li class="row">
+      <button class="head" type="button" aria-expanded="false" aria-controls="b7">
+        <span class="num">07</span>
+        <span class="title">offline mailboxes</span>
+        <span class="lead" aria-hidden="true"></span>
+        <span class="map">
+          <span class="chip h">… → ✓ parked</span><span class="x" aria-hidden="true">⇄</span><span class="chip a">msg_state</span>
+        </span>
+        <span class="tgl" aria-hidden="true"></span>
+      </button>
+      <div class="body" id="b7" role="region" aria-label="offline mailboxes — both surfaces" hidden>
+        <div class="pair">
+          <div class="side">
+            <div class="phead">human · tui<span class="pf">send glyphs</span></div>
+<pre><span class="p">&gt; see you at 0400</span>
+~ peer offline            … → <span class="s">✓</span>
+~ ✓ = parked in peer's mailbox
+~ peer fetched · ack       → <span class="v">✓✓</span></pre>
+          </div>
+          <div class="par" aria-hidden="true"><span>⇄</span><i>same event</i></div>
+          <div class="side agent">
+            <div class="phead">agent · json-rpc<span class="pf">events</span></div>
+<pre><span class="g">→</span> {"id":10,"method":"<span class="m">msg.send</span>",
+   "params":{"to":"contact:9f3b12",…}}
+<span class="g">←</span> {"id":10,"result":{"state":"queued"}}
+<span class="g">←</span> event <span class="m">msg_state</span> {"msg_id":
+   "<span class="s">msg:e01d7c</span>","state":"<span class="v">delivered</span>"}
+<span class="c"># mailbox: deposit+fetch need caps</span></pre>
+          </div>
         </div>
+        <ul class="spec">
+          <li><span class="k">queue</span><span class="d"></span><span class="v2">bounded · ≤500 msgs · ≤4 MiB · ≤30 d</span></li>
+          <li><span class="k">id</span><span class="d"></span><span class="v2">random 256-bit · not from peer-id</span></li>
+          <li><span class="k">access</span><span class="d"></span><span class="v2">capability tokens: deposit + fetch</span></li>
+          <li><span class="k">fetch</span><span class="d"></span><span class="v2">non-destructive until mailboxack</span></li>
+        </ul>
+        <p class="desc">Offline peers get <b>bounded mailboxes</b> on the relay,
+          keyed by random 256-bit ids nobody can guess from a peer-id. Deposit
+          and fetch each need a capability token — open mailboxes would be a
+          spam vector — and fetch stays non-destructive until ack.</p>
       </div>
-    </div>
-    <pre class="orn ledger-cap" aria-hidden="true"><span class="ft">╞══════════════════</span><span class="mu"> ledger </span><span class="ft">══════════════════╡</span></pre>
+    </li>
+
+  </ol>
+
+  <div class="foot">
+    <span class="rule" aria-hidden="true"></span>
+    <span>no human-only calls · no agent-only calls · <span class="ok">parity 7/7</span></span>
+    <span class="rule" aria-hidden="true"></span>
+  </div>
+</div>
   </div>
 </section>
 
@@ -640,103 +963,142 @@
       </div>
     </div>
 
-    <figure class="fsm-panel" data-reveal>
-      <figcaption class="bar mono" id="fsm-cap">
-        <span class="tag">fsm-01</span>
-        <span class="t">session · transport · trust</span>
-        <span class="r"><i></i>schematic · <b class="fsm-state" id="fsmState">verified</b></span>
-      </figcaption>
-      <div class="scroll">
-<pre class="fsm" aria-label="ASCII schematic of the cinder session state machine. Entry at INVITE, transitions to HANDSHAKE, SEALED, VERIFIED. SEALED loops on rekey, drops to UNVERIFIED on key change, which returns to VERIFIED on sas match. VERIFIED drops to WIPED on chat.wipe. Every state falls to DENIED on contact.deny.">
-                                                                                <span class="lp">┌─ rekey ──┐</span>
-                                                                                <span class="lp">▲</span>          <span class="lp">▼</span>
-    <span class="bx">┌──────────────┐</span><span class="lbl"> cinder:// link </span><span class="bx">┌────────────────┐</span><span class="lbl"> noise_xx · 3 flights </span><span class="bx">┌────────────────┐</span><span class="lbl">   /sas match   </span><span class="bx">┌────────────────┐</span>
-<span class="ent">●</span><span class="arw">──▶</span><span class="bx">│ </span><span class="led" data-i="0">○</span><span class="bx"> INVITE     │</span><span class="arw">───────────────▶</span><span class="bx">│ </span><span class="led" data-i="1">○</span><span class="bx"> HANDSHAKE    │</span><span class="arw">═════════════════════▶</span><span class="bx">│ </span><span class="led" data-i="2">○</span><span class="bx"> SEALED       │</span><span class="arw">───────────────▶</span><span class="bx">│ </span><span class="led on" data-i="3">●</span><span class="bx"> VERIFIED     │</span>
-    <span class="bx">└───────┬──────┘</span>                <span class="bx">└───────┬────────┘</span>                      <span class="bx">└─┬─────────┬────┘</span>                <span class="bx">└─────────┬─────┬┘</span>
-            <span class="arw">│</span>                               <span class="arw">│</span>                                 <span class="arw">│</span>         <span class="arw">│</span> <span class="wrn">key change</span>               <span class="arw">▲</span>    <span class="arw">│</span>     <span class="arw">│</span>
-            <span class="arw">│</span>                               <span class="arw">│</span>                                 <span class="arw">│</span>         <span class="arw">│</span>           <span class="arw">┌─ </span><span class="lbl">sas match</span><span class="arw"> ──┘</span>    <span class="arw">│</span>     <span class="arw">│</span>
-            <span class="arw">│</span>                               <span class="arw">│</span>                                 <span class="arw">│</span>         <span class="arw">│</span>           <span class="arw">│</span>                   <span class="arw">│</span>     <span class="arw">│</span>
-            <span class="arw">│</span>                               <span class="arw">│</span>                                 <span class="arw">│</span>         <span class="arw">▼</span>           <span class="arw">│</span>         <span class="lbl">chat.wipe</span> <span class="arw">▼</span>     <span class="arw">│</span>
-            <span class="arw">│</span>                               <span class="arw">│</span>                                 <span class="arw">│</span> <span class="wrn">┏━━━━━━━━━━━━━━━━┓</span>  <span class="arw">│</span>             <span class="bx">┌──────────┐</span><span class="arw">│</span>
-            <span class="arw">│</span>                               <span class="arw">│</span>                                 <span class="arw">│</span> <span class="wrn">┃ ! UNVERIFIED   ┃</span><span class="arw">──┘</span>             <span class="bx">│ </span><span class="led">○</span><span class="bx"> WIPED  │</span><span class="arw">│</span>
-            <span class="arw">│</span>                               <span class="arw">│</span>                                 <span class="arw">│</span> <span class="wrn">┃  sends blocked ┃</span>                <span class="bx">└─────┬────┘</span><span class="arw">│</span>
-            <span class="arw">│</span>                               <span class="arw">│</span>                                 <span class="arw">│</span> <span class="wrn">┗━━━━━┳━━━━━━━━━━┛</span>                      <span class="arw">│</span>     <span class="arw">│</span>
-            <span class="arw">│</span>                               <span class="arw">│</span>                                 <span class="arw">│</span>       <span class="arw">│</span>                                 <span class="arw">│</span>     <span class="arw">│</span>
-            <span class="arw">└</span><span class="arw">─────────────────</span><span class="arw">┬</span><span class="arw">─────────────</span><span class="arw">┴</span><span class="arw">─</span><span class="den"> contact.deny · any state </span><span class="arw">──────</span><span class="arw">┴</span><span class="arw">───────</span><span class="arw">┴</span><span class="arw">─────────────────────────────────</span><span class="arw">┴</span><span class="arw">─────</span><span class="arw">┘</span>
-                              <span class="arw">│</span>
-                              <span class="arw">▼</span>
-                      <span class="den">┌┄┄┄┄┄┄┄┄┄┄┄┄┄┄┐</span>
-                      <span class="den">┆ × DENIED     ┆</span>
-                      <span class="den">└┄┄┄┄┄┄┄┄┄┄┄┄┄┄┘</span>
-                      <span class="dnn">terminal · no un-deny</span>
+    <div class="fsmv2">
+<figure class="panel" aria-labelledby="fsm-cap">
+    <figcaption class="bar" id="fsm-cap">
+      <span class="tag">fsm-02</span>
+      <span class="t">session · transport · trust</span>
+      <span class="r"><i></i>interactive</span>
+    </figcaption>
+    <div class="scroll">
+<pre class="fsm" id="fsm" aria-label="Interactive ASCII schematic of the cinder session state machine. Entry at INVITE, transitions to HANDSHAKE, SEALED, VERIFIED. SEALED loops on rekey, drops to UNVERIFIED on key change, which returns to VERIFIED on sas match. VERIFIED drops to WIPED on chat.wipe. Every state falls to DENIED on contact.deny. State buttons inspect outgoing edges.">
+                                                                                <span class="lp" data-edge="rekey">┌─ rekey ──┐</span>
+                                                                                <span class="lp" data-edge="rekey">▲</span>          <span class="lp" data-edge="rekey">▼</span>
+    <span class="bx stc" data-state="invite">┌──────────────┐</span><span class="lbl" data-edge="link"> cinder:// link </span><span class="bx stc" data-state="handshake">┌────────────────┐</span><span class="lbl" data-edge="noise"> noise_xx · 3 flights </span><span class="bx stc" data-state="sealed">┌────────────────┐</span><span class="lbl" data-edge="sas">   /sas match   </span><span class="bx stc" data-state="verified">┌────────────────┐</span>
+<span class="ent">●</span><span class="arw">──▶</span><button class="st" type="button" data-state="invite" aria-pressed="false" aria-label="INVITE — inspect outgoing edges"><span class="bx">│ </span><span class="led" data-i="0">○</span><span class="bx"> INVITE     │</span></button><span class="arw" data-edge="link">───────────────▶</span><button class="st" type="button" data-state="handshake" aria-pressed="false" aria-label="HANDSHAKE — inspect outgoing edges"><span class="bx">│ </span><span class="led" data-i="1">○</span><span class="bx"> HANDSHAKE    │</span></button><span class="arw" data-edge="noise">═════════════════════▶</span><button class="st" type="button" data-state="sealed" aria-pressed="false" aria-label="SEALED — inspect outgoing edges"><span class="bx">│ </span><span class="led" data-i="2">○</span><span class="bx"> SEALED       │</span></button><span class="arw" data-edge="sas">───────────────▶</span><button class="st" type="button" data-state="verified" aria-pressed="false" aria-label="VERIFIED — inspect outgoing edges"><span class="bx">│ </span><span class="led on" data-i="3">●</span><span class="bx"> VERIFIED     │</span></button>
+    <span class="bx stc" data-state="invite">└───────┬──────┘</span>                <span class="bx stc" data-state="handshake">└───────┬────────┘</span>                      <span class="bx stc" data-state="sealed">└─┬─────────┬────┘</span>                <span class="bx stc" data-state="verified">└─────────┬─────┬┘</span>
+            <span class="arw" data-edge="deny">│</span>                               <span class="arw" data-edge="deny">│</span>                                 <span class="arw" data-edge="deny">│</span>         <span class="arw" data-edge="keychg">│</span> <span class="wrn" data-edge="keychg">key change</span>               <span class="arw" data-edge="sasback">▲</span>    <span class="arw" data-edge="wipe">│</span>     <span class="arw" data-edge="deny">│</span>
+            <span class="arw" data-edge="deny">│</span>                               <span class="arw" data-edge="deny">│</span>                                 <span class="arw" data-edge="deny">│</span>         <span class="arw" data-edge="keychg">│</span>           <span class="arw" data-edge="sasback">┌─ </span><span class="lbl" data-edge="sasback">sas match</span><span class="arw" data-edge="sasback"> ──┘</span>    <span class="arw" data-edge="wipe">│</span>     <span class="arw" data-edge="deny">│</span>
+            <span class="arw" data-edge="deny">│</span>                               <span class="arw" data-edge="deny">│</span>                                 <span class="arw" data-edge="deny">│</span>         <span class="arw" data-edge="keychg">│</span>           <span class="arw" data-edge="sasback">│</span>                   <span class="arw" data-edge="wipe">│</span>     <span class="arw" data-edge="deny">│</span>
+            <span class="arw" data-edge="deny">│</span>                               <span class="arw" data-edge="deny">│</span>                                 <span class="arw" data-edge="deny">│</span>         <span class="arw" data-edge="keychg">▼</span>           <span class="arw" data-edge="sasback">│</span>         <span class="lbl" data-edge="wipe">chat.wipe</span> <span class="arw" data-edge="wipe">▼</span>     <span class="arw" data-edge="deny">│</span>
+            <span class="arw" data-edge="deny">│</span>                               <span class="arw" data-edge="deny">│</span>                                 <span class="arw" data-edge="deny">│</span> <span class="wrn stc" data-state="unverified">┏━━━━━━━━━━━━━━━━┓</span>  <span class="arw" data-edge="sasback">│</span>             <span class="bx stc" data-state="wiped">┌──────────┐</span><span class="arw" data-edge="deny">│</span>
+            <span class="arw" data-edge="deny">│</span>                               <span class="arw" data-edge="deny">│</span>                                 <span class="arw" data-edge="deny">│</span> <button class="st wrn" type="button" data-state="unverified" aria-pressed="false" aria-label="UNVERIFIED — sends blocked, inspect outgoing edges">┃ ! UNVERIFIED   ┃</button><span class="arw" data-edge="sasback">──┘</span>             <button class="st" type="button" data-state="wiped" aria-pressed="false" aria-label="WIPED — inspect outgoing edges"><span class="bx">│ </span><span class="led">○</span><span class="bx"> WIPED  │</span></button><span class="arw" data-edge="deny">│</span>
+            <span class="arw" data-edge="deny">│</span>                               <span class="arw" data-edge="deny">│</span>                                 <span class="arw" data-edge="deny">│</span> <span class="wrn stc" data-state="unverified">┃  sends blocked ┃</span>                <span class="bx stc" data-state="wiped">└─────┬────┘</span><span class="arw" data-edge="deny">│</span>
+            <span class="arw" data-edge="deny">│</span>                               <span class="arw" data-edge="deny">│</span>                                 <span class="arw" data-edge="deny">│</span> <span class="wrn stc" data-state="unverified">┗━━━━━┳━━━━━━━━━━┛</span>                      <span class="arw" data-edge="deny">│</span>     <span class="arw" data-edge="deny">│</span>
+            <span class="arw" data-edge="deny">│</span>                               <span class="arw" data-edge="deny">│</span>                                 <span class="arw" data-edge="deny">│</span>       <span class="arw" data-edge="deny">│</span>                                 <span class="arw" data-edge="deny">│</span>     <span class="arw" data-edge="deny">│</span>
+            <span class="arw" data-edge="deny">└─────────────────┬─────────────┴─</span><span class="den" data-edge="deny"> contact.deny · any state </span><span class="arw" data-edge="deny">──────┴───────┴─────────────────────────────────┴─────┘</span>
+                              <span class="arw" data-edge="deny">│</span>
+                              <span class="arw" data-edge="deny">▼</span>
+                      <span class="den stc" data-state="denied" data-edge="deny">┌┄┄┄┄┄┄┄┄┄┄┄┄┄┄┐</span>
+                      <button class="st den" type="button" data-state="denied" data-edge="deny" aria-pressed="false" aria-label="DENIED — terminal state, no outgoing edges">┆ × DENIED     ┆</button>
+                      <span class="den stc" data-state="denied" data-edge="deny">└┄┄┄┄┄┄┄┄┄┄┄┄┄┄┘</span>
+                      <span class="dnn" data-edge="deny">terminal · no un-deny</span>
 
-    <span class="d2">○ idle    ● active    ──▶ edge    ══▶ flight    ┄┄ terminal</span>
+    <span class="dim">○ idle    ● active    ──▶ edge    ══▶ flight    ┄┄ terminal    click inspects · esc resets</span>
 </pre>
-      </div>
-    </figure>
+    </div>
+  </figure>
 
-    <p class="sr-only">
-      Session state machine. States: invite, handshake, sealed, verified,
-      unverified, wiped, denied. Transitions: invite to handshake via cinder
-      link; handshake to sealed after three noise_xx flights; sealed loops on
-      rekey; sealed to verified on sas match; sealed to unverified on key
-      change, which blocks sends; unverified back to verified on sas match;
-      verified to wiped via chat.wipe; any state to denied via contact.deny.
-      Denied is terminal; there is no un-deny.
-    </p>
+  <p class="sr-only">
+    Session state machine. States: invite, handshake, sealed, verified,
+    unverified, wiped, denied. Transitions: invite to handshake via cinder
+    link; handshake to sealed after three noise_xx flights; sealed loops on
+    rekey; sealed to verified on sas match; sealed to unverified on key
+    change, which blocks sends; unverified back to verified on sas match;
+    verified to wiped via chat.wipe; any state to denied via contact.deny.
+    Denied is terminal; there is no un-deny. Each state is a button that
+    highlights its outgoing edges and reports them in the readout below.
+  </p>
 
-    <figure class="fsm-panel rail-panel" data-reveal>
-      <figcaption class="bar mono" id="rail-cap">
-        <span class="tag">fsm-01</span>
-        <span class="t">session · rail</span>
-        <span class="r"><i></i>schematic</span>
-      </figcaption>
-      <div class="scroll">
-<pre class="rail" aria-label="Vertical list of session states: invite, handshake, sealed, unverified, verified, wiped, denied.">
-<span class="ent">●</span><span class="arw">──▶</span><span class="bx">┌─────────────┐</span>
-    <span class="bx">│ </span><span class="led" data-i="0">○</span><span class="bx"> INVITE    │</span>
-    <span class="bx">└───────┬─────┘</span>
-            <span class="arw">│</span> <span class="lbl">cinder:// link</span>
-            <span class="arw">▼</span>
-    <span class="bx">┌─────────────┐</span>
-    <span class="bx">│ </span><span class="led" data-i="1">○</span><span class="bx"> HANDSHAKE │</span>
-    <span class="bx">└───────┬─────┘</span>
-            <span class="arw">│</span> <span class="lbl">noise_xx</span>
-            <span class="arw">│</span> <span class="lbl">3 flights</span>
-            <span class="arw">▼</span>
-        <span class="lp">┌ rekey  ┐</span>
-        <span class="lp">▲</span>   <span class="arw">▼</span>    <span class="lp">▼</span>
-    <span class="bx">┌─────────────┐</span>
-    <span class="bx">│ </span><span class="led" data-i="2">○</span><span class="bx"> SEALED    │</span>
-    <span class="bx">└───────┬─────┘</span>
-            <span class="arw">│</span> <span class="wrn">key change</span>
-            <span class="arw">▼</span>
-       <span class="wrn">┏━━━━━━━━━━━━━━┓</span>
-       <span class="wrn">┃ ! UNVERIFIED ┃</span>
-       <span class="wrn">┃ sends blocked ┃</span>
-       <span class="wrn">┗━━━━━━━━┳━━━━━┛</span>
-                <span class="arw">│</span> <span class="lbl">sas match</span>
-                <span class="arw">▼</span>
-    <span class="bx">┌─────────────┐</span>
-    <span class="bx">│ </span><span class="led on" data-i="3">●</span><span class="bx"> VERIFIED  │</span>
-    <span class="bx">└───────┬─────┘</span>
-            <span class="arw">│</span> <span class="lbl">chat.wipe</span>
-            <span class="arw">▼</span>
-    <span class="bx">┌─────────────┐</span>
-    <span class="bx">│ </span><span class="led">○</span><span class="bx"> WIPED     │</span>
-    <span class="bx">└───────┬─────┘</span>
-            <span class="arw">│</span> <span class="den">contact.deny</span>
-            <span class="arw">│</span> <span class="den">· any state</span>
-            <span class="den">▼</span>
-    <span class="den">┌┄┄┄┄┄┄┄┄┄┄┄┄┄┐</span>
-    <span class="den">┆ × DENIED    ┆</span>
-    <span class="den">└┄┄┄┄┄┄┄┄┄┄┄┄┄┘</span>
-      <span class="dnn">terminal · no un-deny</span>
+  <figure class="panel rail-panel" aria-labelledby="rail-cap">
+    <figcaption class="bar" id="rail-cap">
+      <span class="tag">fsm-02</span>
+      <span class="t">session · rail</span>
+      <span class="r"><i></i>interactive</span>
+    </figcaption>
+    <div class="scroll">
+<pre class="rail" id="rail" aria-label="Interactive vertical list of session states: invite, handshake, sealed, unverified, verified, wiped, denied. State buttons inspect outgoing edges.">
+<span class="ent">●</span><span class="arw">──▶</span><span class="bx stc" data-state="invite">┌─────────────┐</span>
+    <button class="st" type="button" data-state="invite" aria-pressed="false" aria-label="INVITE — inspect outgoing edges"><span class="bx">│ </span><span class="led" data-i="0">○</span><span class="bx"> INVITE    │</span></button>
+    <span class="bx stc" data-state="invite">└───────┬─────┘</span>
+            <span class="arw" data-edge="link">│</span> <span class="lbl" data-edge="link">cinder:// link</span>
+            <span class="arw" data-edge="link">▼</span>
+    <span class="bx stc" data-state="handshake">┌─────────────┐</span>
+    <button class="st" type="button" data-state="handshake" aria-pressed="false" aria-label="HANDSHAKE — inspect outgoing edges"><span class="bx">│ </span><span class="led" data-i="1">○</span><span class="bx"> HANDSHAKE │</span></button>
+    <span class="bx stc" data-state="handshake">└───────┬─────┘</span>
+            <span class="arw" data-edge="noise">│</span> <span class="lbl" data-edge="noise">noise_xx</span>
+            <span class="arw" data-edge="noise">│</span> <span class="lbl" data-edge="noise">3 flights</span>
+            <span class="arw" data-edge="noise">▼</span>
+        <span class="lp" data-edge="rekey">┌ rekey  ┐</span>
+        <span class="lp" data-edge="rekey">▲</span>   <span class="arw" data-edge="noise">▼</span>    <span class="lp" data-edge="rekey">▼</span>
+    <span class="bx stc" data-state="sealed">┌─────────────┐</span>
+    <button class="st" type="button" data-state="sealed" aria-pressed="false" aria-label="SEALED — inspect outgoing edges"><span class="bx">│ </span><span class="led" data-i="2">○</span><span class="bx"> SEALED    │</span></button>
+    <span class="bx stc" data-state="sealed">└───────┬─────┘</span>
+            <span class="arw" data-edge="keychg">│</span> <span class="wrn" data-edge="keychg">key change</span>
+            <span class="arw" data-edge="keychg">▼</span>
+       <span class="wrn stc" data-state="unverified">┏━━━━━━━━━━━━━━┓</span>
+       <button class="st wrn" type="button" data-state="unverified" aria-pressed="false" aria-label="UNVERIFIED — sends blocked, inspect outgoing edges">┃ ! UNVERIFIED ┃</button>
+       <span class="wrn stc" data-state="unverified">┃ sends blocked┃</span>
+       <span class="wrn stc" data-state="unverified">┗━━━━━━━━┳━━━━━┛</span>
+                <span class="arw" data-edge="sasback">│</span> <span class="lbl" data-edge="sasback">sas match</span>
+                <span class="arw" data-edge="sasback">▼</span>
+    <span class="bx stc" data-state="verified">┌─────────────┐</span>
+    <button class="st" type="button" data-state="verified" aria-pressed="false" aria-label="VERIFIED — inspect outgoing edges"><span class="bx">│ </span><span class="led on" data-i="3">●</span><span class="bx"> VERIFIED  │</span></button>
+    <span class="bx stc" data-state="verified">└───────┬─────┘</span>
+            <span class="arw" data-edge="wipe">│</span> <span class="lbl" data-edge="wipe">chat.wipe</span>
+            <span class="arw" data-edge="wipe">▼</span>
+    <span class="bx stc" data-state="wiped">┌─────────────┐</span>
+    <button class="st" type="button" data-state="wiped" aria-pressed="false" aria-label="WIPED — inspect outgoing edges"><span class="bx">│ </span><span class="led">○</span><span class="bx"> WIPED     │</span></button>
+    <span class="bx stc" data-state="wiped">└───────┬─────┘</span>
+            <span class="arw" data-edge="deny">│</span> <span class="den" data-edge="deny">contact.deny</span>
+            <span class="arw" data-edge="deny">│</span> <span class="den" data-edge="deny">· any state</span>
+            <span class="den" data-edge="deny">▼</span>
+    <span class="den stc" data-state="denied" data-edge="deny">┌┄┄┄┄┄┄┄┄┄┄┄┄┄┐</span>
+    <button class="st den" type="button" data-state="denied" data-edge="deny" aria-pressed="false" aria-label="DENIED — terminal state, no outgoing edges">┆ × DENIED    ┆</button>
+    <span class="den stc" data-state="denied" data-edge="deny">└┄┄┄┄┄┄┄┄┄┄┄┄┄┘</span>
+      <span class="dnn" data-edge="deny">terminal · no un-deny</span>
 
-    <span class="d2">○ idle   ● active</span>
+    <span class="dim">○ idle   ● active   click inspects</span>
 </pre>
-      </div>
-    </figure>
+    </div>
+  </figure>
+
+  <div class="inspect" aria-label="Edge inspection and transition register">
+    <div class="readout" id="edge-read" role="status" aria-live="polite"></div>
+    <div class="log" aria-label="Transition register">
+      <div class="log-h">transition register</div>
+      <div class="log-body" id="log-body"></div>
+    </div>
+  </div>
+
+  <div class="spec" aria-label="State and transition reference">
+    <div class="card">
+      <div class="hd2">states</div>
+      <ul>
+        <li><span class="s">INVITE</span><span class="d">link issued, no keys yet</span></li>
+        <li><span class="s">HANDSHAKE</span><span class="d">noise_xx in flight</span></li>
+        <li class="hot"><span class="s">SEALED</span><span class="d">transport live, trust off</span></li>
+        <li class="hot"><span class="s">VERIFIED</span><span class="d">sas matched, trusted</span></li>
+        <li class="warn"><span class="s">UNVERIFIED</span><span class="d">key changed, sends blocked</span></li>
+        <li><span class="s">WIPED</span><span class="d">history destroyed, keys kept</span></li>
+        <li class="term"><span class="s">DENIED</span><span class="d">absorbing, no un-deny</span></li>
+      </ul>
+    </div>
+    <div class="card">
+      <div class="hd2">edges · hover to trace</div>
+      <ul>
+        <li data-edge="link"><span class="e">INVITE <span class="x">──▶</span> HANDSHAKE</span><span class="lbl">cinder:// link</span></li>
+        <li data-edge="noise"><span class="e">HANDSHAKE <span class="x">══▶</span> SEALED</span><span class="lbl">noise_xx · 3 flights</span></li>
+        <li data-edge="sas"><span class="e">SEALED <span class="x">──▶</span> VERIFIED</span><span class="lbl">/sas match</span></li>
+        <li data-edge="rekey"><span class="e">SEALED <span class="x">◀─┐</span> SEALED</span><span class="lbl">rekey (loop)</span></li>
+        <li data-edge="keychg"><span class="e wrn">SEALED <span class="x">──▶</span> UNVERIFIED</span><span class="lbl">key change · sends blocked</span></li>
+        <li data-edge="sasback"><span class="e">UNVERIFIED <span class="x">──▶</span> VERIFIED</span><span class="lbl">sas match</span></li>
+        <li data-edge="wipe"><span class="e">VERIFIED <span class="x">──▶</span> WIPED</span><span class="lbl">chat.wipe</span></li>
+        <li data-edge="deny"><span class="e den">any <span class="x">──▶</span> DENIED</span><span class="lbl">contact.deny · terminal</span></li>
+      </ul>
+    </div>
+  </div>
+    </div>
     <p class="doc-link mono" data-reveal><span class="dim">read</span> <a href="https://github.com/nikolas-sapa/cinder/blob/main/docs/THREAT-MODEL.md" rel="noopener">docs/THREAT-MODEL.md →</a></p>
     <pre class="orn warn-plate" data-reveal aria-label="pre-1.0, not externally audited"><span class="ft">┌─ </span><span class="em">▲</span><span class="ft"> ────────────────────────────────────────────────────┐</span>
 <span class="ft">│</span>                                                        <span class="ft">│</span>
@@ -836,74 +1198,143 @@
 
 </main>
 
-<footer class="fm">
-  <div class="fm-rule" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>
+<footer class="fm2 fm-live">
 
-  <div class="fm-cols">
-    <div class="fm-brand">
-      <pre class="fm-spark" aria-hidden="true">╲ │ ╱
+  <!-- 01 · starfield: two rotating <pre> layers, drift gated by .fm-live -->
+  <div class="fm2-stars" id="sf" aria-hidden="true">
+    <pre class="fm2-sf far mono" id="sfFar"></pre>
+    <pre class="fm2-sf near mono" id="sfNear"></pre>
+    <span class="fm2-sf-tag mono">// ambient signal · drift = cosmetic demo</span>
+  </div>
+
+  <div class="fm2-cols">
+    <div class="fm2-brand">
+      <pre class="fm2-spark" aria-hidden="true">╲ │ ╱
 ─ █ ─
 ╱ │ ╲</pre>
-      <p class="fm-name">cinder</p>
-      <p class="fm-tag">encrypted chat your agents can drive</p>
-      <p class="fm-meta mono">e2e · noise_xx · blind relay · no accounts</p>
+      <p class="fm2-name">cinder</p>
+      <p class="fm2-tag">encrypted chat your agents can drive</p>
+      <p class="fm2-meta mono">e2e · noise_xx · blind relay · no accounts</p>
     </div>
 
-    <nav class="fm-col" aria-label="Protocol">
-      <h4 class="fm-h mono"><span class="c">┌─</span>protocol<span class="r"></span></h4>
-      <a class="fm-l mono" href="https://github.com/nikolas-sapa/cinder/blob/main/docs/PROTOCOL.md" rel="noopener"><span class="n">protocol.md</span><span class="d">// the wire, annotated</span></a>
-      <a class="fm-l mono" href="https://github.com/nikolas-sapa/cinder/blob/main/docs/THREAT-MODEL.md" rel="noopener"><span class="n">threat-model.md</span><span class="d">// what holds, what doesn't</span></a>
-      <a class="fm-l mono" href="https://github.com/nikolas-sapa/cinder/blob/main/docs/AGENT-API.md" rel="noopener"><span class="n">agent-api.md</span><span class="d">// self-describing spec</span></a>
+    <nav class="fm2-col" aria-label="Protocol">
+      <h4 class="fm2-h mono"><i>┌─</i><b>protocol</b><span class="rl"></span><i>┐</i></h4>
+      <a class="fm2-l mono" href="/docs/protocol"><span class="n">protocol.md</span><span class="d">// the wire</span></a>
+      <a class="fm2-l mono" href="/docs/threat-model"><span class="n">threat-model.md</span><span class="d">// adversaries</span></a>
+      <a class="fm2-l mono" href="/docs/agent-api"><span class="n">agent-api.md</span><span class="d">// the spec</span></a>
     </nav>
 
-    <nav class="fm-col" aria-label="Repository">
-      <h4 class="fm-h mono"><span class="c">┌─</span>repo<span class="r"></span></h4>
-      <a class="fm-l mono" href="https://github.com/nikolas-sapa/cinder" rel="noopener"><span class="n">github</span><span class="d">// nikolas-sapa/cinder</span></a>
-      <a class="fm-l mono" href="https://github.com/nikolas-sapa/cinder/issues" rel="noopener"><span class="n">issues</span><span class="d">// bug reports welcome</span></a>
-      <a class="fm-l mono" href="https://github.com/nikolas-sapa/cinder/releases" rel="noopener"><span class="n">releases</span><span class="d">// cargo install --locked</span></a>
+    <nav class="fm2-col" aria-label="Repository">
+      <h4 class="fm2-h mono"><i>┌─</i><b>repo</b><span class="rl"></span><i>┐</i></h4>
+      <a class="fm2-l mono" href="https://github.com/nikolas-sapa/cinder" rel="noopener"><span class="n">github</span><span class="d">// nikolas-sapa/cinder</span></a>
+      <a class="fm2-l mono" href="https://github.com/nikolas-sapa/cinder/issues" rel="noopener"><span class="n">issues</span><span class="d">// bug reports welcome</span></a>
+      <a class="fm2-l mono" href="https://github.com/nikolas-sapa/cinder/releases" rel="noopener"><span class="n">releases</span><span class="d">// cargo install</span></a>
     </nav>
 
-    <div class="fm-col" aria-label="Status">
-      <h4 class="fm-h mono"><span class="c">┌─</span>status<span class="r"></span></h4>
-      <p class="fm-s mono"><span class="k">version</span><span class="v hot">pre-1.0</span></p>
-      <p class="fm-s mono"><span class="k">audit</span><span class="v">not externally audited</span></p>
-      <p class="fm-s mono"><span class="k">license</span><span class="v">mit</span></p>
-      <p class="fm-s mono"><span class="k">loc</span><span class="v">~14k · rust</span></p>
+    <div class="fm2-col" aria-label="Status">
+      <h4 class="fm2-h mono"><i>┌─</i><b>status</b><span class="rl"></span><i>┐</i></h4>
+      <p class="fm2-s mono"><span class="k">version</span><span class="v hot">pre-1.0</span></p>
+      <p class="fm2-s mono"><span class="k">audit</span><span class="v bad">not externally audited</span></p>
+      <p class="fm2-s mono"><span class="k">license</span><span class="v">mit</span></p>
+      <p class="fm2-s mono"><span class="k">loc</span><span class="v">~14k · rust</span></p>
     </div>
   </div>
 
-  <div class="fm-mark">
+  <!-- 02 · dual-tone wordmark: faint bodies, ember core strokes, scan + flicker -->
+  <div class="fm2-mark">
     <span class="fc tl mono" aria-hidden="true">┌</span>
     <span class="fc tr mono" aria-hidden="true">┐</span>
-    <div class="fm-mark-box">
-      <div class="fm-dith" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>
-      <pre class="fm-word" aria-hidden="true"> <span class="d1">░</span>     <span class="d1">░</span>█████   ███████  ███    ██  ███████   ████████  ██████<span class="d2">▒</span>
-      <span class="d2">▓</span>█    ██    ███    ████   ██  ██   ███  ██        ██    █<span class="d2">▓</span> <span class="d1">░</span>
-  <span class="d1">·</span>   <span class="d2">▒</span>█          ███    ██ <b>█</b>█  ██  ██    █<b>█</b>  █████<b>█</b>    ██    █<span class="d1">░</span>    <span class="d1">·</span>
- <span class="d1">░</span>    <span class="d1">░</span>█          █<b>█</b>█    ██  ██ ██  ██    ██  ██        ██████<span class="d2">▓</span>
-      <span class="d2">▒</span>█    ██    ███    ██   ████  ██   ███  ██        ██ ██     <span class="d1">░</span>
-   <span class="d1">░</span>   <span class="d1">░</span>█████   ███████  ██    ███  ███████   ████████  ██  ██<span class="d2">▓</span><span class="d1">░</span>     <span class="d2">▒</span></pre>
+    <div class="fm2-mark-box">
+      <div class="fm2-dith" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>
+      <div class="fm2-scan" aria-hidden="true"></div>
+      <!-- rows are grid-padded to fixed widths with NBSP (U+00A0) at row ends;
+           verified by check_fm2_widths.py — every row in a letter equal, total = 86 cols -->
+      <div class="fm2-word" aria-hidden="true"><pre class="wL edge">░     
+  ▓ ░ 
+ · ░▒ 
+░    ░
+  ▒   
+   ░· </pre><pre class="wL" style="--fd:-.4s"> ███<b>██</b>███ 
+█<b>█</b>█    ███
+<b>██</b>        
+<b>██</b>        
+█<b>█</b>█    ███
+ ███<b>██</b>███ </pre><pre class="wL" style="--fd:-3.1s">███<b>███</b>███
+   █<b>█</b>█   
+   █<b>█</b>█   
+   █<b>█</b>█   
+   █<b>█</b>█   
+███<b>███</b>███</pre><pre class="wL" style="--fd:-6.8s">██       ██
+██<b>█</b>      ██
+██ <b>██</b>    ██
+██   <b>██</b>  ██
+██     <b>██</b>██
+██      <b>███</b></pre><pre class="wL" style="--fd:-1.9s">██<b>████</b>██  
+<b>██</b>    ██  
+<b>██</b>     ██ 
+<b>██</b>     ██ 
+<b>██</b>    ██  
+██<b>████</b>██  </pre><pre class="wL" style="--fd:-5.2s">██<b>████</b>████
+<b>██</b>        
+<b>███████</b>   
+<b>██</b>        
+<b>██</b>        
+██<b>████</b>████</pre><pre class="wL" style="--fd:-4.5s">██<b>███</b>██   
+<b>██</b>    ██  
+<b>██</b>    ██  
+██<b>███</b>██   
+██   <b>██</b>   
+██    <b>██</b>  </pre><pre class="wL edge">     ░
+ ░ ▓  
+ ▒░ · 
+░    ░
+   ▒  
+ ·░   </pre></div>
     </div>
     <span class="fc bl mono" aria-hidden="true">└</span>
     <span class="fc br mono" aria-hidden="true">┘</span>
   </div>
 
-  <div class="fm-status">
-    <div class="fm-status-in">
+  <!-- 03 · build info — scripted counters, flagged demo -->
+  <div class="fm2-build" aria-label="build information (demo)">
+    <div class="fm2-build-in">
+      <span><span class="k">build</span> <span class="v commit">8f3a2c1</span></span>
+      <span class="sep">·</span>
+      <span><span class="k">rustc</span> <span class="v">1.79.0 stable</span></span>
+      <span class="sep">·</span>
+      <span><span class="k">target</span> <span class="v">aarch64-apple-darwin</span></span>
+      <span class="sep">·</span>
+      <span><span class="k">profile</span> <span class="v">release</span></span>
+      <span class="sep">·</span>
+      <span><span class="k">uptime</span> <span class="v" id="upt">04:17:33</span></span>
+      <span class="sp"></span>
+      <span class="demo">[ demo counters ]</span>
+    </div>
+  </div>
+
+  <div class="fm2-status">
+    <div class="fm2-status-in">
       <div class="grp">
-        <span class="fm-led" aria-hidden="true"></span>
+        <span class="led" aria-hidden="true"></span>
         <span class="up">relay up</span>
         <span class="sep">·</span>
         <span>peer-id <span class="pid">9c1f…aa07</span></span>
       </div>
       <div class="grp">
-        <span>mit</span><span class="sep">·</span><span>rust</span><span class="sep">·</span><span>pre-1.0</span><span class="sep">·</span><span>unaudited</span>
+        <span>pre-1.0</span><span class="sep">·</span><span>unaudited</span><span class="sep">·</span><span>mit</span><span class="sep">·</span><span>rust</span>
         <a class="keycap" href="#top">[ ↑ top ]</a>
         <span class="caret" aria-hidden="true"></span>
       </div>
     </div>
   </div>
+
+  <!-- 04 · bottom edge: ordered dust thinning to nothing — footer dissolves -->
+  <div class="fm2-dissolve" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>
 </footer>
+
+</div>
+
+<script>
 
 </body>
 </html>

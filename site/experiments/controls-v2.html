@@ -1,0 +1,588 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>cinder — controls v2</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600&family=Inter:wght@400;500&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --ground:#0B0C0E; --panel:#15171B; --card:#101216; --ink:#EDEDE8;
+    --muted:#9BA0A6; --dim:#5A616B; --faint:#3D4249; --line:#23262D;
+    --ember:#FFB224; --ember-dim:#5A4114; --danger:#FF6B5E;
+    --disp:'Space Grotesk',system-ui,sans-serif;
+    --body:'Inter',system-ui,sans-serif;
+    --mono:'JetBrains Mono',ui-monospace,monospace;
+  }
+  *{box-sizing:border-box;margin:0}
+  body{background:var(--ground);color:var(--ink);font-family:var(--body);
+    font-size:14px;line-height:1.6;-webkit-font-smoothing:antialiased}
+  canvas{display:block}
+
+  .page{min-height:100vh;display:flex;flex-direction:column}
+  header{padding:26px 32px;display:flex;justify-content:space-between;
+    align-items:baseline;border-bottom:1px solid var(--line);
+    font-family:var(--mono);font-size:13px}
+  .tag{color:var(--ember);font-weight:500}
+  .hint{color:var(--muted);font-size:11px;letter-spacing:.08em}
+  .wrap{max-width:880px;margin:0 auto;padding:0 28px;width:100%}
+  main{flex:1;padding-bottom:96px}
+
+  .intro{padding:64px 0 56px}
+  .kicker{font-family:var(--mono);font-size:10px;letter-spacing:.22em;
+    color:var(--ember);margin-bottom:18px}
+  h1{font-family:var(--disp);font-weight:600;font-size:clamp(28px,4.5vw,40px);
+    letter-spacing:-.01em;line-height:1.15;margin-bottom:14px}
+  .lede{color:var(--muted);max-width:56ch;font-size:14px}
+  .lede b{color:var(--ink);font-weight:500}
+
+  section{padding:40px 0 8px}
+  .lab{display:flex;justify-content:space-between;align-items:baseline;
+    gap:16px;margin-bottom:14px;font-family:var(--mono);font-size:10px;
+    letter-spacing:.18em;flex-wrap:wrap}
+  .lab .l{color:var(--muted)}
+  .lab .l b{color:var(--ember);font-weight:500}
+  .lab .r{color:var(--faint)}
+  .stage{border:1px solid var(--line);background:var(--ground);position:relative}
+  .pad{padding:clamp(28px,5vw,52px) clamp(20px,5vw,56px)}
+  .stage-meta{border-top:1px solid var(--line);padding:10px 16px;
+    font-family:var(--mono);font-size:10px;letter-spacing:.05em;
+    color:var(--faint);display:flex;justify-content:space-between;
+    gap:16px;flex-wrap:wrap}
+  .stage-meta b{color:var(--muted);font-weight:400}
+
+  .row{display:flex;gap:26px;align-items:center;flex-wrap:wrap}
+  .item{display:flex;flex-direction:column;align-items:center;gap:12px}
+  .cap{font-family:var(--mono);font-size:9px;letter-spacing:.16em;color:var(--faint)}
+  .kc-out{font-family:var(--mono);font-size:10px;letter-spacing:.1em;color:var(--ember);
+    min-height:15px;margin-left:auto;align-self:center}
+  .kc-out.hit{animation:ohit .4s}
+  @keyframes ohit{0%{opacity:.2}30%{opacity:1}}
+  .sr{position:absolute;width:1px;height:1px;overflow:hidden;
+    clip:rect(0 0 0 0);white-space:nowrap}
+
+  /* ---------- shared control base ---------- */
+  .kc,.btn,.copychip,.chip,.seg button{
+    font-family:var(--mono);cursor:pointer;user-select:none;
+    -webkit-tap-highlight-color:transparent;touch-action:manipulation}
+  .kc:focus-visible,.btn:focus-visible,.copychip:focus-visible,
+  .chip:focus-visible,.seg button:focus-visible{
+    outline:2px solid var(--ember);outline-offset:2px}
+
+  /* ---------- 01 · keycaps ---------- */
+  .kc{position:relative;display:inline-flex;align-items:center;justify-content:center;
+    min-width:44px;min-height:44px;padding:0 16px;
+    font-size:12px;font-weight:500;letter-spacing:.05em;color:var(--muted);
+    background:
+      radial-gradient(120% 160% at 50% -25%,rgba(255,255,255,.06),transparent 55%),
+      linear-gradient(180deg,#20242B 0%,#171A1F 55%,#121418 100%);
+    border:1px solid #2A2E36;border-bottom-color:#060708;border-radius:7px;
+    box-shadow:inset 0 1px 0 rgba(255,255,255,.08),
+      inset 0 -1px 0 rgba(0,0,0,.4),
+      0 4px 0 #060708,
+      0 7px 12px rgba(0,0,0,.5);
+    transition:transform .08s ease,box-shadow .08s ease,color .15s,border-color .15s}
+  .kc:hover{color:var(--ink);border-color:var(--ember-dim)}
+  .kc:active{transform:translateY(3px);
+    box-shadow:inset 0 1px 0 rgba(255,255,255,.02),
+      inset 0 2px 10px rgba(0,0,0,.55),
+      0 1px 0 #060708,
+      0 2px 4px rgba(0,0,0,.4)}
+  .kc--ember{color:var(--ember);text-shadow:0 0 10px rgba(255,178,36,.25)}
+  .kc--ember:hover{color:#FFC966;border-color:var(--ember-dim)}
+
+  /* ---------- 02/03 · buttons ---------- */
+  .btn{display:inline-flex;align-items:center;justify-content:center;gap:10px;
+    min-height:46px;padding:0 24px;font-size:13px;font-weight:500;
+    letter-spacing:.04em;border-radius:7px;border:1px solid var(--line);
+    transition:transform .12s,border-color .18s,color .18s,background .18s,box-shadow .12s}
+  .btn-primary{position:relative;overflow:hidden;background:var(--panel);
+    color:var(--ink);border-color:var(--ember-dim);
+    box-shadow:0 3px 0 #060708,0 8px 18px rgba(0,0,0,.45)}
+  .btn-primary canvas{position:absolute;inset:0;width:100%;height:100%;
+    pointer-events:none;image-rendering:pixelated}
+  .btn-label{position:relative;z-index:1}
+  .btn-primary:hover{color:var(--ground);border-color:var(--ember)}
+  .btn-primary:active{transform:translateY(2px);
+    box-shadow:0 1px 0 #060708,0 3px 8px rgba(0,0,0,.4)}
+  .btn-ghost{position:relative;overflow:hidden;background:transparent;color:var(--muted)}
+  .btn-ghost::before{content:"";position:absolute;inset:0;
+    background:rgba(255,178,36,.05);transform:scaleX(0);transform-origin:left;
+    transition:transform .2s cubic-bezier(.2,.7,.2,1)}
+  .btn-ghost::after{content:"";position:absolute;left:0;right:0;bottom:0;
+    height:2px;background:var(--ember);transform:scaleX(0);
+    transform-origin:left;transition:transform .22s cubic-bezier(.2,.7,.2,1)}
+  .btn-ghost:hover{color:var(--ink);border-color:var(--ember-dim)}
+  .btn-ghost:hover::before,.btn-ghost:hover::after{transform:scaleX(1)}
+  .btn-ghost:active{transform:translateY(2px);background:rgba(0,0,0,.25)}
+
+  /* ---------- 04 · copy chip ---------- */
+  .copychip{display:inline-flex;align-items:center;justify-content:center;
+    min-height:44px;min-width:14ch;padding:0 16px;
+    font-size:11.5px;letter-spacing:.1em;color:var(--muted);
+    background:var(--card);border:1px solid var(--line);border-radius:6px;
+    box-shadow:inset 0 1px 0 rgba(255,255,255,.04),
+      0 3px 0 #060708,0 5px 10px rgba(0,0,0,.4);
+    transition:color .15s,border-color .15s,background .15s,transform .08s,box-shadow .08s}
+  .copychip:hover{color:var(--ember);border-color:var(--ember-dim)}
+  .copychip:active{transform:translateY(2px);
+    box-shadow:inset 0 1px 0 rgba(255,255,255,.02),
+      0 1px 0 #060708,0 2px 5px rgba(0,0,0,.35)}
+  .copychip.copied{color:var(--ember);border-color:var(--ember);
+    background:rgba(255,178,36,.09);
+    animation:cpop .24s cubic-bezier(.2,.9,.3,1.3)}
+  @keyframes cpop{0%{transform:scale(.94)}60%{transform:scale(1.06)}100%{transform:scale(1)}}
+
+  /* ---------- 05 · call chips ---------- */
+  .chip{display:inline-flex;align-items:center;justify-content:center;
+    min-height:44px;padding:0 18px;
+    font-size:11.5px;letter-spacing:.12em;color:var(--muted);
+    background:linear-gradient(#1B1E24,#121418);
+    border:1px solid var(--line);border-bottom-color:#060708;
+    box-shadow:inset 0 1px 0 rgba(255,255,255,.05),
+      0 3px 0 #060708,0 5px 10px rgba(0,0,0,.4);
+    transition:transform .08s,box-shadow .08s,color .12s,border-color .12s,background .12s}
+  .chip:hover{color:var(--ink);border-color:var(--faint)}
+  .chip:active{transform:translateY(3px);
+    box-shadow:inset 0 1px 0 rgba(255,255,255,.03),
+      inset 0 0 8px rgba(0,0,0,.6),0 0 0 #060708}
+  .chip.on{color:var(--ember);border-color:var(--ember-dim);background:#1A1509}
+  .chip--danger{color:var(--danger)}
+  .chip--danger:hover{color:#FF8B80;border-color:var(--danger);background:#1E1210}
+  .chip:disabled{color:var(--faint);cursor:default;background:var(--card);
+    transform:none;box-shadow:inset 0 1px 0 rgba(255,255,255,.03),
+      0 3px 0 #060708,0 5px 10px rgba(0,0,0,.4)}
+  .chip-state{font-family:var(--mono);font-size:10px;letter-spacing:.18em;
+    color:var(--ember)}
+  .chip-state.held{color:var(--muted)}
+  .chip-state.dead{color:var(--danger)}
+  .keys-hint{font-family:var(--mono);font-size:9px;letter-spacing:.14em;color:var(--faint)}
+  .keys-hint b{color:var(--muted);font-weight:400}
+
+  /* ---------- 06 · segmented ---------- */
+  .seg{position:relative;display:inline-flex;gap:2px;padding:3px;
+    background:var(--card);border:1px solid var(--line);border-radius:8px;
+    box-shadow:inset 0 2px 6px rgba(0,0,0,.55)}
+  .seg-thumb{position:absolute;top:3px;left:3px;height:calc(100% - 6px);width:0;
+    border-radius:5px;pointer-events:none;
+    background:linear-gradient(#242832,#171A20);
+    border:1px solid #30353E;border-bottom-color:#060708;
+    box-shadow:inset 0 1px 0 rgba(255,255,255,.07),
+      0 2px 0 #060708,0 4px 8px rgba(0,0,0,.45);
+    transform:translateX(0);
+    transition:transform .22s cubic-bezier(.2,.7,.2,1),width .22s cubic-bezier(.2,.7,.2,1)}
+  .seg button{position:relative;z-index:1;display:inline-flex;align-items:center;
+    gap:7px;min-height:44px;padding:0 18px;background:none;border:none;
+    font-size:11.5px;letter-spacing:.16em;color:var(--dim);border-radius:5px;
+    transition:color .15s}
+  .seg button:hover{color:var(--muted)}
+  .seg button[aria-checked="true"]{color:var(--ember)}
+  .seg button:focus-visible{outline-offset:-1px}
+  .seg .dot{width:4px;height:4px;background:var(--ember);opacity:0;
+    transition:opacity .15s}
+  .seg button[aria-checked="true"] .dot{opacity:1}
+
+  footer{border-top:1px solid #1A1D22;padding:16px 32px;display:flex;
+    justify-content:space-between;gap:16px;flex-wrap:wrap;
+    font-family:var(--mono);font-size:10px;letter-spacing:.12em;color:var(--faint)}
+  footer b{color:var(--muted);font-weight:400}
+
+  @media (prefers-reduced-motion:reduce){
+    *{animation:none!important;transition:none!important}
+    .btn-primary canvas{display:none}
+    .btn-primary:hover{background:var(--ember)}
+    .kc-out.hit{animation:none}
+  }
+</style>
+</head>
+<body>
+<div class="page">
+  <header>
+    <span class="tag">cinder / experiments</span>
+    <span class="hint">controls-v2 — controls that press back</span>
+  </header>
+
+  <main class="wrap">
+    <div class="intro">
+      <p class="kicker">COMPONENT SHEET // CONTROLS V2</p>
+      <h1>Buttons that press like hardware.</h1>
+      <p class="lede">Six upgraded controls for the instrument panel. <b>Caps with
+        stems, floods that recoil, rings that show.</b> Every specimen is a real
+        button — ≥44px hit, ember <b>:focus-visible</b>, Enter+Space. The
+        segmented control takes arrows. PRM strips all motion.</p>
+    </div>
+
+    <!-- 01 — KEYCAPS -->
+    <section>
+      <div class="lab">
+        <span class="l"><b>// 01</b> — KEYCAPS / COMMAND KEYS</span>
+        <span class="r">3PX TRAVEL · DISHED CAP · EMBER LEGEND OPT</span>
+      </div>
+      <div class="stage">
+        <div class="pad">
+          <div class="row">
+            <div class="item">
+              <button class="kc" data-cmd="/help">/help</button>
+              <span class="cap">MUTED LEGEND</span>
+            </div>
+            <div class="item">
+              <button class="kc" data-cmd="/sas">/sas</button>
+              <span class="cap">MUTED LEGEND</span>
+            </div>
+            <div class="item">
+              <button class="kc kc--ember" data-cmd="/deny">/deny</button>
+              <span class="cap">EMBER LEGEND</span>
+            </div>
+            <span class="kc-out" id="kc-out" aria-live="polite"></span>
+          </div>
+        </div>
+        <div class="stage-meta">
+          <span><b>Δv1</b>: span[role]→real button · +dished cap face, stem
+            3→4px, travel 3px · focus ring dim→EMBER 2px · +.kc--ember ·
+            hit 32→44px</span>
+          <span>KC-V2-44</span>
+        </div>
+      </div>
+    </section>
+
+    <!-- 02 — PRIMARY CTA -->
+    <section>
+      <div class="lab">
+        <span class="l"><b>// 02</b> — PRIMARY CTA / DITHER FLOOD</span>
+        <span class="r">CANVAS FILL · EMBER EDGE SPARKS · RECOIL PRESS</span>
+      </div>
+      <div class="stage">
+        <div class="pad">
+          <div class="row">
+            <div class="item">
+              <button class="btn btn-primary" data-fill="#FFB224" data-halo="#5A4114">
+                <canvas aria-hidden="true"></canvas>
+                <span class="btn-label">get started</span>
+              </button>
+              <span class="cap">HOVER = FLOOD · PRESS = RECOIL</span>
+            </div>
+          </div>
+        </div>
+        <div class="stage-meta">
+          <span><b>Δv1</b>: flood ease .14→.18, sparks ride the halo edge ·
+            pointerdown recoil to .85 then rebound · press −1px lift→2px sink
+            with stem compress · &lt;canvas&gt; slot unchanged</span>
+          <span>BTN-FLOOD-V2</span>
+        </div>
+      </div>
+    </section>
+
+    <!-- 03 — GHOST -->
+    <section>
+      <div class="lab">
+        <span class="l"><b>// 03</b> — GHOST / SECONDARY</span>
+        <span class="r">EMBER UNDERLINE · FILL-LEFT WASH</span>
+      </div>
+      <div class="stage">
+        <div class="pad">
+          <div class="row">
+            <div class="item">
+              <button class="btn btn-ghost">read the docs</button>
+              <span class="cap">UNDERLINE SWEEP + WASH</span>
+            </div>
+          </div>
+        </div>
+        <div class="stage-meta">
+          <span><b>Δv1</b>: color-swap hover → ::before fill-left ember wash +
+            ::after underline sweep · +2px press travel</span>
+          <span>BTN-GHOST-V2</span>
+        </div>
+      </div>
+    </section>
+
+    <!-- 04 — COPY CHIP -->
+    <section>
+      <div class="lab">
+        <span class="l"><b>// 04</b> — COPY CHIP / CLIPBOARD</span>
+        <span class="r">FLASH + POP · REVERT 1.5S · REAL WRITE</span>
+      </div>
+      <div class="stage">
+        <div class="pad">
+          <div class="row">
+            <div class="item">
+              <button class="copychip" id="cc-copy"
+                data-copy="cargo install --locked --git https://github.com/nikolas-sapa/cinder cinder cinder-relay">
+                <span class="cc-l">[ copy ]</span>
+              </button>
+              <span class="cap">CLICK → REAL CLIPBOARD</span>
+            </div>
+            <span class="sr" id="cc-live" aria-live="polite"></span>
+          </div>
+        </div>
+        <div class="stage-meta">
+          <span><b>Δv1</b>: svg icon swap → ascii label [ ✓ copied ] · ember
+            flash + scale-pop .24s · revert 1.5s · clipboard API + execCommand
+            fallback · aria-live announce</span>
+          <span>COPY-V2-15</span>
+        </div>
+      </div>
+    </section>
+
+    <!-- 05 — CALL CHIPS -->
+    <section>
+      <div class="lab">
+        <span class="l"><b>// 05</b> — COMMAND CHIPS / CALL CONTROLS</span>
+        <span class="r">CAP + STEM · ARIA-PRESSED · DANGER VARIANT</span>
+      </div>
+      <div class="stage">
+        <div class="pad">
+          <div class="row">
+            <div class="item">
+              <button class="chip" id="cc-mute" aria-pressed="false">[ mute ]</button>
+              <span class="cap">TOGGLE</span>
+            </div>
+            <div class="item">
+              <button class="chip" id="cc-hold" aria-pressed="false">[ hold ]</button>
+              <span class="cap">TOGGLE</span>
+            </div>
+            <div class="item">
+              <button class="chip chip--danger" id="cc-end">[ end ]</button>
+              <span class="cap">DANGER</span>
+            </div>
+            <span class="chip-state" id="cc-state">TX · LIVE</span>
+            <span class="keys-hint">keys <b>m</b> mute · <b>h</b> hold · <b>e</b> end</span>
+          </div>
+        </div>
+        <div class="stage-meta">
+          <span><b>Δv1</b>: hit 31→44px · focus ring dim→ember 2px ·
+            aria-pressed wired · armed label dots [·mute·] · danger hover/arm
+            state · end disables + re-arms 1.4s</span>
+          <span>CHIP-V2-44</span>
+        </div>
+      </div>
+    </section>
+
+    <!-- 06 — SEGMENTED -->
+    <section>
+      <div class="lab">
+        <span class="l"><b>// 06</b> — SEGMENTED / VIEW TOGGLE</span>
+        <span class="r">RECESSED TRACK · SLIDING CAP THUMB · RADIO</span>
+      </div>
+      <div class="stage">
+        <div class="pad">
+          <div class="row">
+            <div class="item">
+              <div class="seg" role="radiogroup" aria-label="Console view">
+                <span class="seg-thumb" aria-hidden="true"></span>
+                <button role="radio" aria-checked="true" data-view="tui"><i class="dot"></i>TUI</button>
+                <button role="radio" aria-checked="false" tabindex="-1" data-view="rpc"><i class="dot"></i>RPC</button>
+                <button role="radio" aria-checked="false" tabindex="-1" data-view="log"><i class="dot"></i>LOG</button>
+              </div>
+              <span class="cap">←→/HOME/END · ROVING TABINDEX</span>
+            </div>
+          </div>
+        </div>
+        <div class="stage-meta">
+          <span><b>new</b>: radiogroup semantics · selection follows focus ·
+            cap thumb = keycap stem language · LED on live segment ·
+            geometry from offsetLeft/offsetWidth, re-measured on resize +
+            fonts.ready</span>
+          <span>SEG-V2-01</span>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    <span><b>cinder</b> — controls v2 study</span>
+    <span>0 DEPS · ≥44PX HITS · EMBER :FOCUS-VISIBLE · PRM-SAFE</span>
+  </footer>
+</div>
+
+<script>
+const RM=matchMedia('(prefers-reduced-motion: reduce)');
+const B8=[0,32,8,40,2,34,10,42,48,16,56,24,50,18,58,26,
+          12,44,4,36,14,46,6,38,60,28,52,20,62,30,54,22,
+          3,35,11,43,1,33,9,41,51,19,59,27,49,17,57,25,
+          15,47,7,39,13,45,5,37,63,31,55,23,61,29,53,21];
+const EMB='#FFB224',DEM='#5A4114';
+
+function h2(x,y,s){
+  let n=(x*374761393+y*668265263+(s|0)*2246822519)>>>0;
+  n=Math.imul(n^(n>>>13),1274126177)>>>0;
+  return ((n^(n>>>16))>>>0)/4294967296;
+}
+
+function paint(cv,cell,vfn,cfn){
+  const dpr=Math.min(devicePixelRatio||1,2);
+  const w=cv.clientWidth,h=cv.clientHeight;
+  if(!w||!h)return;
+  const W=Math.round(w*dpr),H=Math.round(h*dpr);
+  if(cv.width!==W||cv.height!==H){cv.width=W;cv.height=H;}
+  const g=cv.getContext('2d');
+  g.clearRect(0,0,W,H);
+  const s=cell*dpr,cols=Math.ceil(w/cell),rows=Math.ceil(h/cell);
+  for(let y=0;y<rows;y++)for(let x=0;x<cols;x++){
+    const v=vfn(x,y,cols,rows);
+    if(v<=0)continue;
+    const t=(B8[(y&7)*8+(x&7)]+.5)/64;
+    const c=cfn(v,t,x,y);
+    if(!c)continue;
+    g.fillStyle=c;
+    g.fillRect(Math.round(x*s),Math.round(y*s),Math.ceil(s),Math.ceil(s));
+  }
+}
+
+/* ---- 01 · keycap readout ---- */
+const kcOut=document.getElementById('kc-out');
+document.querySelectorAll('.kc[data-cmd]').forEach(k=>{
+  k.addEventListener('click',()=>{
+    kcOut.textContent='› '+k.dataset.cmd+' — queued to input';
+    kcOut.classList.remove('hit');
+    void kcOut.offsetWidth;
+    kcOut.classList.add('hit');
+  });
+});
+
+/* ---- 02 · primary flood: sweep + recoil press ---- */
+function attachFlood(btn){
+  const cv=btn.querySelector('canvas');
+  if(!cv)return;
+  const fill=btn.dataset.fill||EMB,halo=btn.dataset.halo||DEM;
+  let s=0,tgt=0,raf=null;
+  const draw=()=>paint(cv,3,(x,y,c)=>{
+    const E=s*(c+18)-9;
+    return Math.min(1,Math.max(0,(E-x)/10));
+  },(v,t,x,y)=>{
+    if(v>t)return fill;
+    if(v*.45>t)return h2(x,y,5)<.14?EMB:halo;
+    if(h2(x,y)<.045)return '#26292F';
+    return null;
+  });
+  const step=()=>{
+    s+=(tgt-s)*.18;
+    if(Math.abs(tgt-s)<.004)s=tgt;
+    draw();
+    if(s!==tgt)raf=requestAnimationFrame(step);else raf=null;
+  };
+  const go=v=>{
+    tgt=v;
+    if(RM.matches){s=v;draw();return;}
+    if(!raf)raf=requestAnimationFrame(step);
+  };
+  const hot=()=>btn.matches(':hover')||document.activeElement===btn;
+  btn.addEventListener('mouseenter',()=>go(1));
+  btn.addEventListener('mouseleave',()=>go(0));
+  btn.addEventListener('focus',()=>go(1));
+  btn.addEventListener('blur',()=>go(0));
+  btn.addEventListener('pointerdown',()=>go(.85));
+  btn.addEventListener('pointerup',()=>go(hot()?1:0));
+  draw();
+}
+document.querySelectorAll('.btn-primary').forEach(attachFlood);
+
+/* ---- 04 · copy chip ---- */
+const copyBtn=document.getElementById('cc-copy');
+const copyLbl=copyBtn.querySelector('.cc-l');
+const copyLive=document.getElementById('cc-live');
+let copyT=null;
+copyBtn.addEventListener('click',async()=>{
+  const text=copyBtn.dataset.copy||'';
+  try{
+    await navigator.clipboard.writeText(text);
+  }catch{
+    const ta=document.createElement('textarea');
+    ta.value=text;
+    document.body.appendChild(ta);
+    ta.select();
+    document.execCommand('copy');
+    ta.remove();
+  }
+  clearTimeout(copyT);
+  copyBtn.classList.add('copied');
+  copyLbl.textContent='[ ✓ copied ]';
+  copyLive.textContent='install command copied to clipboard';
+  copyT=setTimeout(()=>{
+    copyBtn.classList.remove('copied');
+    copyLbl.textContent='[ copy ]';
+    copyLive.textContent='';
+  },1500);
+});
+
+/* ---- 05 · call chips ---- */
+const bMute=document.getElementById('cc-mute'),
+      bHold=document.getElementById('cc-hold'),
+      bEnd=document.getElementById('cc-end'),
+      callState=document.getElementById('cc-state');
+let muted=false,held=false,ended=false,endT=null;
+function refreshChips(){
+  bMute.classList.toggle('on',muted);
+  bMute.setAttribute('aria-pressed',muted?'true':'false');
+  bMute.textContent=muted?'[·mute·]':'[ mute ]';
+  bHold.classList.toggle('on',held);
+  bHold.setAttribute('aria-pressed',held?'true':'false');
+  bHold.textContent=held?'[·hold·]':'[ hold ]';
+  callState.textContent=ended?'× ENDED — RE-ARMING'
+    :held?'HELD — TX QUEUED':muted?'TX · MUTED':'TX · LIVE';
+  callState.className='chip-state'+(ended?' dead':held?' held':'');
+}
+function setMute(v){if(!ended){muted=v;refreshChips();}}
+function setHold(v){if(!ended){held=v;refreshChips();}}
+function endCall(){
+  if(ended)return;
+  ended=true;muted=false;held=false;
+  bEnd.textContent='[ ended ]';
+  [bMute,bHold,bEnd].forEach(b=>b.disabled=true);
+  refreshChips();
+  clearTimeout(endT);
+  endT=setTimeout(()=>{
+    ended=false;
+    [bMute,bHold,bEnd].forEach(b=>b.disabled=false);
+    bEnd.textContent='[ end ]';
+    refreshChips();
+  },1400);
+}
+bMute.addEventListener('click',()=>setMute(!muted));
+bHold.addEventListener('click',()=>setHold(!held));
+bEnd.addEventListener('click',endCall);
+document.addEventListener('keydown',e=>{
+  if(e.metaKey||e.ctrlKey||e.altKey)return;
+  const t=e.target;
+  if(t&&(/^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName)||t.isContentEditable))return;
+  const k=e.key.toLowerCase();
+  if(k==='m')setMute(!muted);
+  else if(k==='h')setHold(!held);
+  else if(k==='e')endCall();
+});
+
+/* ---- 06 · segmented ---- */
+const seg=document.querySelector('.seg');
+const segBtns=[...seg.querySelectorAll('button')];
+const thumb=seg.querySelector('.seg-thumb');
+function placeThumb(b){
+  thumb.style.width=b.offsetWidth+'px';
+  thumb.style.transform='translateX('+(b.offsetLeft-3)+'px)';
+}
+function selectSeg(b,focus){
+  segBtns.forEach(x=>{
+    x.setAttribute('aria-checked',x===b?'true':'false');
+    x.tabIndex=x===b?0:-1;
+  });
+  placeThumb(b);
+  if(focus)b.focus();
+}
+segBtns.forEach((b,i)=>{
+  b.addEventListener('click',()=>selectSeg(b,false));
+  b.addEventListener('keydown',e=>{
+    let j=null;
+    if(e.key==='ArrowRight'||e.key==='ArrowDown')j=(i+1)%segBtns.length;
+    else if(e.key==='ArrowLeft'||e.key==='ArrowUp')j=(i-1+segBtns.length)%segBtns.length;
+    else if(e.key==='Home')j=0;
+    else if(e.key==='End')j=segBtns.length-1;
+    if(j!==null){e.preventDefault();selectSeg(segBtns[j],true);}
+  });
+});
+selectSeg(segBtns[0],false);
+const segCurrent=()=>seg.querySelector('[aria-checked="true"]');
+addEventListener('resize',()=>placeThumb(segCurrent()));
+if(document.fonts&&document.fonts.ready)document.fonts.ready.then(()=>placeThumb(segCurrent()));
+</script>
+</body>
+</html>

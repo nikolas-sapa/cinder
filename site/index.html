@@ -17,6 +17,10 @@
 </head>
 <body>
 <canvas id="bgField" aria-hidden="true"></canvas>
+<div id="dither" aria-hidden="true">
+  <canvas id="fx-base"></canvas>
+  <canvas id="fx-ember"></canvas>
+</div>
 <a class="skip" href="#main">Skip to content</a>
 
 <header class="nav">
@@ -151,12 +155,54 @@
         compute the same string. An MITM would need to make you read different numbers.</p>
       </aside>
     </div>
-    <div class="meter" data-reveal>
-      <span class="mono dim">LINK</span>
-      <div class="meter-bars" aria-hidden="true">
-        <i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i class="half"></i><i class="fl fl-a"></i><i class="fl fl-b"></i><i class="off"></i><i class="off"></i><i class="off"></i><i class="off"></i><i class="off"></i><i class="off"></i><i class="off"></i>
+    <div class="panel" id="panel" data-reveal>
+      <div class="p-head">
+        <i class="led" aria-hidden="true"></i>
+        <span class="l mono">RELAY LINK // RLY-02</span>
+        <span class="r mono">SEALED · X25519 · <b style="color:var(--ember);font-weight:400">LIVE</b></span>
       </div>
-      <span class="mono dim">transport · 50fps media · mailbox 3 pending</span>
+      <div class="p-body">
+        <div class="inst scope">
+          <div class="ilab mono"><span>// 01 — link scope</span><span>radial · persist .90</span></div>
+          <div class="scr" role="img" aria-label="Dithered radial scope showing link signal strength">
+            <canvas id="cv-scope" aria-hidden="true"></canvas>
+            <span class="st mono">SIG</span><span class="st2 mono">AZ-SWP</span>
+          </div>
+          <div class="ro mono">
+            <span>LINK <b class="hot">SEALED</b> · SIG <b class="hot">−41 dB</b></span>
+            <span>SWEEP <b>1.05 R/S</b></span>
+          </div>
+        </div>
+        <div class="rcol">
+          <div class="inst vu">
+            <div class="ilab mono"><span>// 02 — channel level</span><span>atk 20ms · rel 350ms</span></div>
+            <div class="scr" role="img" aria-label="Dithered dot-column peak program meters">
+              <canvas id="cv-vu" aria-hidden="true"></canvas>
+              <span class="st mono">LVL</span><span class="st2 mono">PPM · 8CH</span>
+            </div>
+            <div class="ro mono">
+              <span>MEDIA <b class="hot">50FPS</b> · TX <b class="hot">−6.2</b> / RX <b class="hot">−9.8</b> dBFS</span>
+              <span>PK <b>−0.4</b></span>
+            </div>
+          </div>
+          <div class="inst spk">
+            <div class="ilab mono"><span>// 03 — throughput</span><span>scroll 120ms/col</span></div>
+            <div class="scr" role="img" aria-label="Scrolling dithered throughput strip chart">
+              <canvas id="cv-spark" aria-hidden="true"></canvas>
+              <span class="st mono">THPT</span><span class="st2 mono">60S</span>
+            </div>
+            <div class="ro mono">
+              <span>THRPT <b class="hot">1.24 MB/S</b></span>
+              <span>MAILBOX <b class="hot">3 PEND</b> · RTT <b class="hot">41 MS</b></span>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="p-foot mono">
+        <span><b>ramp</b> charcoal→ember→white 13lv · <b>thr</b> B8×8+IGN ·
+          <b>cell</b> 3/4px · <b>values</b> scripted — instrument demo</span>
+        <span>INS-PNL-DITH-01</span>
+      </div>
     </div>
   </div>
 </section>
@@ -181,7 +227,12 @@
           <p class="peer" data-peer="k-9" role="button" tabindex="0">k-9</p>
           <p class="peer" data-peer="operator" role="button" tabindex="0">operator</p>
           <p class="side-h" style="margin-top:14px">DEMO</p>
-          <p class="side-f dim">click a peer · type a command<br>try <span class="amber">/help</span></p>
+          <div class="kcs" role="group" aria-label="Command keycaps">
+            <span class="kc" data-cmd="/help" role="button" tabindex="0">/help</span>
+            <span class="kc" data-cmd="/sas" role="button" tabindex="0">/sas</span>
+            <span class="kc" data-cmd="/deny" role="button" tabindex="0">/deny</span>
+          </div>
+          <p class="side-f dim">click a peer · type a command<br>or press a keycap</p>
         </div>
         <div class="pane" id="demo-pane">
           <p class="pane-h"><span class="amber" id="peer-name">eidolon</span> <span class="dim" id="peer-status">· verified</span><span class="pane-time dim">live demo — fake, but honest</span></p>
@@ -199,7 +250,7 @@
 <!-- ============ SPEC TICKER ============ -->
 <div class="ticker" aria-hidden="true">
   <div class="ticker-in mono">
-    <span>NOISE_XX_25519_CHACHAPOLY_BLAKE2S · SHA-256 PEER-IDS · BOUNDED MAILBOXES · SAS / 7 EMOJI · PEER-CRED UNIX SOCKET · REKEY @1024 MSGS · ZEROIZE ON DROP · IDEMPOTENT SENDS · CAPABILITY TOKENS · NO SERVERS THAT CAN READ YOU ·&nbsp;</span><span>NOISE_XX_25519_CHACHAPOLY_BLAKE2S · SHA-256 PEER-IDS · BOUNDED MAILBOXES · SAS / 7 EMOJI · PEER-CRED UNIX SOCKET · REKEY @1024 MSGS · ZEROIZE ON DROP · IDEMPOTENT SENDS · CAPABILITY TOKENS · NO SERVERS THAT CAN READ YOU ·&nbsp;</span>
+    <span>NOISE_XX_25519_CHACHAPOLY_BLAKE2S · SHA-256 PEER-IDS · BOUNDED MAILBOXES · SAS / 7 GROUPS · PEER-CRED UNIX SOCKET · REKEY @1024 MSGS · ZEROIZE ON DROP · IDEMPOTENT SENDS · CAPABILITY TOKENS · NO SERVERS THAT CAN READ YOU ·&nbsp;</span><span>NOISE_XX_25519_CHACHAPOLY_BLAKE2S · SHA-256 PEER-IDS · BOUNDED MAILBOXES · SAS / 7 GROUPS · PEER-CRED UNIX SOCKET · REKEY @1024 MSGS · ZEROIZE ON DROP · IDEMPOTENT SENDS · CAPABILITY TOKENS · NO SERVERS THAT CAN READ YOU ·&nbsp;</span>
   </div>
 </div>
 
@@ -244,7 +295,7 @@
       <div class="row">
         <span class="num mono">05</span>
         <h3>SAS verification</h3>
-        <p class="desc">Compare a 7-emoji short authentication string out-of-band and an invite-link
+        <p class="desc">Compare a 7-group numeric short authentication string out-of-band and an invite-link
         MITM has nowhere to hide. If a key ever changes, sending blocks loudly until you
         re-verify. Never a silent rebind.</p>
       </div>
@@ -263,6 +314,7 @@
         would be a spam vector.</p>
       </div>
     </div>
+    <pre class="orn ledger-cap" aria-hidden="true"><span class="ft">╞══════════════════</span><span class="mu"> ledger </span><span class="ft">══════════════════╡</span></pre>
   </div>
 </section>
 
@@ -343,7 +395,12 @@
       </div>
     </div>
     <p class="doc-link mono" data-reveal><span class="dim">read</span> <a href="https://github.com/nikolas-sapa/cinder/blob/main/docs/THREAT-MODEL.md" rel="noopener">docs/THREAT-MODEL.md →</a></p>
-    <p class="warn mono" data-reveal>pre-1.0 · not externally audited — don't stake your safety on it yet</p>
+    <pre class="orn warn-plate" data-reveal aria-label="pre-1.0, not externally audited"><span class="ft">┌─ </span><span class="em">▲</span><span class="ft"> ────────────────────────────────────────────────────┐</span>
+<span class="ft">│</span>                                                        <span class="ft">│</span>
+<span class="ft">│</span>  <span class="mu">pre-1.0 · not externally audited</span>                      <span class="ft">│</span>
+<span class="ft">│</span>  <span class="mu">don't stake your safety on it yet</span>                     <span class="ft">│</span>
+<span class="ft">│</span>                                                        <span class="ft">│</span>
+<span class="ft">└────────────────────────────────────────────────────────┘</span></pre>
   </div>
 </section>
 
@@ -385,6 +442,47 @@
       <div class="boot-body" id="bootBody"></div>
       <div class="boot-keys">click panel <b>pause</b> · press <b>s</b> to skip · stays static when done</div>
     </div>
+    <div class="ticket-wrap" data-reveal>
+      <p class="tk-kicker mono">// one-time link — admit one</p>
+      <section class="ticket" id="ticket" role="button" tabindex="0" aria-label="invite ticket, click to simulate redemption">
+        <span class="screw tl">+</span><span class="screw tr">+</span>
+        <span class="screw bl">+</span><span class="screw br">+</span>
+        <p class="sr">One-time cinder invite. cinder://9c1f…aa07@relay:8443?rendezvous=8f2a. Single use. Expires on use. Intercepted links cannot be replayed.</p><pre class="t-desktop" aria-hidden="true"><span class="f">┌────────────────────────────────────────────────────────</span><span class="d">┬</span><span class="d">╌╌╌╌╌╌╌╌╌╌╌╌╌╌</span><span class="f">┐</span>
+<span class="f">┊</span>   <span class="m">CINDER · E2E TERMINAL MESSENGER</span>                      <span class="d">┊</span><span class="f">     STUB     </span><span class="f">┊</span>
+<span class="f">┊</span>                                                        <span class="d">┊</span>              <span class="f">┊</span>
+<span class="f">┊</span>   <span class="e">\|/</span>   <span class="i b">ADMIT ONE</span>                                      <span class="d">┊</span><span class="m">       S      </span><span class="f">┊</span>
+<span class="f">┊</span>   <span class="e">-*-</span>   <span class="m">ONE-TIME LINK</span>                                  <span class="d">┊</span><span class="m">       I      </span><span class="f">┊</span>
+<span class="f">┊</span>   <span class="e">/|\</span>                                                  <span class="d">┊</span><span class="m">       N      </span><span class="f">┊</span>
+<span class="f">┊</span>                                                        <span class="d">┊</span><span class="m">       G      </span><span class="f">┊</span>
+<span class="f">┊</span>   <a class="lnk" href="cinder://9c1f%e2%80%a6aa07@relay:8443?rendezvous=8f2a">cinder://9c1f…aa07@relay:8443?rendezvous=8f2a</a><span class="cur">▌</span>       <span class="d">┊</span><span class="m">       L      </span><span class="f">┊</span>
+<span class="f">┊</span>                                                        <span class="d">┊</span><span class="m">       E      </span><span class="f">┊</span>
+<span class="f">┊</span>   <span class="m">one-time · expires on use</span>                            <span class="d">┊</span><span class="f">       ·      </span><span class="f">┊</span>
+<span class="f">┊</span>   <span class="m">intercepted links can't be replayed</span>                  <span class="d">┊</span><span class="m">       U      </span><span class="f">┊</span>
+<span class="f">┊</span>                                                        <span class="d">┊</span><span class="m">       S      </span><span class="f">┊</span>
+<span class="f">┊</span>                                                        <span class="d">┊</span><span class="m">       E      </span><span class="f">┊</span>
+<span class="f">┊</span>   <span class="f">NO·8F2A</span>                           <span class="f">TEAR ALONG LINE </span><span class="e">»</span>  <span class="d">┊</span><span class="f stamp">░ VOID AFTER ░</span><span class="f">┊</span>
+<span class="f">┊</span>                                                        <span class="d">┊</span><span class="f stamp">░    USE     ░</span><span class="f">┊</span>
+<span class="f">└────────────────────────────────────────────────────────</span><span class="d">┴</span><span class="d">╌╌╌╌╌╌╌╌╌╌╌╌╌╌</span><span class="f">┘</span></pre><pre class="t-mobile" aria-hidden="true"><span class="f">┌────────────────────────────────────────────────┐</span>
+<span class="f">┊</span>  <span class="m">CINDER · E2E TERMINAL MESSENGER</span>               <span class="f">┊</span>
+<span class="f">┊</span>                                                <span class="f">┊</span>
+<span class="f">┊</span>  <span class="e">\|/</span>   <span class="i b">ADMIT ONE</span>                               <span class="f">┊</span>
+<span class="f">┊</span>  <span class="e">-*-</span>   <span class="m">ONE-TIME LINK</span>                           <span class="f">┊</span>
+<span class="f">┊</span>  <span class="e">/|\</span>                                           <span class="f">┊</span>
+<span class="f">┊</span>                                                <span class="f">┊</span>
+<span class="f">┊</span>  <a class="lnk" href="cinder://9c1f%e2%80%a6aa07@relay:8443?rendezvous=8f2a">cinder://9c1f…aa07@relay:8443?rendezvous=8f2a</a> <span class="f">┊</span>
+<span class="f">┊</span>                                                <span class="f">┊</span>
+<span class="f">┊</span>  <span class="m">one-time · expires on use</span>                     <span class="f">┊</span>
+<span class="f">┊</span>  <span class="m">intercepted links can't be replayed</span>           <span class="f">┊</span>
+<span class="f">┊</span>                                                <span class="f">┊</span>
+<span class="d">├┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┤</span>
+<span class="f">┊</span>  <span class="m">SINGLE USE</span> <span class="f">· TEAR HERE</span>                        <span class="f">┊</span>
+<span class="f">┊</span>  <span class="f stamp">░ VOID AFTER ░</span>                       <span class="f">NO·8F2A</span>  <span class="f">┊</span>
+<span class="f">┊</span>  <span class="f stamp">░    USE     ░</span>                                <span class="f">┊</span>
+<span class="f">┊</span>                                                <span class="f">┊</span>
+<span class="f">└────────────────────────────────────────────────┘</span></pre>
+      </section>
+      <div class="tk-keys mono" id="invite-keys">click the ticket <b>burns the link</b> · intercepted copies can't replay</div>
+    </div>
   </div>
 </section>
 
@@ -395,21 +493,72 @@
 
 </main>
 
-<footer class="footer">
-  <div class="wrap foot-in">
-    <div class="foot-brand">
-      <pre class="spark-mark" aria-hidden="true">╲ │ ╱
+<footer class="fm">
+  <div class="fm-rule" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>
+
+  <div class="fm-cols">
+    <div class="fm-brand">
+      <pre class="fm-spark" aria-hidden="true">╲ │ ╱
 ─ █ ─
 ╱ │ ╲</pre>
-      <span class="wordmark">cinder</span>
-      <span class="mono dim">encrypted chat your agents can drive</span>
+      <p class="fm-name">cinder</p>
+      <p class="fm-tag">encrypted chat your agents can drive</p>
+      <p class="fm-meta mono">e2e · noise_xx · blind relay · no accounts</p>
     </div>
-    <nav class="foot-links" aria-label="Footer">
-      <a href="https://github.com/nikolas-sapa/cinder/tree/main/docs" rel="noopener">docs</a>
-      <a href="https://github.com/nikolas-sapa/cinder/blob/main/docs/PROTOCOL.md" rel="noopener">protocol</a>
-      <a href="https://github.com/nikolas-sapa/cinder/blob/main/docs/THREAT-MODEL.md" rel="noopener">threat model</a>
-      <span class="mono foot-note">MIT · rust · pre-1.0</span>
+
+    <nav class="fm-col" aria-label="Protocol">
+      <h4 class="fm-h mono"><span class="c">┌─</span>protocol<span class="r"></span></h4>
+      <a class="fm-l mono" href="https://github.com/nikolas-sapa/cinder/blob/main/docs/PROTOCOL.md" rel="noopener"><span class="n">protocol.md</span><span class="d">// the wire, annotated</span></a>
+      <a class="fm-l mono" href="https://github.com/nikolas-sapa/cinder/blob/main/docs/THREAT-MODEL.md" rel="noopener"><span class="n">threat-model.md</span><span class="d">// what holds, what doesn't</span></a>
+      <a class="fm-l mono" href="https://github.com/nikolas-sapa/cinder/blob/main/docs/AGENT-API.md" rel="noopener"><span class="n">agent-api.md</span><span class="d">// self-describing spec</span></a>
     </nav>
+
+    <nav class="fm-col" aria-label="Repository">
+      <h4 class="fm-h mono"><span class="c">┌─</span>repo<span class="r"></span></h4>
+      <a class="fm-l mono" href="https://github.com/nikolas-sapa/cinder" rel="noopener"><span class="n">github</span><span class="d">// nikolas-sapa/cinder</span></a>
+      <a class="fm-l mono" href="https://github.com/nikolas-sapa/cinder/issues" rel="noopener"><span class="n">issues</span><span class="d">// bug reports welcome</span></a>
+      <a class="fm-l mono" href="https://github.com/nikolas-sapa/cinder/releases" rel="noopener"><span class="n">releases</span><span class="d">// cargo install --locked</span></a>
+    </nav>
+
+    <div class="fm-col" aria-label="Status">
+      <h4 class="fm-h mono"><span class="c">┌─</span>status<span class="r"></span></h4>
+      <p class="fm-s mono"><span class="k">version</span><span class="v hot">pre-1.0</span></p>
+      <p class="fm-s mono"><span class="k">audit</span><span class="v">not externally audited</span></p>
+      <p class="fm-s mono"><span class="k">license</span><span class="v">mit</span></p>
+      <p class="fm-s mono"><span class="k">loc</span><span class="v">~14k · rust</span></p>
+    </div>
+  </div>
+
+  <div class="fm-mark">
+    <span class="fc tl mono" aria-hidden="true">┌</span>
+    <span class="fc tr mono" aria-hidden="true">┐</span>
+    <div class="fm-mark-box">
+      <div class="fm-dith" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>
+      <pre class="fm-word" aria-hidden="true"> <span class="d1">░</span>     <span class="d1">░</span>█████   ███████  ███    ██  ███████   ████████  ██████<span class="d2">▒</span>
+      <span class="d2">▓</span>█    ██    ███    ████   ██  ██   ███  ██        ██    █<span class="d2">▓</span> <span class="d1">░</span>
+  <span class="d1">·</span>   <span class="d2">▒</span>█          ███    ██ <b>█</b>█  ██  ██    █<b>█</b>  █████<b>█</b>    ██    █<span class="d1">░</span>    <span class="d1">·</span>
+ <span class="d1">░</span>    <span class="d1">░</span>█          █<b>█</b>█    ██  ██ ██  ██    ██  ██        ██████<span class="d2">▓</span>
+      <span class="d2">▒</span>█    ██    ███    ██   ████  ██   ███  ██        ██ ██     <span class="d1">░</span>
+   <span class="d1">░</span>   <span class="d1">░</span>█████   ███████  ██    ███  ███████   ████████  ██  ██<span class="d2">▓</span><span class="d1">░</span>     <span class="d2">▒</span></pre>
+    </div>
+    <span class="fc bl mono" aria-hidden="true">└</span>
+    <span class="fc br mono" aria-hidden="true">┘</span>
+  </div>
+
+  <div class="fm-status">
+    <div class="fm-status-in">
+      <div class="grp">
+        <span class="fm-led" aria-hidden="true"></span>
+        <span class="up">relay up</span>
+        <span class="sep">·</span>
+        <span>peer-id <span class="pid">9c1f…aa07</span></span>
+      </div>
+      <div class="grp">
+        <span>mit</span><span class="sep">·</span><span>rust</span><span class="sep">·</span><span>pre-1.0</span><span class="sep">·</span><span>unaudited</span>
+        <a class="keycap" href="#top">[ ↑ top ]</a>
+        <span class="caret" aria-hidden="true"></span>
+      </div>
+    </div>
   </div>
 </footer>
 

@@ -1,0 +1,387 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="color-scheme" content="dark">
+<title>cinder · footer-mega</title>
+<meta name="description" content="prototype: a mega footer for cinder — hand-set ASCII wordmark eroding into Bayer-ordered dust, instrument columns, honest status strip.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@700&family=Inter:wght@400;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+:root{
+  --ground:#0B0C0E; --panel:#15171B; --card:#101216; --ink:#EDEDE8;
+  --muted:#9BA0A6; --dim:#5A616B; --faint:#3D4249; --line:#23262D;
+  --ember:#FFB224; --ember-dim:#5A4114;
+  --pad:56px; --wrap:1328px;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+::selection{background:var(--ember);color:var(--ground)}
+html{scroll-behavior:smooth}
+body{background:var(--ground);color:var(--ink);
+  font:400 15px/1.6 'Inter',system-ui,sans-serif;
+  -webkit-font-smoothing:antialiased}
+.mono{font-family:'JetBrains Mono',ui-monospace,monospace}
+a{color:inherit;text-decoration:none}
+.page{min-height:100vh;display:flex;flex-direction:column}
+main{flex:1}
+
+/* ---------- experiment chrome ---------- */
+.mast{display:flex;justify-content:space-between;align-items:baseline;gap:16px;
+  padding:22px var(--pad);border-bottom:1px solid var(--line);
+  font-family:'JetBrains Mono',monospace;font-size:11px;letter-spacing:.1em}
+.mast .tag{color:var(--ember)}
+.mast .hint{color:var(--dim)}
+.intro{max-width:var(--wrap);margin:0 auto;padding:84px var(--pad) 0}
+.kicker{font-family:'JetBrains Mono',monospace;font-size:11px;
+  letter-spacing:.22em;color:var(--ember);margin-bottom:16px}
+h1{font-family:'Space Grotesk',sans-serif;font-weight:700;
+  font-size:clamp(34px,4.6vw,56px);line-height:1;letter-spacing:-.025em;
+  margin-bottom:18px}
+h1 .tick{color:var(--ember)}
+.lede{color:var(--muted);max-width:62ch;font-size:14.5px}
+.lede b{color:var(--ink);font-weight:600}
+.lab{display:flex;justify-content:space-between;align-items:baseline;gap:16px;
+  max-width:var(--wrap);margin:0 auto;padding:64px var(--pad) 12px;
+  font-family:'JetBrains Mono',monospace;font-size:10px;
+  letter-spacing:.18em;color:var(--faint);flex-wrap:wrap}
+.lab b{color:var(--muted);font-weight:500}
+.lab .r{color:var(--faint);letter-spacing:.12em}
+
+/* ---------- fake end-of-page seam ---------- */
+.endmark{display:flex;align-items:center;gap:14px;max-width:var(--wrap);
+  margin:0 auto;padding:0 var(--pad);font-family:'JetBrains Mono',monospace;
+  font-size:10px;letter-spacing:.16em;color:var(--faint)}
+.endmark .rl{flex:1;height:1px;background:var(--line)}
+
+/* ---------- 00 · page-edge dissolve — css stand-in for prod canvas ----------
+   Same story as .page-dissolve in index.html: ordered dither, dense floor
+   eroding upward. Here each <i> = one Bayer rank-pair (2 cells of a 4x4
+   matrix) tiled as radial-gradients; a hard-stop vertical mask staggers
+   each layer's reach so coverage accumulates toward the bottom edge. */
+.edge-demo{position:relative;height:120px;overflow:hidden}
+.edge-demo i{position:absolute;inset:0;background-size:16px 16px;
+  background-position:50% 0;background-repeat:repeat;
+  -webkit-mask-image:linear-gradient(180deg,transparent var(--t),#000 var(--t));
+          mask-image:linear-gradient(180deg,transparent var(--t),#000 var(--t))}
+.edge-demo i:nth-child(1){--t:14%;background-image:
+  radial-gradient(circle at 2px 2px,#3D4249 0 1.4px,transparent 1.5px),
+  radial-gradient(circle at 10px 10px,#3D4249 0 1.4px,transparent 1.5px)}
+.edge-demo i:nth-child(2){--t:23%;background-image:
+  radial-gradient(circle at 10px 2px,rgba(255,178,36,.22) 0 1.4px,transparent 1.5px),
+  radial-gradient(circle at 2px 10px,#2E3238 0 1.4px,transparent 1.5px)}
+.edge-demo i:nth-child(3){--t:32%;background-image:
+  radial-gradient(circle at 6px 6px,#2E3238 0 1.4px,transparent 1.5px),
+  radial-gradient(circle at 14px 14px,#3D4249 0 1.4px,transparent 1.5px)}
+.edge-demo i:nth-child(4){--t:41%;background-image:
+  radial-gradient(circle at 14px 6px,#2E3238 0 1.4px,transparent 1.5px),
+  radial-gradient(circle at 6px 14px,#2E3238 0 1.4px,transparent 1.5px)}
+.edge-demo i:nth-child(5){--t:50%;background-image:
+  radial-gradient(circle at 6px 2px,#3D4249 0 1.4px,transparent 1.5px),
+  radial-gradient(circle at 14px 10px,#2E3238 0 1.4px,transparent 1.5px)}
+.edge-demo i:nth-child(6){--t:60%;background-image:
+  radial-gradient(circle at 14px 2px,rgba(255,178,36,.16) 0 1.4px,transparent 1.5px),
+  radial-gradient(circle at 6px 10px,#22252B 0 1.4px,transparent 1.5px)}
+.edge-demo i:nth-child(7){--t:71%;background-image:
+  radial-gradient(circle at 2px 6px,#22252B 0 1.4px,transparent 1.5px),
+  radial-gradient(circle at 10px 14px,#22252B 0 1.4px,transparent 1.5px)}
+.edge-demo i:nth-child(8){--t:82%;background-image:
+  radial-gradient(circle at 10px 6px,#22252B 0 1.4px,transparent 1.5px),
+  radial-gradient(circle at 2px 14px,#22252B 0 1.4px,transparent 1.5px)}
+
+/* ================================================================
+   THE FOOTER — .fm
+   ================================================================ */
+.fm{position:relative;margin-top:0;
+  background:linear-gradient(180deg,rgba(21,23,27,0) 0%,rgba(21,23,27,.42) 82%,rgba(21,23,27,.6) 100%)}
+
+/* ---------- dithered top border — center-dense Bayer tiles ---------- */
+.fm-rule{position:relative;height:18px;--d:rgba(61,66,73,.85)}
+.fm-rule i{position:absolute;inset:0;background-size:16px 16px;
+  background-position:50% 50%;background-repeat:repeat;
+  -webkit-mask-image:linear-gradient(90deg,transparent var(--a),#000 var(--a),#000 var(--b),transparent var(--b));
+          mask-image:linear-gradient(90deg,transparent var(--a),#000 var(--a),#000 var(--b),transparent var(--b))}
+.fm-rule i:nth-child(1){--a:0%;--b:100%;background-image:
+  radial-gradient(circle at 2px 2px,var(--d) 0 1.4px,transparent 1.5px),
+  radial-gradient(circle at 10px 10px,var(--d) 0 1.4px,transparent 1.5px)}
+.fm-rule i:nth-child(2){--a:6%;--b:94%;background-image:
+  radial-gradient(circle at 10px 2px,rgba(255,178,36,.28) 0 1.4px,transparent 1.5px),
+  radial-gradient(circle at 2px 10px,var(--d) 0 1.4px,transparent 1.5px)}
+.fm-rule i:nth-child(3){--a:12%;--b:88%;background-image:
+  radial-gradient(circle at 6px 6px,var(--d) 0 1.4px,transparent 1.5px),
+  radial-gradient(circle at 14px 14px,var(--d) 0 1.4px,transparent 1.5px)}
+.fm-rule i:nth-child(4){--a:18%;--b:82%;background-image:
+  radial-gradient(circle at 14px 6px,var(--d) 0 1.4px,transparent 1.5px),
+  radial-gradient(circle at 6px 14px,var(--d) 0 1.4px,transparent 1.5px)}
+.fm-rule i:nth-child(5){--a:24%;--b:76%;background-image:
+  radial-gradient(circle at 6px 2px,var(--d) 0 1.4px,transparent 1.5px),
+  radial-gradient(circle at 14px 10px,var(--d) 0 1.4px,transparent 1.5px)}
+.fm-rule i:nth-child(6){--a:31%;--b:69%;background-image:
+  radial-gradient(circle at 14px 2px,var(--d) 0 1.4px,transparent 1.5px),
+  radial-gradient(circle at 6px 10px,rgba(255,178,36,.22) 0 1.4px,transparent 1.5px)}
+.fm-rule i:nth-child(7){--a:37%;--b:63%;background-image:
+  radial-gradient(circle at 2px 6px,var(--d) 0 1.4px,transparent 1.5px),
+  radial-gradient(circle at 10px 14px,var(--d) 0 1.4px,transparent 1.5px)}
+.fm-rule i:nth-child(8){--a:44%;--b:56%;background-image:
+  radial-gradient(circle at 10px 6px,var(--d) 0 1.4px,transparent 1.5px),
+  radial-gradient(circle at 2px 14px,var(--d) 0 1.4px,transparent 1.5px)}
+
+/* ---------- link / status columns ---------- */
+.fm-cols{max-width:var(--wrap);margin:0 auto;padding:66px var(--pad) 0;
+  display:grid;grid-template-columns:1.5fr 1fr 1fr 1.2fr;gap:48px}
+.fm-h{display:flex;align-items:center;gap:10px;font-weight:500;
+  font-size:10.5px;letter-spacing:.2em;text-transform:uppercase;
+  color:var(--muted);margin-bottom:22px}
+.fm-h .c{color:var(--faint);font-style:normal}
+.fm-h .r{flex:1;height:1px;background:var(--line)}
+.fm-l{display:flex;justify-content:space-between;align-items:baseline;gap:16px;
+  font-size:12px;padding:7px 0;color:var(--muted);
+  transition:color .18s}
+.fm-l .n{color:var(--ink);white-space:nowrap}
+.fm-l .d{color:var(--faint);font-size:11px;text-align:right}
+.fm-l:hover .n{color:var(--ember)}
+.fm-l:hover .d{color:var(--dim)}
+.fm-l:focus-visible{outline:1px solid var(--ember-dim);outline-offset:3px}
+.fm-s{display:flex;justify-content:space-between;align-items:baseline;gap:16px;
+  font-size:12px;padding:7px 0}
+.fm-s .k{color:var(--faint)}
+.fm-s .v{color:var(--muted);text-align:right}
+.fm-s .v.warn{color:var(--ember-dim)}
+.fm-s .v.hot{color:var(--ember)}
+
+/* ---------- brand column ---------- */
+.fm-brand{display:flex;flex-direction:column;gap:14px}
+.fm-spark{font-family:'JetBrains Mono',monospace;font-size:8px;line-height:1.15;
+  color:var(--ember);user-select:none}
+.fm-name{font-family:'Space Grotesk',sans-serif;font-weight:700;font-size:22px;
+  letter-spacing:-.01em}
+.fm-tag{color:var(--muted);font-size:13.5px;max-width:30ch}
+.fm-meta{font-size:10.5px;letter-spacing:.12em;color:var(--faint);
+  margin-top:auto;padding-top:18px}
+
+/* ---------- 02 · wordmark — hand-set blocks eroding into bayer dust ----------
+   The <pre> carries a hard-stop edge mask (its own box, so the cut is
+   proportional at any font-size). .fm-dith is a shrink-wrapped overlay
+   extending ~11% past the pre on each side; its 8 <i> layers hold one
+   Bayer rank-pair each and are band-masked so coverage accumulates
+   toward the glyph edge — text ends, dust continues. */
+.fm-mark{position:relative;margin-top:76px;overflow:hidden;
+  display:grid;place-items:center;padding:0 0 10px}
+.fm-mark-box{position:relative}
+.fm-dith{position:absolute;top:-9%;bottom:-9%;left:-11%;right:-11%;
+  pointer-events:none;
+  -webkit-mask-image:linear-gradient(180deg,transparent,#000 7%,#000 93%,transparent);
+          mask-image:linear-gradient(180deg,transparent,#000 7%,#000 93%,transparent)}
+.fm-dith i{position:absolute;inset:0;background-size:16px 16px;
+  background-repeat:repeat;--e:#3D4249}
+/* each layer = one Bayer rank-pair. left band: soft ramp-in (a→s), solid
+   (s→e), fade-out into the glyph zone (e→f). right band mirrors it.
+   sparse outer layers = ember sparks; dense inner layers = faint ink */
+.fm-dith i:nth-child(1){background-image:
+  radial-gradient(circle at 2px 2px,rgba(255,178,36,.40) 0 1.4px,transparent 1.5px),
+  radial-gradient(circle at 10px 10px,rgba(255,178,36,.40) 0 1.4px,transparent 1.5px);
+  -webkit-mask-image:linear-gradient(90deg,transparent 0%,#000 1.5%,#000 13.5%,transparent 15.5%,transparent 84.5%,#000 86.5%,#000 98.5%,transparent 100%);
+          mask-image:linear-gradient(90deg,transparent 0%,#000 1.5%,#000 13.5%,transparent 15.5%,transparent 84.5%,#000 86.5%,#000 98.5%,transparent 100%)}
+.fm-dith i:nth-child(2){background-image:
+  radial-gradient(circle at 10px 2px,rgba(255,178,36,.22) 0 1.4px,transparent 1.5px),
+  radial-gradient(circle at 2px 10px,rgba(255,178,36,.22) 0 1.4px,transparent 1.5px);
+  -webkit-mask-image:linear-gradient(90deg,transparent 1.5%,#000 3%,#000 14%,transparent 16%,transparent 84%,#000 86%,#000 97%,transparent 98.5%);
+          mask-image:linear-gradient(90deg,transparent 1.5%,#000 3%,#000 14%,transparent 16%,transparent 84%,#000 86%,#000 97%,transparent 98.5%)}
+.fm-dith i:nth-child(3){background-image:
+  radial-gradient(circle at 6px 6px,rgba(90,65,20,.9) 0 1.4px,transparent 1.5px),
+  radial-gradient(circle at 14px 14px,rgba(90,65,20,.9) 0 1.4px,transparent 1.5px);
+  -webkit-mask-image:linear-gradient(90deg,transparent 3%,#000 4.5%,#000 14.5%,transparent 16.5%,transparent 83.5%,#000 85.5%,#000 95.5%,transparent 97%);
+          mask-image:linear-gradient(90deg,transparent 3%,#000 4.5%,#000 14.5%,transparent 16.5%,transparent 83.5%,#000 85.5%,#000 95.5%,transparent 97%)}
+.fm-dith i:nth-child(4){background-image:
+  radial-gradient(circle at 14px 6px,rgba(90,65,20,.55) 0 1.4px,transparent 1.5px),
+  radial-gradient(circle at 6px 14px,var(--e) 0 1.4px,transparent 1.5px);
+  -webkit-mask-image:linear-gradient(90deg,transparent 4.5%,#000 6%,#000 15%,transparent 17%,transparent 83%,#000 85%,#000 94%,transparent 95.5%);
+          mask-image:linear-gradient(90deg,transparent 4.5%,#000 6%,#000 15%,transparent 17%,transparent 83%,#000 85%,#000 94%,transparent 95.5%)}
+.fm-dith i:nth-child(5){background-image:
+  radial-gradient(circle at 6px 2px,var(--e) 0 1.4px,transparent 1.5px),
+  radial-gradient(circle at 14px 10px,var(--e) 0 1.4px,transparent 1.5px);
+  -webkit-mask-image:linear-gradient(90deg,transparent 6%,#000 7.5%,#000 15.5%,transparent 17.5%,transparent 82.5%,#000 84.5%,#000 92.5%,transparent 94%);
+          mask-image:linear-gradient(90deg,transparent 6%,#000 7.5%,#000 15.5%,transparent 17.5%,transparent 82.5%,#000 84.5%,#000 92.5%,transparent 94%)}
+.fm-dith i:nth-child(6){background-image:
+  radial-gradient(circle at 14px 2px,var(--e) 0 1.4px,transparent 1.5px),
+  radial-gradient(circle at 6px 10px,var(--e) 0 1.4px,transparent 1.5px);
+  -webkit-mask-image:linear-gradient(90deg,transparent 7.5%,#000 9%,#000 16%,transparent 18%,transparent 82%,#000 84%,#000 91%,transparent 92.5%);
+          mask-image:linear-gradient(90deg,transparent 7.5%,#000 9%,#000 16%,transparent 18%,transparent 82%,#000 84%,#000 91%,transparent 92.5%)}
+.fm-dith i:nth-child(7){background-image:
+  radial-gradient(circle at 2px 6px,var(--e) 0 1.4px,transparent 1.5px),
+  radial-gradient(circle at 10px 14px,var(--e) 0 1.4px,transparent 1.5px);
+  -webkit-mask-image:linear-gradient(90deg,transparent 9%,#000 10.5%,#000 16.5%,transparent 18.5%,transparent 81.5%,#000 83.5%,#000 89.5%,transparent 91%);
+          mask-image:linear-gradient(90deg,transparent 9%,#000 10.5%,#000 16.5%,transparent 18.5%,transparent 81.5%,#000 83.5%,#000 89.5%,transparent 91%)}
+.fm-dith i:nth-child(8){background-image:
+  radial-gradient(circle at 10px 6px,var(--e) 0 1.4px,transparent 1.5px),
+  radial-gradient(circle at 2px 14px,var(--e) 0 1.4px,transparent 1.5px);
+  -webkit-mask-image:linear-gradient(90deg,transparent 10.5%,#000 12%,#000 17%,transparent 19%,transparent 81%,#000 83%,#000 88%,transparent 89.5%);
+          mask-image:linear-gradient(90deg,transparent 10.5%,#000 12%,#000 17%,transparent 19%,transparent 81%,#000 83%,#000 88%,transparent 89.5%)}
+.fm-word{position:relative;margin:0;font-family:'JetBrains Mono',monospace;
+  font-size:clamp(7px,1.85vw,32px);line-height:1.08;letter-spacing:0;
+  color:var(--faint);white-space:pre;user-select:none;
+  -webkit-mask-image:linear-gradient(90deg,transparent 4%,#000 8.5%,#000 91.5%,transparent 96%);
+          mask-image:linear-gradient(90deg,transparent 4%,#000 8.5%,#000 91.5%,transparent 96%)}
+.fm-word .d1{color:var(--line)}
+.fm-word .d2{color:#2E3238}
+.fm-word b{color:var(--ember);font-weight:400;
+  text-shadow:0 0 14px rgba(255,178,36,.45),0 0 3px rgba(255,178,36,.5)}
+/* instrument corner brackets */
+.fc{position:absolute;font-family:'JetBrains Mono',monospace;font-style:normal;
+  font-size:12px;color:var(--line);line-height:1;pointer-events:none}
+.fc.tl{top:2px;left:14px}.fc.tr{top:2px;right:14px}
+.fc.bl{bottom:2px;left:14px}.fc.br{bottom:2px;right:14px}
+
+/* ---------- status strip — the page ends at a prompt ---------- */
+.fm-status{border-top:1px solid var(--line);margin-top:26px}
+.fm-status-in{max-width:var(--wrap);margin:0 auto;padding:15px var(--pad);
+  display:flex;align-items:center;justify-content:space-between;gap:20px;
+  font-family:'JetBrains Mono',monospace;font-size:11px;
+  letter-spacing:.08em;color:var(--dim);flex-wrap:wrap}
+.fm-status .grp{display:flex;align-items:center;gap:9px;flex-wrap:wrap}
+.led{width:7px;height:7px;border-radius:50%;background:var(--ember);
+  box-shadow:0 0 8px rgba(255,178,36,.6);flex:none;
+  animation:led 2.4s ease-in-out infinite}
+@keyframes led{0%,100%{opacity:1}50%{opacity:.35}}
+.fm-status .up{color:var(--ink)}
+.fm-status .sep{color:var(--faint)}
+.fm-status .pid{color:var(--ember)}
+.fm-status .keycap{color:var(--faint);border:1px solid var(--line);
+  padding:2px 8px;transition:color .18s,border-color .18s}
+.fm-status .keycap:hover{color:var(--ember);border-color:var(--ember-dim)}
+.caret{display:inline-block;width:8px;height:14px;background:var(--ember);
+  vertical-align:-2px;flex:none;animation:blink 1.1s steps(1) infinite}
+@keyframes blink{50%{opacity:0}}
+
+/* ---------- responsive ---------- */
+@media(max-width:1000px){
+  .fm-cols{grid-template-columns:1fr 1fr;row-gap:44px}
+  .fm-meta{margin-top:0}
+}
+@media(max-width:700px){
+  :root{--pad:22px}
+  .fm-cols{grid-template-columns:1fr;padding-top:48px;row-gap:36px}
+  .fm-status-in{gap:12px}
+  .fm-status .grp{gap:8px}
+  .fc{display:none}
+}
+@media (prefers-reduced-motion:reduce){
+  html{scroll-behavior:auto}
+  .led,.caret{animation:none}
+  .caret{opacity:1}
+  .fm-l,.fm-status .keycap{transition:none}
+}
+</style>
+</head>
+<body id="top">
+<div class="page">
+
+<header class="mast mono">
+  <span class="tag">cinder / experiments</span>
+  <span class="hint">footer-mega — the page ends like an instrument</span>
+</header>
+
+<main>
+  <div class="intro">
+    <p class="kicker mono">PROTOTYPE // FOOTER-MEGA</p>
+    <h1>a footer that lands<span class="tick">.</span></h1>
+    <p class="lede">Replaces the single-row <b>.footer</b> in index.html. Hand-set
+      <b>CINDER</b> block glyphs erode into <b>Bayer-ordered dust</b> at both
+      margins — pure CSS radial-gradient tiles, no canvas, no JS. Link columns
+      carry the sitemap; the status strip ends the page at a blinking prompt.
+      Copy stays honest: pre-1.0, not externally audited.</p>
+  </div>
+
+  <div class="lab mono">
+    <span class="l"><b>// 00</b> — context · end of main</span>
+    <span class="r">THE SEAM IT REPLACES</span>
+  </div>
+  <div class="endmark mono"><span class="rl"></span><span>┤ end of transmission ├</span><span class="rl"></span></div>
+
+  <div class="lab mono">
+    <span class="l"><b>// 01</b> — page-edge dissolve</span>
+    <span class="r">PROD: CANVAS · HERE: CSS BAYER STAND-IN</span>
+  </div>
+  <div class="edge-demo" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>
+
+  <div class="lab mono">
+    <span class="l"><b>// 02</b> — footer.mega</span>
+    <span class="r">BAYER 4×4 CSS TILES · WORDMARK EDGE-EROSION · 0 JS</span>
+  </div>
+</main>
+
+<footer class="fm">
+  <!-- dithered top border: dense center, ordered dots thinning to the margins -->
+  <div class="fm-rule" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>
+
+  <div class="fm-cols">
+    <div class="fm-brand">
+      <pre class="fm-spark" aria-hidden="true">╲ │ ╱
+─ █ ─
+╱ │ ╲</pre>
+      <p class="fm-name">cinder</p>
+      <p class="fm-tag">encrypted chat your agents can drive</p>
+      <p class="fm-meta mono">e2e · noise_xx · blind relay · no accounts</p>
+    </div>
+
+    <nav class="fm-col" aria-label="Protocol">
+      <h4 class="fm-h mono"><span class="c">┌─</span>protocol<span class="r"></span></h4>
+      <a class="fm-l mono" href="https://github.com/nikolas-sapa/cinder/blob/main/docs/PROTOCOL.md" rel="noopener"><span class="n">protocol.md</span><span class="d">// the wire</span></a>
+      <a class="fm-l mono" href="https://github.com/nikolas-sapa/cinder/blob/main/docs/THREAT-MODEL.md" rel="noopener"><span class="n">threat-model.md</span><span class="d">// adversaries</span></a>
+      <a class="fm-l mono" href="https://github.com/nikolas-sapa/cinder/blob/main/docs/AGENT-API.md" rel="noopener"><span class="n">spec</span><span class="d">// agent-api.md</span></a>
+    </nav>
+
+    <nav class="fm-col" aria-label="Repository">
+      <h4 class="fm-h mono"><span class="c">┌─</span>repo<span class="r"></span></h4>
+      <a class="fm-l mono" href="https://github.com/nikolas-sapa/cinder" rel="noopener"><span class="n">github</span><span class="d">// nikolas-sapa/cinder</span></a>
+      <a class="fm-l mono" href="https://github.com/nikolas-sapa/cinder/issues" rel="noopener"><span class="n">issues</span><span class="d">// bug reports welcome</span></a>
+      <a class="fm-l mono" href="https://github.com/nikolas-sapa/cinder/releases" rel="noopener"><span class="n">releases</span><span class="d">// cargo install</span></a>
+    </nav>
+
+    <div class="fm-col" aria-label="Status">
+      <h4 class="fm-h mono"><span class="c">┌─</span>status<span class="r"></span></h4>
+      <p class="fm-s mono"><span class="k">version</span><span class="v hot">pre-1.0</span></p>
+      <p class="fm-s mono"><span class="k">audit</span><span class="v">not externally audited</span></p>
+      <p class="fm-s mono"><span class="k">license</span><span class="v">mit</span></p>
+      <p class="fm-s mono"><span class="k">loc</span><span class="v">~14k · rust</span></p>
+    </div>
+  </div>
+
+  <!-- giant wordmark: hand-set block glyphs; outer columns erode ▓▒░ into bayer dust -->
+  <div class="fm-mark">
+    <span class="fc tl mono" aria-hidden="true">┌</span>
+    <span class="fc tr mono" aria-hidden="true">┐</span>
+    <div class="fm-mark-box">
+      <div class="fm-dith" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>
+      <pre class="fm-word" aria-hidden="true"> <span class="d1">░</span>     <span class="d1">░</span>█████   ███████  ███    ██  ███████   ████████  ██████<span class="d2">▒</span>
+      <span class="d2">▓</span>█    ██    ███    ████   ██  ██   ███  ██        ██    █<span class="d2">▓</span> <span class="d1">░</span>
+  <span class="d1">·</span>   <span class="d2">▒</span>█          ███    ██ <b>█</b>█  ██  ██    █<b>█</b>  █████<b>█</b>    ██    █<span class="d1">░</span>    <span class="d1">·</span>
+ <span class="d1">░</span>    <span class="d1">░</span>█          █<b>█</b>█    ██  ██ ██  ██    ██  ██        ██████<span class="d2">▓</span> 
+      <span class="d2">▒</span>█    ██    ███    ██   ████  ██   ███  ██        ██ ██     <span class="d1">░</span>
+   <span class="d1">░</span>   <span class="d1">░</span>█████   ███████  ██    ███  ███████   ████████  ██  ██<span class="d2">▓</span><span class="d1">░</span>     <span class="d2">▒</span></pre>
+    </div>
+    <span class="fc bl mono" aria-hidden="true">└</span>
+    <span class="fc br mono" aria-hidden="true">┘</span>
+  </div>
+
+  <div class="fm-status">
+    <div class="fm-status-in">
+      <div class="grp">
+        <span class="led" aria-hidden="true"></span>
+        <span class="up">relay up</span>
+        <span class="sep">·</span>
+        <span>peer-id <span class="pid">9c1f…aa07</span></span>
+      </div>
+      <div class="grp">
+        <span>mit</span><span class="sep">·</span><span>rust</span><span class="sep">·</span><span>pre-1.0</span><span class="sep">·</span><span>unaudited</span>
+        <a class="keycap" href="#top">[ ↑ top ]</a>
+        <span class="caret" aria-hidden="true"></span>
+      </div>
+    </div>
+  </div>
+</footer>
+
+</div>
+</body>
+</html>

@@ -295,6 +295,17 @@ if (transcript && input) {
   });
 
   document.querySelector(".term-body").addEventListener("click", () => input.focus());
+  document.querySelectorAll(".kc[data-cmd]").forEach((kc) => {
+    const press = () => {
+      input.value = kc.dataset.cmd;
+      input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter" }));
+      input.focus();
+    };
+    kc.addEventListener("click", press);
+    kc.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" || e.key === " ") { e.preventDefault(); press(); }
+    });
+  });
   loadPeer("eidolon");
 }
 
@@ -1019,4 +1030,487 @@ void main(){
     }, { threshold: 0.3 });
     io.observe(term);
   }
+})();
+
+/* ---- page-edge dither frame: bayer vignette on all 4 viewport edges ---- */
+(function(){
+  var base = document.getElementById('fx-base');
+  var fx = document.getElementById('fx-ember');
+  if (!base || !fx) return;
+  var RES = 2, CELL = 6, DOT = 2.55;
+  var EDGE_L = 76, EDGE_R = 76, EDGE_T = 30, EDGE_B = 30, MAX_IGN = 14;
+  var FAINT = [61,66,73], DIMB = [90,65,20];
+  var TH8 = new Float32Array([
+     0,32, 8,40, 2,34,10,42, 48,16,56,24,50,18,58,26,
+    12,44, 4,36,14,46, 6,38, 60,28,52,20,62,30,54,22,
+     3,35,11,43, 1,33, 9,41, 51,19,59,27,49,17,57,25,
+    15,47, 7,39,13,45, 5,37, 63,31,55,23,61,29,53,21]);
+  for (var i=0; i<64; i++) TH8[i] = (TH8[i]+0.5)/64;
+  function ign(x, y){
+    var f = (0.06711056*x + 0.00583715*y) % 1;
+    return (52.9829189*f) % 1;
+  }
+  function density(x, y, w, h, o){
+    var d = 0;
+    if (x < o.l)       d = 1 - x/o.l;
+    if (w - x < o.r)   d = Math.max(d, 1 - (w - x)/o.r);
+    if (y < o.t)       d = Math.max(d, 1 - y/o.t);
+    if (h - y < o.b)   d = Math.max(d, 1 - (h - y)/o.b);
+    return Math.pow(d, 1.45);
+  }
+  function paintFrame(ctx, w, h, o){
+    var cellT = CELL/RES;
+    var cols = Math.ceil(w/cellT), rows = Math.ceil(h/cellT);
+    var img = ctx.createImageData(w, h);
+    var d = img.data, lit = [];
+    for (var p0=0; p0<d.length; p0+=4){
+      d[p0]=11; d[p0+1]=12; d[p0+2]=14; d[p0+3]=255;
+    }
+    for (var gy=0; gy<rows; gy++){
+      var cy = gy*cellT + cellT/2;
+      var cssY = cy*RES;
+      var brow = (gy&7)<<3;
+      for (var gx=0; gx<cols; gx++){
+        var cx = gx*cellT + cellT/2;
+        var cssX = cx*RES;
+        var dens = density(cssX, cssY, w*RES, h*RES, o);
+        if (dens <= 0) continue;
+        var th = TH8[brow|(gx&7)]*0.62 + ign(gx,gy)*0.38;
+        if (dens <= th) continue;
+        var beat = (dens - th)/(1 - th);
+        var rad = (DOT/RES) * (0.38 + 0.62*Math.min(1, beat*1.5));
+        var r2 = rad*rad;
+        var warm = Math.pow(dens, 3)*0.85;
+        var cr = (FAINT[0] + (DIMB[0]-FAINT[0])*warm)|0;
+        var cg = (FAINT[1] + (DIMB[1]-FAINT[1])*warm)|0;
+        var cb = (FAINT[2] + (DIMB[2]-FAINT[2])*warm)|0;
+        var x0 = Math.max(0, Math.floor(cx-rad));
+        var x1 = Math.min(w-1, Math.ceil(cx+rad));
+        var y0 = Math.max(0, Math.floor(cy-rad));
+        var y1 = Math.min(h-1, Math.ceil(cy+rad));
+        for (var ty=y0; ty<=y1; ty++){
+          for (var tx=x0; tx<=x1; tx++){
+            var dx = tx+0.5-cx, dy = ty+0.5-cy;
+            if (dx*dx+dy*dy > r2) continue;
+            var p = (ty*w+tx)*4;
+            d[p]=cr; d[p+1]=cg; d[p+2]=cb; d[p+3]=255;
+          }
+        }
+        lit.push({x:cx, y:cy, r:rad});
+      }
+    }
+    ctx.putImageData(img, 0, 0);
+    return lit;
+  }
+  function drawIgn(ctx, x, y, r, a){
+    var gr = r*3.4;
+    var g = ctx.createRadialGradient(x, y, 0, x, y, gr);
+    g.addColorStop(0, 'rgba(255,178,36,'+(0.28*a).toFixed(3)+')');
+    g.addColorStop(1, 'rgba(255,178,36,0)');
+    ctx.fillStyle = g;
+    ctx.fillRect(x-gr, y-gr, gr*2, gr*2);
+    ctx.fillStyle = 'rgba(255,178,36,'+(0.95*a).toFixed(3)+')';
+    ctx.fillRect(x-r, y-r, r*2, r*2);
+    ctx.fillStyle = 'rgba(255,235,190,'+(0.55*a).toFixed(3)+')';
+    ctx.fillRect(x-r*0.45, y-r*0.45, r*0.9, r*0.9);
+  }
+  var mq = window.matchMedia('(prefers-reduced-motion: reduce)');
+  var reduced = mq.matches;
+  var bctx = base.getContext('2d', {alpha:false});
+  var fctx = fx.getContext('2d');
+  var lit = [], igns = [], raf = 0, running = false;
+  var nextSpawn = 0;
+  function build(){
+    var w = window.innerWidth, h = window.innerHeight;
+    base.width = fx.width = Math.ceil(w/RES);
+    base.height = fx.height = Math.ceil(h/RES);
+    var o = {l:EDGE_L, r:EDGE_R, t:EDGE_T, b:EDGE_B};
+    lit = paintFrame(bctx, base.width, base.height, o);
+    fctx.clearRect(0, 0, fx.width, fx.height);
+    igns = [];
+    if (reduced && lit.length){
+      for (var k=0; k<9; k++){
+        var c = lit[(Math.random()*lit.length)|0];
+        drawIgn(fctx, c.x, c.y, c.r*1.4, 0.5 + Math.random()*0.4);
+      }
+    }
+  }
+  function loop(now){
+    raf = 0;
+    var t = now/1000;
+    fctx.clearRect(0, 0, fx.width, fx.height);
+    if (t >= nextSpawn && igns.length < MAX_IGN && lit.length){
+      var n = Math.random() < 0.35 ? 2 : 1;
+      for (var k=0; k<n; k++){
+        var c = lit[(Math.random()*lit.length)|0];
+        igns.push({x:c.x, y:c.y, r:c.r*1.4, t0:t,
+                   ttl:1.1 + Math.random()*1.6});
+      }
+      nextSpawn = t + 0.5 + Math.random()*1.4;
+    }
+    for (var i=igns.length-1; i>=0; i--){
+      var s = igns[i], p = (t - s.t0)/s.ttl;
+      if (p >= 1){ igns.splice(i,1); continue; }
+      drawIgn(fctx, s.x, s.y, s.r, Math.sin(p*Math.PI));
+    }
+    if (running) raf = requestAnimationFrame(loop);
+  }
+  function start(){
+    if (!running && !reduced && !document.hidden){
+      running = true;
+      if (!raf) raf = requestAnimationFrame(loop);
+    }
+  }
+  function stop(){ running = false; if (raf){ cancelAnimationFrame(raf); raf=0; } }
+  document.addEventListener('visibilitychange', function(){
+    document.hidden ? stop() : start();
+  });
+  if (mq.addEventListener) mq.addEventListener('change', function(e){
+    reduced = e.matches; build();
+    reduced ? stop() : start();
+  });
+  var rt; window.addEventListener('resize', function(){
+    clearTimeout(rt); rt = setTimeout(build, 150);
+  });
+  build();
+  start();
+})();
+
+/* ---- relay instrument panel: scope + ppm + throughput, all dithered ---- */
+(function(){
+'use strict';
+var panelEl = document.getElementById('panel');
+if (!panelEl) return;
+
+var RM = matchMedia('(prefers-reduced-motion: reduce)');
+var reduced = RM.matches;
+var STATIC_T = 8.73;
+
+var LEVELS, PAL = [
+  [ 11, 12, 14],[ 20, 21, 25],[ 33, 35, 41],[ 50, 47, 38],
+  [ 74, 55, 22],[106, 71, 20],[146, 96, 24],[196,127, 27],
+  [232,152, 30],[255,178, 36],[255,190, 52],[255,214,110],[255,240,196]
+];
+LEVELS = PAL.length - 1;
+
+var TH8 = new Float32Array([
+   0,32, 8,40, 2,34,10,42, 48,16,56,24,50,18,58,26,
+  12,44, 4,36,14,46, 6,38, 60,28,52,20,62,30,54,22,
+   3,35,11,43, 1,33, 9,41, 51,19,59,27,49,17,57,25,
+  15,47, 7,39,13,45, 5,37, 63,31,55,23,61,29,53,21]);
+for (var i=0; i<64; i++) TH8[i] = (TH8[i]+0.5)/64;
+
+function ign(x, y){
+  var f = (0.06711056*x + 0.00583715*y) % 1;
+  return (52.9829189*f) % 1;
+}
+function el(id){ return document.getElementById(id); }
+function clamp01(v){ return v<0 ? 0 : (v>1 ? 1 : v); }
+
+function makeRaster(cv, cell){
+  var r = {cv:cv, ctx:cv.getContext('2d',{alpha:false}), cell:cell,
+           cols:0, rows:0, img:null, V:null};
+  r.fit = function(){
+    r.cols = Math.max(16, Math.round(cv.clientWidth/cell));
+    r.rows = Math.max(8,  Math.round(cv.clientHeight/cell));
+    cv.width = r.cols; cv.height = r.rows;
+    r.img = r.ctx.createImageData(r.cols, r.rows);
+    r.V = new Float32Array(r.cols*r.rows);
+  };
+  return r;
+}
+
+function quantize(r, vals){
+  var d = r.img.data, cols = r.cols, rows = r.rows, p = 0, o = 0;
+  for (var y=0; y<rows; y++){
+    var brow = (y&7)<<3;
+    for (var x=0; x<cols; x++){
+      var v = vals[p];
+      var th = TH8[brow|(x&7)]*0.62 + ign(x,y)*0.38;
+      var f = v*LEVELS, l = f|0;
+      if (f-l > th) l++;
+      if (l<0) l = 0; else if (l>LEVELS) l = LEVELS;
+      var c = PAL[l];
+      d[o]=c[0]; d[o+1]=c[1]; d[o+2]=c[2]; d[o+3]=255;
+      p++; o+=4;
+    }
+  }
+  r.ctx.putImageData(r.img, 0, 0);
+}
+
+var sc  = makeRaster(el('cv-scope'), 3);
+var scP = null, scS = null, scR = null, scA = null;
+var scCx = 0, scCy = 0, scRmax = 1;
+var TAU = Math.PI*2;
+
+function scopeFit(){
+  sc.fit();
+  var n = sc.cols*sc.rows;
+  scP = new Float32Array(n);
+  scS = new Float32Array(n);
+  scR = new Float32Array(n);
+  scA = new Float32Array(n);
+  scCx = (sc.cols-1)/2; scCy = (sc.rows-1)/2;
+  scRmax = Math.min(scCx, scCy);
+  for (var y=0, i=0; y<sc.rows; y++)
+    for (var x=0; x<sc.cols; x++, i++){
+      var dx = (x-scCx)/scRmax, dy = (y-scCy)/scRmax;
+      scR[i] = Math.sqrt(dx*dx+dy*dy);
+      scA[i] = Math.atan2(dy, dx);
+    }
+}
+
+function drawScope(t){
+  var sig = 0.55 + 0.28*Math.sin(t*0.9)
+                 + 0.10*Math.sin(t*2.17+1.7)
+                 + 0.05*Math.sin(t*5.3+0.6);
+  sig = clamp01(sig); if (sig<0.08) sig = 0.08;
+  var R = 0.34 + 0.52*sig, iR2 = 1.9/(R*R);
+  var arm = t*1.05;
+  var cols = sc.cols, rows = sc.rows;
+  var rhw = 0.6/scRmax;
+
+  for (var y=0, i=0; y<rows; y++)
+    for (var x=0; x<cols; x++, i++){
+      var r = scR[i], a = scA[i];
+      var back = (arm - a) % TAU; if (back<0) back += TAU;
+      var trail = 1 - back/1.5;
+      if (trail<0) trail = 0; trail *= trail;
+
+      var v = 0.014 + 0.010*ign(x+11, y+47);
+      if (Math.abs(r-0.45)<rhw || Math.abs(r-0.85)<rhw)
+        v += 0.045;
+      if (Math.abs(x-scCx)<0.6 || Math.abs(y-scCy)<0.6)
+        v += 0.035;
+
+      var blob = Math.exp(-r*r*iR2);
+      v += blob * (0.30+0.85*sig) * (0.40+0.85*trail);
+      v += 0.09*Math.sin(r*30 - t*4.5)*Math.exp(-r*1.9)
+           * (0.3+0.7*trail) * sig;
+
+      var dArm = Math.min(back, TAU-back);
+      if (dArm<0.05 && r<1.04)
+        v += (1 - dArm/0.05) * (0.9 - 0.45*r);
+
+      var p = scP[i]*0.90; if (v>p) p = v;
+      scP[i] = p;
+      scS[i] = p * (0.96 + 0.04*Math.sin(t*23 + r*31 + x*0.7));
+    }
+  quantize(sc, scS);
+}
+
+var vu = makeRaster(el('cv-vu'), 4);
+var CH = 8, M_W = 3;
+var vuDisp = new Float32Array(CH);
+var vuPk   = new Float32Array(CH);
+var vuHold = new Float32Array(CH);
+
+function chSrc(c, t){
+  switch(c){
+    case 0: {
+      var g = Math.sin(t*0.53+1) > 0 ? 1 : 0.15;
+      return g*(0.45 + 0.35*Math.abs(Math.sin(t*4.7))
+                      + 0.20*Math.abs(Math.sin(t*7.9+2)));
+    }
+    case 1: return 0.35 + 0.30*Math.sin(t*1.3+0.8) + 0.15*Math.abs(Math.sin(t*5.1));
+    case 2: return 0.22 + 0.10*Math.sin(t*0.8)
+                  + 0.35*Math.max(0, Math.sin(t*0.31+2)*Math.sin(t*2.9));
+    case 3: return 0.50 + 0.28*Math.sin(t*2.6+4) + 0.18*Math.sin(t*11+1);
+    case 4: return 0.30 + 0.18*Math.sin(t*0.42+3.4) + 0.08*Math.sin(t*1.8);
+    case 5: return 0.40 + 0.30*Math.abs(Math.sin(t*3.3+1.2))*Math.sin(t*0.9);
+    case 6: return 0.15 + 0.12*Math.sin(t*1.1+5) + 0.20*Math.abs(Math.sin(t*6.7));
+    default:return Math.pow(Math.max(0, Math.sin(t*0.37+0.6)), 18);
+  }
+}
+
+function drawVU(t, dt){
+  var cols = vu.cols, rows = vu.rows;
+  var dotRows = Math.floor(rows/2);
+  var gap = Math.max(2, Math.floor((cols - CH*M_W)/(CH+1)));
+
+  var ATT = 1 - Math.exp(-dt/0.02), REL = 1 - Math.exp(-dt/0.35);
+  for (var c=0; c<CH; c++){
+    var s = clamp01(chSrc(c, t)), d = vuDisp[c];
+    d += (s>d ? ATT : REL) * (s-d);
+    vuDisp[c] = clamp01(d);
+    if (s >= vuPk[c]){ vuPk[c] = s; vuHold[c] = 1.1; }
+    else {
+      vuHold[c] -= dt;
+      if (vuHold[c] < 0){ vuPk[c] -= dt*0.55; if (vuPk[c] < d) vuPk[c] = d; }
+    }
+  }
+
+  var V = vu.V; V.fill(0);
+  var y, x, i, yb;
+  for (y=0; y<rows; y++){
+    yb = rows-1-y;
+    if (yb & 1) continue;
+    for (x=0; x<2; x++) V[y*cols+x] = 0.10;
+    for (x=cols-2; x<cols; x++) V[y*cols+x] = 0.10;
+  }
+
+  for (c=0; c<CH; c++){
+    var x0 = gap + c*(M_W+gap);
+    var pkRow = Math.round(vuPk[c]*(dotRows-1));
+    var fillRows = vuDisp[c]*dotRows;
+    for (var di=0; di<dotRows; di++){
+      y = rows-1 - di*2;
+      var cov = fillRows - di;
+      var lit = 0;
+      if (cov > 0)
+        lit = Math.min(1, cov) * (0.55 + 0.45*(di+1)/dotRows) * 1.05;
+      for (var k=0; k<M_W; k++){
+        i = y*cols + x0+k;
+        if (V[i] < 0.14) V[i] = 0.14;
+        if (lit > V[i]) V[i] = lit;
+        if (di === pkRow && vuPk[c] > 0.03) V[i] = 1.2;
+      }
+    }
+  }
+  quantize(vu, V);
+}
+
+var sp = makeRaster(el('cv-spark'), 3);
+var TICK = 0.12;
+var hist = null, lastTick = 0;
+
+function sample(t){
+  var v = 0.42 + 0.24*Math.sin(t*0.57)
+               + 0.16*Math.sin(t*1.63+2.4)
+               + 0.10*Math.sin(t*3.7+0.9)
+               + (Math.random()-0.5)*0.14;
+  if (Math.random() < 0.05) v += 0.30;
+  return clamp01(v);
+}
+function seedHist(t){
+  hist = new Float32Array(sp.cols+1);
+  for (var i=0; i<=sp.cols; i++){
+    var tt = t - (sp.cols-i)*TICK;
+    hist[i] = clamp01(0.42 + 0.24*Math.sin(tt*0.57)
+                            + 0.16*Math.sin(tt*1.63+2.4)
+                            + 0.10*Math.sin(tt*3.7+0.9)
+                            + 0.06*Math.sin(tt*13.7+i));
+  }
+  lastTick = t;
+}
+function drawSpark(t){
+  var cols = sp.cols, rows = sp.rows;
+  while (t - lastTick >= TICK){
+    lastTick += TICK;
+    hist.copyWithin(0, 1);
+    hist[cols] = sample(lastTick);
+  }
+  var frac = (t - lastTick)/TICK;
+  if (frac>1) frac = 1; else if (frac<0) frac = 0;
+
+  var V = sp.V;
+  for (var x=0; x<cols; x++){
+    var s = hist[x] + (hist[x+1]-hist[x])*frac;
+    var h = s*rows;
+    for (var y=0; y<rows; y++){
+      var yb = rows-1-y;
+      var v = 0.012 + 0.008*ign(x*3+y, y*7+x);
+      if (yb === 0) v = 0.12;
+      if (yb < h){
+        var dep = (h - yb)/h;
+        var cov = Math.min(1, h - yb);
+        var vv = cov * (1.08 - 0.62*dep);
+        if (vv > v) v = vv;
+      }
+      V[y*cols+x] = v;
+    }
+  }
+  quantize(sp, V);
+}
+
+var raf = 0, running = false, inView = false, last = 0;
+
+function drawAll(t, dt){
+  drawScope(t);
+  drawVU(t, dt);
+  drawSpark(t);
+}
+
+function warmup(tEnd, n){
+  seedHist(tEnd);
+  for (var i=n; i>0; i--){
+    var t = tEnd - i/60;
+    drawAll(t, 1/60);
+  }
+  drawAll(tEnd, 1/60);
+}
+
+function loop(now){
+  raf = 0;
+  var t = now/1000, dt = t - last;
+  if (dt > 0.05) dt = 0.05;
+  if (dt < 0) dt = 0;
+  drawAll(t, dt);
+  last = t;
+  if (running) raf = requestAnimationFrame(loop);
+}
+
+function start(){
+  if (!running && !reduced && !document.hidden && inView){
+    running = true;
+    last = performance.now()/1000;
+    if (!raf) raf = requestAnimationFrame(loop);
+  }
+}
+function stop(){
+  running = false;
+  if (raf){ cancelAnimationFrame(raf); raf = 0; }
+}
+
+function fitAll(){
+  scopeFit();
+  vu.fit();
+  sp.fit();
+  seedHist(performance.now()/1000);
+  if (reduced) warmup(STATIC_T, 30);
+}
+
+document.addEventListener('visibilitychange', function(){
+  document.hidden ? stop() : start();
+});
+new IntersectionObserver(function(e){
+  inView = e[0].isIntersecting;
+  inView ? start() : stop();
+}).observe(panelEl);
+
+if (RM.addEventListener) RM.addEventListener('change', function(e){
+  reduced = e.matches;
+  if (reduced){ stop(); warmup(STATIC_T, 30); } else { start(); }
+});
+
+var rt; window.addEventListener('resize', function(){
+  clearTimeout(rt); rt = setTimeout(fitAll, 150);
+});
+
+fitAll();
+if (reduced) warmup(STATIC_T, 30);
+start();
+})();
+
+/* ---- invite ticket: click burns the one-time link ---- */
+(function(){
+  "use strict";
+  var ticket = document.getElementById("ticket");
+  var keys = document.getElementById("invite-keys");
+  if (!ticket || !keys) return;
+  function burn(){
+    if (ticket.classList.contains("burned")) return;
+    ticket.classList.add("burned");
+    keys.innerHTML = "link consumed · <b>replay rejected</b>";
+  }
+  ticket.addEventListener("click", function(e){
+    e.preventDefault();
+    burn();
+  });
+  ticket.addEventListener("keydown", function(e){
+    if (e.key === "Enter" || e.key === " ") {
+      e.preventDefault();
+      burn();
+    }
+  });
 })();

@@ -1,0 +1,193 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark">
+<title>cinder · ascii-invite</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg:#0B0C0E;
+    --panel:#15171B;
+    --ink:#EDEDE8;
+    --muted:#9BA0A6;
+    --faint:#3D4249;
+    --line:#23262D;
+    --ember:#FFB224;
+    --dim-ember:#5A4114;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;padding:0}
+  body{
+    background:var(--bg);
+    color:var(--muted);
+    font-family:"JetBrains Mono",ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+    -webkit-font-smoothing:antialiased;
+    min-height:100vh;
+    display:grid;
+    place-items:center;
+    padding:12vh 20px;
+  }
+
+  /* ---- demo page chrome ---- */
+  .page-tag{
+    position:fixed;top:18px;left:22px;
+    font-size:11px;letter-spacing:.14em;text-transform:uppercase;
+    color:var(--dim-ember);
+  }
+  .keys{
+    margin-top:16px;font-size:11px;letter-spacing:.08em;
+    color:var(--dim-ember);text-align:center;
+  }
+  .keys b{color:var(--muted);font-weight:500}
+
+  /* ---- ticket shell ---- */
+  .ticket{
+    position:relative;
+    border:1px solid var(--line);
+    border-radius:10px;
+    background:
+      repeating-linear-gradient(0deg,rgba(255,255,255,.012) 0 1px,transparent 1px 3px),
+      var(--panel);
+    box-shadow:0 30px 80px rgba(0,0,0,.55),0 0 0 1px rgba(255,255,255,.02) inset;
+    padding:30px 34px 32px;
+    cursor:pointer;
+    transition:border-color .3s ease;
+    overflow-x:auto;
+  }
+  .ticket:hover{border-color:#31353D}
+  .screw{
+    position:absolute;font-size:11px;line-height:1;
+    color:var(--faint);user-select:none;
+  }
+  .screw.tl{top:9px;left:11px}
+  .screw.tr{top:9px;right:11px}
+  .screw.bl{bottom:9px;left:11px}
+  .screw.br{bottom:9px;right:11px}
+
+  pre{
+    margin:0;
+    font-size:13px;
+    line-height:1.5;
+    letter-spacing:0;
+    white-space:pre;
+    user-select:text;
+    font-variant-ligatures:none;
+    font-feature-settings:"liga" 0,"calt" 0;
+  }
+  .t-mobile{display:none}
+
+  /* ---- ink colors ---- */
+  .e{color:var(--ember)}
+  .i{color:var(--ink)}
+  .m{color:var(--muted)}
+  .f{color:var(--faint)}
+  .d{color:var(--dim-ember)}
+  .b{font-weight:700}
+
+  .lnk{color:var(--ember);text-decoration:none}
+  .lnk:hover{text-decoration:underline;text-shadow:0 0 12px rgba(255,178,36,.35)}
+  .cur{color:var(--ember);animation:blink 1.1s steps(1) infinite}
+  @keyframes blink{50%{opacity:0}}
+
+  /* ---- burned state: ticket dims, void stamp ignites ---- */
+  .ticket.burned pre{color:var(--faint)}
+  .ticket.burned .e,
+  .ticket.burned .i,
+  .ticket.burned .m,
+  .ticket.burned .lnk{color:var(--faint)}
+  .ticket.burned .lnk{text-decoration:line-through}
+  .ticket.burned .stamp{color:var(--ember)}
+  .ticket.burned .cur{visibility:hidden}
+
+  ::selection{background:var(--dim-ember);color:var(--ink)}
+
+  .sr{
+    position:absolute;width:1px;height:1px;
+    overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap;
+  }
+
+  @media (prefers-reduced-motion:reduce){
+    .cur{animation:none}
+    .ticket{transition:none}
+  }
+  @media (max-width:44rem){
+    .ticket{padding:22px 18px 24px}
+    .t-desktop{display:none}
+    .t-mobile{display:block;font-size:clamp(9px,2.9vw,12px)}
+  }
+</style>
+</head>
+<body>
+
+<div class="page-tag">cinder / experiments / ascii-invite</div>
+
+<main>
+  <section class="ticket" id="ticket" role="button" tabindex="0" aria-label="invite ticket, click to simulate redemption">
+    <span class="screw tl">+</span><span class="screw tr">+</span>
+    <span class="screw bl">+</span><span class="screw br">+</span>
+    <p class="sr">One-time cinder invite. cinder://9c1f…aa07@relay:8443?rendezvous=8f2a. Single use. Expires on use. Intercepted links cannot be replayed.</p><pre class="t-desktop" aria-hidden="true"><span class="f">┌────────────────────────────────────────────────────────</span><span class="d">┬</span><span class="d">╌╌╌╌╌╌╌╌╌╌╌╌╌╌</span><span class="f">┐</span>
+<span class="f">┊</span>   <span class="m">CINDER · E2E TERMINAL MESSENGER</span>                      <span class="d">┊</span><span class="f">     STUB     </span><span class="f">┊</span>
+<span class="f">┊</span>                                                        <span class="d">┊</span>              <span class="f">┊</span>
+<span class="f">┊</span>   <span class="e">\|/</span>   <span class="i b">ADMIT ONE</span>                                      <span class="d">┊</span><span class="m">       S      </span><span class="f">┊</span>
+<span class="f">┊</span>   <span class="e">-*-</span>   <span class="m">ONE-TIME LINK</span>                                  <span class="d">┊</span><span class="m">       I      </span><span class="f">┊</span>
+<span class="f">┊</span>   <span class="e">/|\</span>                                                  <span class="d">┊</span><span class="m">       N      </span><span class="f">┊</span>
+<span class="f">┊</span>                                                        <span class="d">┊</span><span class="m">       G      </span><span class="f">┊</span>
+<span class="f">┊</span>   <a class="lnk" href="cinder://9c1f%e2%80%a6aa07@relay:8443?rendezvous=8f2a">cinder://9c1f…aa07@relay:8443?rendezvous=8f2a</a><span class="cur">▌</span>       <span class="d">┊</span><span class="m">       L      </span><span class="f">┊</span>
+<span class="f">┊</span>                                                        <span class="d">┊</span><span class="m">       E      </span><span class="f">┊</span>
+<span class="f">┊</span>   <span class="m">one-time · expires on use</span>                            <span class="d">┊</span><span class="f">       ·      </span><span class="f">┊</span>
+<span class="f">┊</span>   <span class="m">intercepted links can't be replayed</span>                  <span class="d">┊</span><span class="m">       U      </span><span class="f">┊</span>
+<span class="f">┊</span>                                                        <span class="d">┊</span><span class="m">       S      </span><span class="f">┊</span>
+<span class="f">┊</span>                                                        <span class="d">┊</span><span class="m">       E      </span><span class="f">┊</span>
+<span class="f">┊</span>   <span class="f">NO·8F2A</span>                           <span class="f">TEAR ALONG LINE </span><span class="e">»</span>  <span class="d">┊</span><span class="f stamp">░ VOID AFTER ░</span><span class="f">┊</span>
+<span class="f">┊</span>                                                        <span class="d">┊</span><span class="f stamp">░    USE     ░</span><span class="f">┊</span>
+<span class="f">└────────────────────────────────────────────────────────</span><span class="d">┴</span><span class="d">╌╌╌╌╌╌╌╌╌╌╌╌╌╌</span><span class="f">┘</span></pre><pre class="t-mobile" aria-hidden="true"><span class="f">┌────────────────────────────────────────────────┐</span>
+<span class="f">┊</span>  <span class="m">CINDER · E2E TERMINAL MESSENGER</span>               <span class="f">┊</span>
+<span class="f">┊</span>                                                <span class="f">┊</span>
+<span class="f">┊</span>  <span class="e">\|/</span>   <span class="i b">ADMIT ONE</span>                               <span class="f">┊</span>
+<span class="f">┊</span>  <span class="e">-*-</span>   <span class="m">ONE-TIME LINK</span>                           <span class="f">┊</span>
+<span class="f">┊</span>  <span class="e">/|\</span>                                           <span class="f">┊</span>
+<span class="f">┊</span>                                                <span class="f">┊</span>
+<span class="f">┊</span>  <a class="lnk" href="cinder://9c1f%e2%80%a6aa07@relay:8443?rendezvous=8f2a">cinder://9c1f…aa07@relay:8443?rendezvous=8f2a</a> <span class="f">┊</span>
+<span class="f">┊</span>                                                <span class="f">┊</span>
+<span class="f">┊</span>  <span class="m">one-time · expires on use</span>                     <span class="f">┊</span>
+<span class="f">┊</span>  <span class="m">intercepted links can't be replayed</span>           <span class="f">┊</span>
+<span class="f">┊</span>                                                <span class="f">┊</span>
+<span class="d">├┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┤</span>
+<span class="f">┊</span>  <span class="m">SINGLE USE</span> <span class="f">· TEAR HERE</span>                        <span class="f">┊</span>
+<span class="f">┊</span>  <span class="f stamp">░ VOID AFTER ░</span>                       <span class="f">NO·8F2A</span>  <span class="f">┊</span>
+<span class="f">┊</span>  <span class="f stamp">░    USE     ░</span>                                <span class="f">┊</span>
+<span class="f">┊</span>                                                <span class="f">┊</span>
+<span class="f">└────────────────────────────────────────────────┘</span></pre>
+  </section>
+  <div class="keys" id="keys">click ticket <b>burns the link</b> · intercepted copies can't replay</div>
+</main>
+
+<script>
+(function(){
+  "use strict";
+  var ticket = document.getElementById("ticket");
+  var keys = document.getElementById("keys");
+  function burn(){
+    if (ticket.classList.contains("burned")) return;
+    ticket.classList.add("burned");
+    keys.innerHTML = "link consumed · <b>replay rejected</b>";
+  }
+  ticket.addEventListener("click", function(e){
+    e.preventDefault();
+    burn();
+  });
+  ticket.addEventListener("keydown", function(e){
+    if (e.key === "Enter" || e.key === " ") {
+      e.preventDefault();
+      burn();
+    }
+  });
+})();
+</script>
+
+</body>
+</html>

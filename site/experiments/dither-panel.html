@@ -1,0 +1,522 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>cinder — dither panel experiment</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --ground:#0B0C0E; --panel:#15171B; --ink:#EDEDE8; --muted:#9BA0A6;
+    --faint:#3D4249; --line:#23262D; --ember:#FFB224; --dim-ember:#5A4114;
+    --mono:'JetBrains Mono',ui-monospace,monospace;
+  }
+  *{box-sizing:border-box;margin:0}
+  body{background:var(--ground);color:var(--ink);font-family:var(--mono);
+    font-size:14px;line-height:1.6;-webkit-font-smoothing:antialiased}
+  canvas{display:block;width:100%;height:100%;image-rendering:pixelated}
+
+  .page{min-height:100vh;display:flex;flex-direction:column}
+  header{padding:26px 32px;display:flex;justify-content:space-between;
+    align-items:baseline;border-bottom:1px solid var(--line);font-size:13px}
+  .tag{color:var(--ember);font-weight:500}
+  .hint{color:var(--muted);font-size:11px;letter-spacing:.08em}
+  main{flex:1;display:flex;flex-direction:column;justify-content:center;
+    padding:56px 28px}
+  .wrap{width:100%;max-width:920px;margin:0 auto}
+
+  .intro{margin-bottom:36px}
+  .kicker{font-size:10px;letter-spacing:.22em;color:var(--ember);margin-bottom:14px}
+  h1{font-weight:500;font-size:clamp(20px,3vw,26px);margin-bottom:10px}
+  .lede{color:var(--muted);font-size:12px;max-width:66ch}
+  .lede b{color:var(--ink);font-weight:500}
+
+  /* ---- instrument panel ------------------------------------------ */
+  .panel{background:var(--panel);border:1px solid var(--line)}
+  .p-head{display:flex;align-items:center;gap:12px;padding:12px 18px;
+    border-bottom:1px solid var(--line);font-size:10px;letter-spacing:.2em}
+  .p-head .l{color:var(--ink)}
+  .p-head .r{margin-left:auto;color:var(--muted);display:flex;
+    align-items:center;gap:10px}
+  .led{width:6px;height:6px;background:var(--ember);flex:none;
+    animation:blink 1.7s steps(1) infinite}
+  @keyframes blink{0%,72%{opacity:1}72.01%,100%{opacity:.25}}
+
+  .p-body{display:grid;grid-template-columns:minmax(0,280px) 1fr;
+    gap:22px;padding:20px 22px}
+  .rcol{display:flex;flex-direction:column;justify-content:space-between;gap:16px}
+
+  .ilab{display:flex;justify-content:space-between;gap:12px;
+    font-size:9px;letter-spacing:.18em;color:var(--faint);margin-bottom:6px}
+  .ilab b{color:var(--muted);font-weight:400}
+  .scr{position:relative;border:1px solid var(--line);background:var(--ground)}
+  .scr .st{position:absolute;top:5px;left:8px;font-size:8px;
+    letter-spacing:.22em;color:var(--faint);pointer-events:none}
+  .scr .st2{position:absolute;top:5px;right:8px;font-size:8px;
+    letter-spacing:.22em;color:var(--dim-ember);pointer-events:none}
+  .scope .scr{aspect-ratio:1}
+  .vu .scr{height:148px}
+  .spk .scr{height:76px}
+  .ro{display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;
+    margin-top:6px;font-size:10px;letter-spacing:.1em;color:var(--faint)}
+  .ro b{color:var(--muted);font-weight:400}
+  .ro b.hot{color:var(--ink)}
+
+  .p-foot{display:flex;justify-content:space-between;gap:14px;flex-wrap:wrap;
+    padding:10px 18px;border-top:1px solid var(--line);font-size:9px;
+    letter-spacing:.14em;color:var(--faint)}
+  .p-foot b{color:var(--muted);font-weight:400}
+
+  @media(max-width:720px){
+    .p-body{grid-template-columns:1fr}
+    .scope .scr{aspect-ratio:auto;height:min(70vw,300px)}
+  }
+  @media (prefers-reduced-motion:reduce){.led{animation:none}}
+
+  footer{border-top:1px solid #1A1D22;padding:16px 32px;display:flex;
+    justify-content:space-between;gap:16px;flex-wrap:wrap;font-size:10px;
+    letter-spacing:.12em;color:var(--faint)}
+  footer b{color:var(--muted);font-weight:400}
+</style>
+</head>
+<body>
+<div class="page">
+  <header>
+    <span class="tag">cinder / experiments</span>
+    <span class="hint">dither-panel — relay link instrument cluster</span>
+  </header>
+
+  <main>
+    <div class="wrap">
+      <div class="intro">
+        <p class="kicker">INSTRUMENT PANEL // B8×8 ORDERED</p>
+        <h1>Relay link, read by dither.</h1>
+        <p class="lede">One cluster, three instruments, zero solid fills. The scope
+          breathes a Bayered radial blob behind a phosphor sweep, the PPM row
+          ballistics its dot columns, the strip chart scrolls throughput.
+          <b>Density is the signal. Ember is the only ink.</b></p>
+      </div>
+
+      <div class="panel" id="panel">
+        <div class="p-head">
+          <i class="led" aria-hidden="true"></i>
+          <span class="l">RELAY LINK // RLY-02</span>
+          <span class="r">SEALED · X25519 · <b style="color:var(--ember);font-weight:400">LIVE</b></span>
+        </div>
+
+        <div class="p-body">
+          <!-- 01 · scope -->
+          <div class="inst scope">
+            <div class="ilab"><span>// 01 — LINK SCOPE</span><span>RADIAL · PERSIST .90</span></div>
+            <div class="scr" role="img" aria-label="Dithered radial scope showing signal strength">
+              <canvas id="cv-scope" aria-hidden="true"></canvas>
+              <span class="st">SIG</span><span class="st2">AZ-SWP</span>
+            </div>
+            <div class="ro">
+              <span>LINK <b class="hot">SEALED</b> · SIG <b class="hot">−41 dB</b></span>
+              <span>SWEEP <b>1.05 R/S</b></span>
+            </div>
+          </div>
+
+          <div class="rcol">
+            <!-- 02 · ppm row -->
+            <div class="inst vu">
+              <div class="ilab"><span>// 02 — CHANNEL LEVEL</span><span>ATK 20MS · REL 350MS</span></div>
+              <div class="scr" role="img" aria-label="Dithered dot-column peak program meters">
+                <canvas id="cv-vu" aria-hidden="true"></canvas>
+                <span class="st">LVL</span><span class="st2">PPM · 8CH</span>
+              </div>
+              <div class="ro">
+                <span>MEDIA <b class="hot">50FPS</b> · TX <b class="hot">−6.2</b> / RX <b class="hot">−9.8</b> dBFS</span>
+                <span>PK <b>−0.4</b></span>
+              </div>
+            </div>
+
+            <!-- 03 · strip chart -->
+            <div class="inst spk">
+              <div class="ilab"><span>// 03 — THROUGHPUT</span><span>SCROLL 120MS/COL</span></div>
+              <div class="scr" role="img" aria-label="Scrolling dithered throughput strip chart">
+                <canvas id="cv-spark" aria-hidden="true"></canvas>
+                <span class="st">THPT</span><span class="st2">60S</span>
+              </div>
+              <div class="ro">
+                <span>THRPT <b class="hot">1.24 MB/S</b></span>
+                <span>MAILBOX <b class="hot">3 PEND</b> · RTT <b class="hot">41 MS</b></span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="p-foot">
+          <span><b>ramp</b> charcoal→ember→white 13lv · <b>thr</b> B8×8+IGN ·
+            <b>cell</b> 3/4px · <b>fake</b> all values static-scripted</span>
+          <span>INS-PNL-DITH-01</span>
+        </div>
+      </div>
+    </div>
+  </main>
+
+  <footer>
+    <span><b>cinder</b> — dither panel study</span>
+    <span>B8×8 ORDERED · 0 DEPS · IO-GATED · PRM-SAFE</span>
+  </footer>
+</div>
+
+<script>
+(function(){
+'use strict';
+
+/* -----------------------------------------------------------------
+   DITHER PANEL — three ordered-dither instruments on one rAF loop.
+
+   Every canvas is backed at CELL resolution (3–4 CSS px per cell),
+   quantized through Bayer 8×8 blended with interleaved gradient
+   noise, mapped onto the shared 13-level charcoal→ember→white ramp,
+   and upscaled with image-rendering:pixelated (same trick as
+   dither-bayer-hd). No solid fills anywhere — density is the signal.
+
+   01 SCOPE  : radial blob exp(−(r/R)²) with R driven by a breathing
+               signal; rotating sweep arm + 1.5 rad phosphor trail;
+               frame-to-frame persistence buffer (×0.90) does the
+               afterglow. Graticule rings + crosshair at lvl ~1.
+   02 PPM    : 8 dot-columns, off-dot lattice at v≈.14, lit cells
+               ramp by height; ballistics ATK τ20ms / REL τ350ms;
+               white peak-hold tick, hold 1.1s, decay .55/s.
+   03 THPT   : ring history, one column per sample, hot tip decaying
+               to a dithered tail, smooth-scroll lerp between ticks.
+------------------------------------------------------------------ */
+var RM = matchMedia('(prefers-reduced-motion: reduce)');
+var reduced = RM.matches;
+var STATIC_T = 8.73;   // frozen frame lands near a sig peak
+
+var LEVELS, PAL = [
+  [ 11, 12, 14],   // 0  ground #0B0C0E
+  [ 20, 21, 25],   // 1  whisper charcoal
+  [ 33, 35, 41],   // 2  charcoal
+  [ 50, 47, 38],   // 3  warm ash
+  [ 74, 55, 22],   // 4  umber
+  [106, 71, 20],   // 5  dim ember
+  [146, 96, 24],   // 6  ember low
+  [196,127, 27],   // 7  ember mid
+  [232,152, 30],   // 8  ember high
+  [255,178, 36],   // 9  brand ember #FFB224
+  [255,190, 52],   // 10 hot amber
+  [255,214,110],   // 11 hotter
+  [255,240,196]    // 12 near-white
+];
+LEVELS = PAL.length - 1;
+
+var TH8 = new Float32Array([
+   0,32, 8,40, 2,34,10,42, 48,16,56,24,50,18,58,26,
+  12,44, 4,36,14,46, 6,38, 60,28,52,20,62,30,54,22,
+   3,35,11,43, 1,33, 9,41, 51,19,59,27,49,17,57,25,
+  15,47, 7,39,13,45, 5,37, 63,31,55,23,61,29,53,21]);
+for (var i=0; i<64; i++) TH8[i] = (TH8[i]+0.5)/64;
+
+function ign(x, y){
+  var f = (0.06711056*x + 0.00583715*y) % 1;
+  return (52.9829189*f) % 1;
+}
+function el(id){ return document.getElementById(id); }
+function clamp01(v){ return v<0 ? 0 : (v>1 ? 1 : v); }
+
+/* low-res raster: canvas buffer == cell grid, CSS upscales */
+function makeRaster(cv, cell){
+  var r = {cv:cv, ctx:cv.getContext('2d',{alpha:false}), cell:cell,
+           cols:0, rows:0, img:null, V:null};
+  r.fit = function(){
+    r.cols = Math.max(16, Math.round(cv.clientWidth/cell));
+    r.rows = Math.max(8,  Math.round(cv.clientHeight/cell));
+    cv.width = r.cols; cv.height = r.rows;
+    r.img = r.ctx.createImageData(r.cols, r.rows);
+    r.V = new Float32Array(r.cols*r.rows);
+  };
+  return r;
+}
+
+/* Float32 values -> palette levels through B8+IGN threshold */
+function quantize(r, vals){
+  var d = r.img.data, cols = r.cols, rows = r.rows, p = 0, o = 0;
+  for (var y=0; y<rows; y++){
+    var brow = (y&7)<<3;
+    for (var x=0; x<cols; x++){
+      var v = vals[p];
+      var th = TH8[brow|(x&7)]*0.62 + ign(x,y)*0.38;
+      var f = v*LEVELS, l = f|0;
+      if (f-l > th) l++;
+      if (l<0) l = 0; else if (l>LEVELS) l = LEVELS;
+      var c = PAL[l];
+      d[o]=c[0]; d[o+1]=c[1]; d[o+2]=c[2]; d[o+3]=255;
+      p++; o+=4;
+    }
+  }
+  r.ctx.putImageData(r.img, 0, 0);
+}
+
+/* ===================== 01 · LINK SCOPE ========================== */
+var sc  = makeRaster(el('cv-scope'), 3);
+var scP = null, scS = null, scR = null, scA = null;
+var scCx = 0, scCy = 0, scRmax = 1;
+var TAU = Math.PI*2;
+
+function scopeFit(){
+  sc.fit();
+  var n = sc.cols*sc.rows;
+  scP = new Float32Array(n);   // phosphor persistence buffer
+  scS = new Float32Array(n);   // scratch (flicker-modulated)
+  scR = new Float32Array(n);   // cached radius 0..~1.41
+  scA = new Float32Array(n);   // cached angle
+  scCx = (sc.cols-1)/2; scCy = (sc.rows-1)/2;
+  scRmax = Math.min(scCx, scCy);
+  for (var y=0, i=0; y<sc.rows; y++)
+    for (var x=0; x<sc.cols; x++, i++){
+      var dx = (x-scCx)/scRmax, dy = (y-scCy)/scRmax;
+      scR[i] = Math.sqrt(dx*dx+dy*dy);
+      scA[i] = Math.atan2(dy, dx);
+    }
+}
+
+function drawScope(t){
+  var sig = 0.55 + 0.28*Math.sin(t*0.9)
+                 + 0.10*Math.sin(t*2.17+1.7)
+                 + 0.05*Math.sin(t*5.3+0.6);
+  sig = clamp01(sig); if (sig<0.08) sig = 0.08;
+  var R = 0.34 + 0.52*sig, iR2 = 1.9/(R*R);
+  var arm = t*1.05;                          // sweep angle, rad
+  var cols = sc.cols, rows = sc.rows;
+  var rhw = 0.6/scRmax;                      // ring half-width, r units
+
+  for (var y=0, i=0; y<rows; y++)
+    for (var x=0; x<cols; x++, i++){
+      var r = scR[i], a = scA[i];
+      var back = (arm - a) % TAU; if (back<0) back += TAU;
+      var trail = 1 - back/1.5;              // wedge behind the arm
+      if (trail<0) trail = 0; trail *= trail;
+
+      var v = 0.014 + 0.010*ign(x+11, y+47); // floor grain
+      if (Math.abs(r-0.45)<rhw || Math.abs(r-0.85)<rhw)
+        v += 0.045;                          // range rings
+      if (Math.abs(x-scCx)<0.6 || Math.abs(y-scCy)<0.6)
+        v += 0.035;                          // crosshair
+
+      var blob = Math.exp(-r*r*iR2);
+      v += blob * (0.30+0.85*sig) * (0.40+0.85*trail);
+      v += 0.09*Math.sin(r*30 - t*4.5)*Math.exp(-r*1.9)
+           * (0.3+0.7*trail) * sig;          // concentric shimmer
+
+      var dArm = Math.min(back, TAU-back);   // the arm itself
+      if (dArm<0.05 && r<1.04)
+        v += (1 - dArm/0.05) * (0.9 - 0.45*r);
+
+      var p = scP[i]*0.90; if (v>p) p = v;   // phosphor decay
+      scP[i] = p;
+      scS[i] = p * (0.96 + 0.04*Math.sin(t*23 + r*31 + x*0.7));
+    }
+  quantize(sc, scS);
+}
+
+/* ===================== 02 · CHANNEL LEVEL (PPM) ================= */
+var vu = makeRaster(el('cv-vu'), 4);
+var CH = 8, M_W = 3;
+var vuDisp = new Float32Array(CH);
+var vuPk   = new Float32Array(CH);
+var vuHold = new Float32Array(CH);
+
+function chSrc(c, t){
+  switch(c){
+    case 0: { // TX — bursty talkgate
+      var g = Math.sin(t*0.53+1) > 0 ? 1 : 0.15;
+      return g*(0.45 + 0.35*Math.abs(Math.sin(t*4.7))
+                      + 0.20*Math.abs(Math.sin(t*7.9+2)));
+    }
+    case 1: return 0.35 + 0.30*Math.sin(t*1.3+0.8) + 0.15*Math.abs(Math.sin(t*5.1));
+    case 2: return 0.22 + 0.10*Math.sin(t*0.8)
+                  + 0.35*Math.max(0, Math.sin(t*0.31+2)*Math.sin(t*2.9));
+    case 3: return 0.50 + 0.28*Math.sin(t*2.6+4) + 0.18*Math.sin(t*11+1);
+    case 4: return 0.30 + 0.18*Math.sin(t*0.42+3.4) + 0.08*Math.sin(t*1.8);
+    case 5: return 0.40 + 0.30*Math.abs(Math.sin(t*3.3+1.2))*Math.sin(t*0.9);
+    case 6: return 0.15 + 0.12*Math.sin(t*1.1+5) + 0.20*Math.abs(Math.sin(t*6.7));
+    default:return Math.pow(Math.max(0, Math.sin(t*0.37+0.6)), 18); // PTT
+  }
+}
+
+function drawVU(t, dt){
+  var cols = vu.cols, rows = vu.rows;
+  var dotRows = Math.floor(rows/2);
+  var gap = Math.max(2, Math.floor((cols - CH*M_W)/(CH+1)));
+
+  /* ballistics: fast attack, slow release, peak hold + decay */
+  var ATT = 1 - Math.exp(-dt/0.02), REL = 1 - Math.exp(-dt/0.35);
+  for (var c=0; c<CH; c++){
+    var s = clamp01(chSrc(c, t)), d = vuDisp[c];
+    d += (s>d ? ATT : REL) * (s-d);
+    vuDisp[c] = clamp01(d);
+    if (s >= vuPk[c]){ vuPk[c] = s; vuHold[c] = 1.1; }
+    else {
+      vuHold[c] -= dt;
+      if (vuHold[c] < 0){ vuPk[c] -= dt*0.55; if (vuPk[c] < d) vuPk[c] = d; }
+    }
+  }
+
+  var V = vu.V; V.fill(0);
+
+  /* ruler rails at the screen edges, same dot pitch as the meters */
+  var y, x, i, yb;
+  for (y=0; y<rows; y++){
+    yb = rows-1-y;
+    if (yb & 1) continue;
+    for (x=0; x<2; x++) V[y*cols+x] = 0.10;
+    for (x=cols-2; x<cols; x++) V[y*cols+x] = 0.10;
+  }
+
+  for (c=0; c<CH; c++){
+    var x0 = gap + c*(M_W+gap);
+    var pkRow = Math.round(vuPk[c]*(dotRows-1));
+    var fillRows = vuDisp[c]*dotRows;
+    for (var di=0; di<dotRows; di++){
+      y = rows-1 - di*2;
+      var cov = fillRows - di;                 // fractional top dot
+      var lit = 0;
+      if (cov > 0)
+        lit = Math.min(1, cov) * (0.55 + 0.45*(di+1)/dotRows) * 1.05;
+      for (var k=0; k<M_W; k++){
+        i = y*cols + x0+k;
+        if (V[i] < 0.14) V[i] = 0.14;          // unlit lattice dot
+        if (lit > V[i]) V[i] = lit;
+        if (di === pkRow && vuPk[c] > 0.03) V[i] = 1.2; // peak tick
+      }
+    }
+  }
+  quantize(vu, V);
+}
+
+/* ===================== 03 · THROUGHPUT STRIP ==================== */
+var sp = makeRaster(el('cv-spark'), 3);
+var TICK = 0.12;                              // seconds per column
+var hist = null, lastTick = 0;
+
+function sample(t){
+  var v = 0.42 + 0.24*Math.sin(t*0.57)
+               + 0.16*Math.sin(t*1.63+2.4)
+               + 0.10*Math.sin(t*3.7+0.9)
+               + (Math.random()-0.5)*0.14;
+  if (Math.random() < 0.05) v += 0.30;        // honest-fake bursts
+  return clamp01(v);
+}
+function seedHist(t){
+  hist = new Float32Array(sp.cols+1);
+  for (var i=0; i<=sp.cols; i++){
+    var tt = t - (sp.cols-i)*TICK;
+    hist[i] = clamp01(0.42 + 0.24*Math.sin(tt*0.57)
+                            + 0.16*Math.sin(tt*1.63+2.4)
+                            + 0.10*Math.sin(tt*3.7+0.9)
+                            + 0.06*Math.sin(tt*13.7+i));
+  }
+  lastTick = t;
+}
+function drawSpark(t){
+  var cols = sp.cols, rows = sp.rows;
+  while (t - lastTick >= TICK){
+    lastTick += TICK;
+    hist.copyWithin(0, 1);
+    hist[cols] = sample(lastTick);
+  }
+  var frac = (t - lastTick)/TICK;
+  if (frac>1) frac = 1; else if (frac<0) frac = 0;
+
+  var V = sp.V;
+  for (var x=0; x<cols; x++){
+    var s = hist[x] + (hist[x+1]-hist[x])*frac;   // smooth scroll
+    var h = s*rows;
+    for (var y=0; y<rows; y++){
+      var yb = rows-1-y;
+      var v = 0.012 + 0.008*ign(x*3+y, y*7+x);    // grain
+      if (yb === 0) v = 0.12;                     // baseline axis
+      if (yb < h){
+        var dep = (h - yb)/h;                     // 0 tip → 1 base
+        var cov = Math.min(1, h - yb);
+        var vv = cov * (1.08 - 0.62*dep);         // hot tip, dithered tail
+        if (vv > v) v = vv;
+      }
+      V[y*cols+x] = v;
+    }
+  }
+  quantize(sp, V);
+}
+
+/* ===================== driver ==================================== */
+var panel = el('panel');
+var raf = 0, running = false, inView = false, last = 0;
+
+function drawAll(t, dt){
+  drawScope(t);
+  drawVU(t, dt);
+  drawSpark(t);
+}
+
+/* warm the persistence/ballistics so a frozen frame looks lived-in */
+function warmup(tEnd, n){
+  seedHist(tEnd);
+  for (var i=n; i>0; i--){
+    var t = tEnd - i/60;
+    drawAll(t, 1/60);
+  }
+  drawAll(tEnd, 1/60);
+}
+
+function loop(now){
+  raf = 0;
+  var t = now/1000, dt = t - last;
+  if (dt > 0.05) dt = 0.05;
+  if (dt < 0) dt = 0;
+  drawAll(t, dt);
+  last = t;
+  if (running) raf = requestAnimationFrame(loop);
+}
+
+function start(){
+  if (!running && !reduced && !document.hidden && inView){
+    running = true;
+    last = performance.now()/1000;
+    if (!raf) raf = requestAnimationFrame(loop);
+  }
+}
+function stop(){
+  running = false;
+  if (raf){ cancelAnimationFrame(raf); raf = 0; }
+}
+
+function fitAll(){
+  scopeFit();
+  vu.fit();
+  sp.fit();
+  seedHist(performance.now()/1000);
+  if (reduced) warmup(STATIC_T, 30);
+}
+
+document.addEventListener('visibilitychange', function(){
+  document.hidden ? stop() : start();
+});
+new IntersectionObserver(function(e){
+  inView = e[0].isIntersecting;
+  inView ? start() : stop();
+}).observe(panel);
+
+if (RM.addEventListener) RM.addEventListener('change', function(e){
+  reduced = e.matches;
+  if (reduced){ stop(); warmup(STATIC_T, 30); } else { start(); }
+});
+
+var rt; window.addEventListener('resize', function(){
+  clearTimeout(rt); rt = setTimeout(fitAll, 150);
+});
+
+fitAll();
+if (reduced) warmup(STATIC_T, 30);
+start();
+})();
+</script>
+</body>
+</html>

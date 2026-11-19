@@ -1,0 +1,265 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark">
+<title>cinder · ascii ornaments</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+:root{
+  --ground:#0B0C0E;--panel:#15171B;--ink:#EDEDE8;--muted:#9BA0A6;
+  --faint:#3D4249;--line:#23262D;--ember:#FFB224;--dimember:#5A4114;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+::selection{background:var(--ember);color:var(--ground)}
+body{
+  background:var(--ground);color:var(--ink);
+  font:400 15px/1.6 "Inter",system-ui,sans-serif;
+  max-width:960px;margin:0 auto;padding:64px 32px 96px;
+  -webkit-font-smoothing:antialiased;
+}
+.mono,.ascii,.fig,.card-head,.index,.sw,.kc{
+  font-family:"JetBrains Mono",ui-monospace,"SF Mono",Menlo,Consolas,monospace;
+}
+.ascii{font-size:13px;line-height:1.42;white-space:pre;color:var(--ink)}
+.ascii .ft{color:var(--faint)}
+.ascii .mu{color:var(--muted)}
+.ascii .em{color:var(--ember)}
+.ascii .de{color:var(--dimember)}
+.ascii .ink{color:var(--ink)}
+.ascii .b{font-weight:600}
+
+header.mast .ascii{margin-bottom:42px}
+h1{
+  font-family:"Space Grotesk","Inter",sans-serif;
+  font-size:clamp(42px,6.5vw,68px);line-height:.95;
+  letter-spacing:-.02em;font-weight:600;text-transform:uppercase;
+}
+h1 .tick{color:var(--ember)}
+.lede{margin-top:18px;color:var(--muted);max-width:54ch}
+.index{
+  margin-top:30px;display:flex;flex-wrap:wrap;gap:10px 26px;
+  font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:var(--muted);
+}
+.index a{color:inherit;text-decoration:none}
+.index a:hover{color:var(--ember)}
+.index b{color:var(--ember);font-weight:500;margin-right:7px}
+
+section.card{margin-top:58px}
+.card-head{
+  display:flex;align-items:center;gap:14px;
+  font-size:11px;letter-spacing:.12em;text-transform:uppercase;
+}
+.card-head .idx{color:var(--ember)}
+.card-head .ttl{color:var(--ink)}
+.card-head .hr{flex:1;height:1px;background:var(--line)}
+.card-head .sub{color:var(--faint)}
+.demo{
+  margin-top:16px;background:var(--panel);
+  border:1px solid var(--line);border-radius:6px;padding:20px;
+}
+.well{
+  background:var(--ground);border:1px solid var(--line);border-radius:4px;
+  padding:20px 22px;overflow-x:auto;
+}
+.fig{
+  font-size:10px;letter-spacing:.12em;text-transform:uppercase;
+  color:var(--faint);margin:16px 0 10px;
+}
+.fig:first-child{margin-top:0}
+.fig .sep{color:var(--line)}
+.note{margin-top:16px;font-size:13px;color:var(--muted);max-width:64ch}
+.note code{
+  font-family:"JetBrains Mono",monospace;font-size:12px;color:var(--ink);
+  background:var(--panel);border:1px solid var(--line);
+  border-radius:3px;padding:1px 5px;
+}
+footer{margin-top:70px}
+footer .ascii{margin-top:8px}
+.palette{display:flex;gap:16px;flex-wrap:wrap;margin-top:26px}
+.sw{font-size:10px;color:var(--muted);letter-spacing:.06em;text-transform:lowercase}
+.sw i{
+  display:block;width:56px;height:22px;border-radius:3px;
+  border:1px solid var(--line);margin-bottom:6px;
+}
+.kcs{display:flex;gap:12px}
+.kc{
+  font-size:11px;font-weight:500;letter-spacing:.04em;color:var(--muted);
+  background:linear-gradient(#1B1E24,#121418);
+  border:1px solid var(--line);border-bottom-color:#000;
+  border-radius:5px;padding:8px 13px 7px;
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.06),
+              0 3px 0 #060708,
+              0 5px 10px rgba(0,0,0,.5);
+}
+.kc.on{
+  color:var(--ink);transform:translateY(3px);
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.03),
+             inset 0 0 8px rgba(0,0,0,.6),
+             0 0 0 #060708;
+}
+</style>
+</head>
+<body>
+
+<header class="mast">
+<pre class="ascii"><span class="ft">┌─ </span><span class="em">cinder</span><span class="mu"> · ascii ornaments</span><span class="ft"> ───────────────────────────────┐</span>
+<span class="ft">│</span>                                                          <span class="ft">│</span>
+<span class="ft">│</span>  <span class="mu">e2e encrypted terminal messenger</span>       <span class="ft">instrument skin</span>  <span class="ft">│</span>
+<span class="ft">│</span>  <span class="mu">experiments/ascii-ornaments</span>                       <span class="em">v0.1</span>  <span class="ft">│</span>
+<span class="ft">│</span>                                                          <span class="ft">│</span>
+<span class="ft">└──────────────────────────────────────────────────────────┘</span></pre>
+<h1>ascii<br>ornaments<span class="tick">.</span></h1>
+<p class="lede">box-drawn section dressing for the cinder surface — kickers, rules,
+plates, keycaps, marks. one ember glyph per component, hand-aligned inside
+<code>&lt;pre&gt;</code>, no dependencies.</p>
+<nav class="index">
+  <a href="#s01"><b>01</b>kicker</a>
+  <a href="#s02"><b>02</b>rule</a>
+  <a href="#s03"><b>03</b>plate</a>
+  <a href="#s04"><b>04</b>keys</a>
+  <a href="#s05"><b>05</b>arrows</a>
+  <a href="#s06"><b>06</b>ledger</a>
+</nav>
+</header>
+
+<section class="card" id="s01">
+  <div class="card-head"><span class="idx">01</span><span class="ttl">kicker</span><span class="hr"></span><span class="sub">section openers + closers</span></div>
+  <div class="demo"><div class="well">
+    <div class="fig">fig a <span class="sep">·</span> opener — index in the top rule</div>
+    <pre class="ascii"><span class="ft">┌─ </span><span class="em">00</span><span class="mu"> · the wire</span><span class="ft"> ──────────────────────────────────────────┐</span>
+<span class="ft">│</span>                                                          <span class="ft">│</span></pre>
+    <div class="fig">fig b <span class="sep">·</span> pair — collapsed section bracket</div>
+    <pre class="ascii"><span class="ft">┌─ </span><span class="mu">00 · the wire</span><span class="ft"> ──────────────────────────────────────────┐</span>
+<span class="ft">│</span>                                                          <span class="ft">│</span>
+<span class="ft">└──────────────────────────────────────────────────────────┘</span></pre>
+    <div class="fig">fig c <span class="sep">·</span> closers — plain, tagged, cornerless tail</div>
+    <pre class="ascii"><span class="ft">└──────────────────────────────────────────────────────────┘
+└─ </span><span class="mu">fin</span><span class="ft"> ────────────────────────────────────────────────────┘
+─────────────────────────────────────────────────── </span><span class="mu">fin</span><span class="ft"> ────</span></pre>
+    <div class="fig">fig d <span class="sep">·</span> double — hero weight</div>
+    <pre class="ascii"><span class="ft">╔═ </span><span class="mu">00 · the wire</span><span class="ft"> ══════════════════════════════════════════╗</span>
+<span class="ft">╚══════════════════════════════════════════════════════════╝</span></pre>
+  </div></div>
+  <p class="note">kickers ride inside the rule so the label never competes with the
+  heading under it. the cornerless tail works as a section fade where a
+  corner would feel over-built.</p>
+</section>
+
+<section class="card" id="s02">
+  <div class="card-head"><span class="idx">02</span><span class="ttl">rule</span><span class="hr"></span><span class="sub">horizontal dividers</span></div>
+  <div class="demo"><div class="well">
+    <div class="fig">fig a <span class="sep">·</span> therefore — light rule, ember center</div>
+    <pre class="ascii"><span class="ft">────────────────────────────</span> <span class="em">∴</span> <span class="ft">─────────────────────────────</span></pre>
+    <div class="fig">fig b <span class="sep">·</span> diamond — double rule</div>
+    <pre class="ascii"><span class="ft">════════════════════════════</span> <span class="mu">◆</span> <span class="ft">═════════════════════════════</span></pre>
+    <div class="fig">fig c <span class="sep">·</span> trio — broken center</div>
+    <pre class="ascii"><span class="ft">───────────────────────────</span> <span class="mu">···</span> <span class="ft">────────────────────────────</span></pre>
+    <div class="fig">fig d <span class="sep">·</span> hairline — dashed run</div>
+    <pre class="ascii"><span class="ft">┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄</span> <span class="mu">×</span> <span class="ft">┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄</span></pre>
+  </div></div>
+  <p class="note">center glyph does all the talking; the run stays faint. <code>∴</code>
+  reads as "therefore" — the default between unrelated sections.</p>
+</section>
+
+<section class="card" id="s03">
+  <div class="card-head"><span class="idx">03</span><span class="ttl">plate</span><span class="hr"></span><span class="sub">warning callout</span></div>
+  <div class="demo"><div class="well">
+    <div class="fig">fig a <span class="sep">·</span> plate — mark in the rule</div>
+    <pre class="ascii"><span class="ft">┌─ </span><span class="em">▲</span><span class="ft"> ──────────────────────────────────────────────────────┐</span>
+<span class="ft">│</span>                                                          <span class="ft">│</span>
+<span class="ft">│</span>  <span class="mu">pre-1.0 · not externally audited</span>                        <span class="ft">│</span>
+<span class="ft">│</span>  <span class="mu">don't stake your safety on it yet</span>                       <span class="ft">│</span>
+<span class="ft">│</span>                                                          <span class="ft">│</span>
+<span class="ft">└──────────────────────────────────────────────────────────┘</span></pre>
+    <div class="fig">fig b <span class="sep">·</span> rail — gutter variant for tight spots</div>
+    <pre class="ascii"><span class="ft">┃</span> <span class="mu">▲ pre-1.0 · not externally audited</span>
+<span class="ft">┃</span>   <span class="mu">don't stake your safety on it yet</span></pre>
+  </div></div>
+  <p class="note">the honest-warning box. <code>▲</code> mounts in the top rule so it reads
+  as signage, not decoration; the <code>┃</code> rail is the stripped fallback
+  for narrow contexts.</p>
+</section>
+
+<section class="card" id="s04">
+  <div class="card-head"><span class="idx">04</span><span class="ttl">keys</span><span class="hr"></span><span class="sub">command chips · keycap</span></div>
+  <div class="demo"><div class="well">
+    <div class="fig">fig a <span class="sep">·</span> keycap row — ascii, shadow offset</div>
+    <pre class="ascii"><span class="ft">┌─────────┐</span>  <span class="ft">┌─────────┐</span>  <span class="ft">┌─────────┐</span>
+<span class="ft">│</span><span class="ink">  /help  </span><span class="ft">│</span>  <span class="ft">│</span><span class="em">  /sas   </span><span class="ft">│</span>  <span class="ft">│</span><span class="ink">  /deny  </span><span class="ft">│</span>
+<span class="ft">└─────────┘</span>  <span class="ft">└─────────┘</span>  <span class="ft">└─────────┘</span>
+ <span class="ft">░░░░░░░░░░</span>   <span class="ft">░░░░░░░░░░</span>   <span class="ft">░░░░░░░░░░</span></pre>
+    <div class="fig">fig b <span class="sep">·</span> css chips — /sas pressed</div>
+    <div class="kcs">
+      <span class="kc">/help</span><span class="kc on">/sas</span><span class="kc">/deny</span>
+    </div>
+    <div class="fig">fig c <span class="sep">·</span> bracket fallback — plain text</div>
+    <pre class="ascii"><span class="mu">[ /help ]  [ /sas ]  [ /deny ]</span></pre>
+  </div></div>
+  <p class="note">the <code>░</code> shadow row, offset one cell right, gives lift without
+  color. in html the same effect is <code>.kc</code>: bottom-edge highlight plus
+  a 3px stand-off; <code>.kc.on</code> is the pressed state.</p>
+</section>
+
+<section class="card" id="s05">
+  <div class="card-head"><span class="idx">05</span><span class="ttl">arrows</span><span class="hr"></span><span class="sub">link endings + drawn runs</span></div>
+  <div class="demo"><div class="well">
+    <div class="fig">fig a <span class="sep">·</span> glyph set — semantics per mark</div>
+    <pre class="ascii">  <span class="em">⟶</span>  <span class="mu">link · href ending        </span>    <span class="ft">──▶</span>   <span class="ft">drawn · light</span>
+  <span class="mu">↦</span>  <span class="mu">binding · sas to peer     </span>    <span class="ft">══▶</span>   <span class="ft">drawn · heavy</span>
+  <span class="mu">⇢</span>  <span class="mu">pending · queued send     </span>    <span class="ft">┄┄▶</span>   <span class="ft">drawn · dashed</span>
+  <span class="mu">⇒</span>  <span class="mu">consequence · therefore   </span>    <span class="ft">──►</span>   <span class="ft">drawn · small head</span>
+  <span class="mu">↪</span>  <span class="mu">redirect · relay hop      </span>    <span class="ft">--&gt;</span>   <span class="ft">ascii fallback</span>
+  <span class="mu">↗</span>  <span class="mu">external · off the wire   </span>    <span class="ft">==&gt;</span>   <span class="ft">ascii heavy</span></pre>
+    <div class="fig">fig b <span class="sep">·</span> in context — link endings</div>
+    <pre class="ascii"><span class="mu">protocol     noise ik spec       </span><span class="em">⟶</span>
+<span class="mu">source       github · cinder     </span><span class="mu">↗</span>
+<span class="mu">threats      model · scope       </span><span class="mu">⇒</span></pre>
+  </div></div>
+  <p class="note">arrows terminate a line, never open one. <code>⟶</code> is the default
+  link ending; <code>⇒</code> marks consequence, <code>↗</code> marks anything that
+  leaves the wire.</p>
+</section>
+
+<section class="card" id="s06">
+  <div class="card-head"><span class="idx">06</span><span class="ttl">ledger</span><span class="hr"></span><span class="sub">spec table caps</span></div>
+  <div class="demo"><div class="well">
+    <div class="fig">fig a <span class="sep">·</span> rule family — cap, mid, double-bottom</div>
+    <pre class="ascii"><span class="ft">╞══════════════════════════════════════════════════════════╡
+├──────────────────────────────────────────────────────────┤
+╘══════════════════════════════════════════════════════════╛</span></pre>
+    <div class="fig">fig b <span class="sep">·</span> cap in situ — under the spec table</div>
+    <pre class="ascii"><span class="ft">┌────────┬─────────────────────────────────┐</span>
+<span class="ft">│</span><span class="mu"> field  │ value                           </span><span class="ft">│</span>
+<span class="ft">├────────┼─────────────────────────────────┤</span>
+<span class="ft">│</span> noise  <span class="ft">│</span><span class="mu"> ik · x25519 · dh ratchet        </span><span class="ft">│</span>
+<span class="ft">│</span> relay  <span class="ft">│</span><span class="mu"> eu-2 · store-and-forward        </span><span class="ft">│</span>
+<span class="ft">│</span> sas    <span class="ft">│</span><span class="mu"> 6-digit · out-of-band           </span><span class="ft">│</span>
+<span class="ft">╞════════</span><span class="em">╧</span><span class="ft">═════════════════════════════════╡</span></pre>
+    <div class="fig">fig c <span class="sep">·</span> tagged cap — ledger closed</div>
+    <pre class="ascii"><span class="ft">╞═════════════════</span><span class="mu"> ledger </span><span class="ft">═════════════════╡</span></pre>
+  </div></div>
+  <p class="note"><code>╞═╡</code> ends a table the way a ledger closes: heavier than the
+  mid rule <code>├─┤</code>, matched weight to the top. <code>╧</code> keeps the column
+  junctions honest on the way out.</p>
+</section>
+
+<footer>
+  <div class="palette">
+    <div class="sw"><i style="background:#0B0C0E"></i>ground<br>0B0C0E</div>
+    <div class="sw"><i style="background:#15171B"></i>panel<br>15171B</div>
+    <div class="sw"><i style="background:#EDEDE8"></i>ink<br>EDEDE8</div>
+    <div class="sw"><i style="background:#9BA0A6"></i>muted<br>9BA0A6</div>
+    <div class="sw"><i style="background:#3D4249"></i>faint<br>3D4249</div>
+    <div class="sw"><i style="background:#23262D"></i>line<br>23262D</div>
+    <div class="sw"><i style="background:#FFB224"></i>ember<br>FFB224</div>
+    <div class="sw"><i style="background:#5A4114"></i>dim-ember<br>5A4114</div>
+  </div>
+  <pre class="ascii"><span class="ft">└─ </span><span class="em">eof</span><span class="mu"> ── hand-aligned · no deps · no emoji · view source</span><span class="ft"> ─┘</span></pre>
+</footer>
+
+</body>
+</html>

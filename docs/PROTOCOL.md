@@ -577,6 +577,22 @@ contain keys, tokens, or ciphertext.
   `sent`→`delivered` on ack; a mailbox deposit accepted by the relay is only
   `sent`. Wire layout of the app payload enum is client-internal; the ack
   contract is normative.
+- **Disappearing messages (app layer, normative contract):** `AppMsg::Text`
+  carries an optional absolute `expires_at` (unix ms) inside the Noise
+  payload — the relay sees only ciphertext, like all app content. The sender
+  computes it as `send_ts + ttl_ms`; the wire carries the absolute deadline,
+  never the TTL. Receivers MUST honor it verbatim: a message arriving past
+  its deadline is persisted tombstoned (body never lands, never displayed,
+  never counted unread); a live row is tombstoned when the deadline passes
+  and `msg.expired` is emitted for it. Acks still flow for born-expired
+  frames — the peer learns it arrived. Expiry is enforced by each endpoint
+  on its own store: client-honored deletion, **not** cryptographic erasure —
+  see THREAT-MODEL for what this does and does not protect.
+- **AppMsg wire compat:** `expires_at` was appended to `Text` in the v2 app
+  layout (bincode fixint, variant index unchanged). New builds decode
+  pre-TTL `Text` frames via a v1-shape fallback (`expires_at = none`); old
+  builds **cannot** decode new `Text` frames — mixed-version endpoints lose
+  text messages until both sides upgrade. Other variants are byte-identical.
 - On session death, the client marks the peer `pending` and queues outgoing
   app messages client-side (bounded per-peer queue, §12). After the new
   handshake completes, a **new `session_id`** is generated and the pending
@@ -621,7 +637,7 @@ slots, mailboxes) and per-connection for post-`Hello` traffic.
 | Invite token → owner-peer-id mapping, slot usage | Which human/agent a peer-id belongs to |
 | Mailbox ids, counts, sizes, TTLs, token **hashes** | Message contents of mailbox blobs |
 | `from`/`to` peer-id pairs on live traffic (social graph of live flows) | `deposit_token`/`fetch_token` raw values at rest (only SHA-256 stored) |
-| `session_id` groupings (one opaque 16-byte tag per session) | Whether a transport frame is chat text vs. a mailbox grant vs. a ping inside E2E |
+| `session_id` groupings (one opaque 16-byte tag per session) | Whether a transport frame is chat text vs. a mailbox grant vs. a ping inside E2E — and any TTL/expiry metadata a chat message carries |
 | Raw deposit/fetch capability tokens **when presented** (transit is cleartext on the client↔relay link — §8) | Token plaintext at rest (only `SHA-256` stored) |
 | Presence-subscription interest sets | — |
 
@@ -663,6 +679,9 @@ a one-mailbox availability loss, never a confidentiality loss.
     atomic tmpfile+rename writes.
 14. `rekey_manually` at ≥1024 sent msgs or ≥600 s; rekey performs no
     handshake and re-verifies nothing — pinning applies per new XX.
+15. `expires_at` honored verbatim on receipt: past-deadline frames persist
+    tombstoned (never displayed), live rows tombstone at the deadline and
+    emit `msg.expired`; expired bodies never appear in history or previews.
 
 ## Security review — 2026-11-18
 

@@ -32,9 +32,9 @@ use cinder_core::session::Session;
 use cinder_core::transport::{ClientEvent, Link, RelayTransport};
 
 use crate::rpc::core::{
-    ChatHistoryParams, ChatListParams, CinderCore, ContactAddParams, ContactIdParams,
-    ContactListParams, EventSink, IdentVerifyParams, InviteAcceptParams, InviteCreateParams,
-    MsgDeleteParams, MsgEditParams, MsgReactParams, MsgSendParams,
+    ChatHistoryParams, ChatListParams, ChatSetDisappearingParams, CinderCore, ContactAddParams,
+    ContactIdParams, ContactListParams, EventSink, IdentVerifyParams, InviteAcceptParams,
+    InviteCreateParams, MsgDeleteParams, MsgEditParams, MsgReactParams, MsgSendParams,
 };
 use crate::rpc::events::{EventRecord, ReplayLog};
 use crate::rpc::protocol::{ErrorKind, RpcError};
@@ -65,6 +65,8 @@ const INVITE_TTL_SECS: u32 = 24 * 3600;
 const MAILBOX_TTL_SECS: u32 = 0;
 const MAILBOX_FETCH_PAGE: u16 = 500;
 const REQ_TIMEOUT: Duration = Duration::from_secs(15);
+/// Expiry sweep cadence for disappearing messages.
+const EXPIRY_SWEEP: Duration = Duration::from_secs(1);
 
 fn now_ms() -> i64 {
     SystemTime::now()
@@ -151,6 +153,10 @@ pub(crate) enum AppMsg {
     Text {
         msg_id: String,
         body: String,
+        /// Absolute expiry deadline (unix ms) for disappearing messages.
+        /// Travels inside the Noise channel — the relay never sees it.
+        /// Appended last so the bincode layout only grows at the tail.
+        expires_at: Option<u64>,
     },
     Edit {
         msg_id: String,
@@ -172,6 +178,68 @@ pub(crate) enum AppMsg {
     Ack {
         msg_ids: Vec<String>,
     },
+}
+
+/// Wire shape before `expires_at` was appended to `Text`: decode-only, kept
+/// so frames from pre-TTL builds still land (`None` deadline). Variants must
+/// stay index-aligned with `AppMsg` — bincode encodes the variant index.
+#[derive(Debug, Deserialize)]
+pub(crate) enum AppMsgV1 {
+    Text {
+        msg_id: String,
+        body: String,
+    },
+    Edit {
+        msg_id: String,
+        body: String,
+    },
+    Delete {
+        msg_id: String,
+    },
+    React {
+        msg_id: String,
+        emoji: Option<String>,
+    },
+    Grant {
+        mailbox_id: [u8; 32],
+        deposit_token: [u8; 32],
+    },
+    Ack {
+        msg_ids: Vec<String>,
+    },
+}
+
+impl From<AppMsgV1> for AppMsg {
+    fn from(v: AppMsgV1) -> Self {
+        match v {
+            AppMsgV1::Text { msg_id, body } => AppMsg::Text {
+                msg_id,
+                body,
+                expires_at: None,
+            },
+            AppMsgV1::Edit { msg_id, body } => AppMsg::Edit { msg_id, body },
+            AppMsgV1::Delete { msg_id } => AppMsg::Delete { msg_id },
+            AppMsgV1::React { msg_id, emoji } => AppMsg::React { msg_id, emoji },
+            AppMsgV1::Grant {
+                mailbox_id,
+                deposit_token,
+            } => AppMsg::Grant {
+                mailbox_id,
+                deposit_token,
+            },
+            AppMsgV1::Ack { msg_ids } => AppMsg::Ack { msg_ids },
+        }
+    }
+}
+
+/// Decode an app payload: current shape first, then the pre-TTL `AppMsgV1`
+/// layout so peers on older builds stay readable. One direction only — old
+/// builds reject our `Text` frames (bincode grew the variant), which is why
+/// the field rides strictly inside the Noise channel.
+pub(crate) fn decode_app(pt: &[u8]) -> Option<AppMsg> {
+    wire_deserialize::<AppMsg>(pt)
+        .ok()
+        .or_else(|| wire_deserialize::<AppMsgV1>(pt).map(AppMsg::from).ok())
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -626,6 +694,10 @@ impl Core {
             let c = core.clone();
             tokio::spawn(async move { c.inbound_loop(inbound_rx).await })
         });
+        core.tasks.lock().unwrap_or_else(|e| e.into_inner()).push({
+            let c = core.clone();
+            tokio::spawn(async move { c.expiry_loop().await })
+        });
         Ok(core)
     }
 
@@ -699,14 +771,17 @@ impl Core {
         self.meta_state(peer) == Some(state)
     }
 
-    // -- test-only seams (compiled into the crate only under cfg(test)) -----
+    // -- test-only seams: dead in the bin's own test target, called by the
+    // #[path]-include integration tests -----
 
     #[cfg(test)]
+    #[allow(dead_code)]
     pub fn test_substate(&self, peer: &PeerId) -> Option<String> {
         self.sh().meta.get(peer).and_then(|m| m.substate.clone())
     }
 
     #[cfg(test)]
+    #[allow(dead_code)]
     pub fn test_set_state(&self, peer: &PeerId, state: MetaState) {
         {
             let mut sh = self.sh();
@@ -720,16 +795,19 @@ impl Core {
     }
 
     #[cfg(test)]
+    #[allow(dead_code)]
     pub fn test_dropped_inbound(&self) -> u64 {
         self.sh().dropped_inbound
     }
 
     #[cfg(test)]
+    #[allow(dead_code)]
     pub fn test_presence(&self, peer: &PeerId) -> Option<bool> {
         self.sh().presence.get(peer).copied()
     }
 
     #[cfg(test)]
+    #[allow(dead_code)]
     pub fn test_has_grant(&self, peer: &PeerId) -> bool {
         self.sh()
             .meta
@@ -739,6 +817,7 @@ impl Core {
     }
 
     #[cfg(test)]
+    #[allow(dead_code)]
     pub fn test_pending_len(&self, peer: &PeerId) -> usize {
         self.sh()
             .pending_out
@@ -748,6 +827,7 @@ impl Core {
     }
 
     #[cfg(test)]
+    #[allow(dead_code)]
     pub async fn test_handle_app(self: &Arc<Self>, peer: PeerId, app: AppMsg) {
         self.handle_app(peer, app).await;
     }
@@ -2039,6 +2119,31 @@ impl Core {
         });
     }
 
+    /// Disappearing-message sweep: every EXPIRY_SWEEP tick tombstones rows
+    /// past their deadline and emits `msg.expired` so the TUI and RPC
+    /// subscribers can drop them live. The interval's first tick is
+    /// immediate — messages that lapsed while the app was down are swept
+    /// at startup.
+    async fn expiry_loop(self: Arc<Self>) {
+        let mut tick = tokio::time::interval(EXPIRY_SWEEP);
+        loop {
+            tick.tick().await;
+            if self.shutdown_requested() {
+                break;
+            }
+            let Ok(expired) = self.sblk(|s| s.expire_due(now_ms())).await else {
+                continue;
+            };
+            for (chat_id, msg_id) in expired {
+                self.emit(
+                    "msg.expired",
+                    Some(&chat_id),
+                    json!({"chat_id": chat_id, "msg_id": msg_id}),
+                );
+            }
+        }
+    }
+
     async fn inbound_loop(self: Arc<Self>, mut rx: mpsc::Receiver<ClientEvent>) {
         while let Some(ev) = rx.recv().await {
             if self.shutdown_requested() {
@@ -2246,10 +2351,10 @@ impl Core {
             // Rekey control unit consumed inside decrypt.
             return;
         }
-        let app: AppMsg = match wire_deserialize(&pt) {
-            Ok(a) => a,
-            Err(e) => {
-                tracing::debug!(%e, "AppMsg decode failed; dropped");
+        let app: AppMsg = match decode_app(&pt) {
+            Some(a) => a,
+            None => {
+                tracing::debug!("AppMsg decode failed; dropped");
                 return;
             }
         };
@@ -2272,7 +2377,11 @@ impl Core {
             }
         }
         match app {
-            AppMsg::Text { msg_id, body } => {
+            AppMsg::Text {
+                msg_id,
+                body,
+                expires_at,
+            } => {
                 let verified = self.contact_verified(&peer).await;
                 let _ = self
                     .sblk({
@@ -2280,6 +2389,9 @@ impl Core {
                         move |s| s.upsert_chat(&chat_id, peer.as_bytes(), None, verified)
                     })
                     .await;
+                // Peer-supplied deadline is honored verbatim — the local
+                // per-chat default never overrides an explicit wire TTL.
+                let expires_at = expires_at.map(|e| e.min(i64::MAX as u64) as i64);
                 let inserted = self
                     .sblk({
                         let chat_id = chat_id.clone();
@@ -2295,6 +2407,7 @@ impl Core {
                                 state: Some(MsgState::Delivered),
                                 client_msg_id: None,
                                 ts: now_ms(),
+                                expires_at,
                             })
                         }
                     })
@@ -2308,14 +2421,24 @@ impl Core {
                         })
                         .await
                     {
-                        self.emit(
-                            "message.received",
-                            Some(&m.chat_id),
-                            json!({
-                                "chat_id": m.chat_id,
-                                "message": message_json(&m, &peer, &self.peer_id_str),
-                            }),
-                        );
+                        if m.deleted {
+                            // Deadline already passed on receipt: persisted
+                            // as a tombstone for audit, never displayed.
+                            self.emit(
+                                "msg.expired",
+                                Some(&m.chat_id),
+                                json!({"chat_id": m.chat_id, "msg_id": m.msg_id}),
+                            );
+                        } else {
+                            self.emit(
+                                "message.received",
+                                Some(&m.chat_id),
+                                json!({
+                                    "chat_id": m.chat_id,
+                                    "message": message_json(&m, &peer, &self.peer_id_str),
+                                }),
+                            );
+                        }
                     }
                 }
                 self.deliver_now(
@@ -2529,13 +2652,17 @@ impl Core {
         Ok(())
     }
 
-    /// Shared send path for `msg.send` and the TUI composer.
+    /// Shared send path for `msg.send` and the TUI composer. `ttl_ms` is the
+    /// per-message override: `None` falls back to the chat's local
+    /// disappearing default, `Some(0)` sends a non-expiring message, and
+    /// `Some(t)` puts `ts + t` on the wire inside the encrypted payload.
     async fn send_text(
         self: &Arc<Self>,
         peer: PeerId,
         body: &str,
         client_msg_id: &str,
-    ) -> Result<(String, String), RpcError> {
+        ttl_ms: Option<u64>,
+    ) -> Result<(String, String, Option<i64>), RpcError> {
         self.check_send_allowed(&peer).await?;
         let (live, offline_gate) = {
             let sh = self.sh();
@@ -2562,6 +2689,17 @@ impl Core {
             ));
         }
         let chat_id = chat_str(&peer);
+        let ttl_ms = match ttl_ms {
+            Some(t) => Some(t.min(i64::MAX as u64) as i64),
+            None => {
+                let cid = chat_id.clone();
+                self.sblk(move |s| s.disappearing_ttl(&cid))
+                    .await
+                    .map_err(store_rpc)?
+            }
+        };
+        let ts = now_ms();
+        let expires_at = ttl_ms.filter(|t| *t > 0).map(|t| ts.saturating_add(t));
         let mid = new_msg_id();
         let inserted = self
             .sblk({
@@ -2578,7 +2716,8 @@ impl Core {
                         body,
                         state: Some(MsgState::Queued),
                         client_msg_id: Some(cmid),
-                        ts: now_ms(),
+                        ts,
+                        expires_at,
                     })
                 }
             })
@@ -2586,7 +2725,7 @@ impl Core {
             .map_err(store_rpc)?;
         let (mid, deduped) = inserted;
         if deduped {
-            return Ok((mid, chat_str(&peer)));
+            return Ok((mid, chat_str(&peer), expires_at));
         }
         self.emit(
             "msg_state",
@@ -2603,6 +2742,7 @@ impl Core {
             app: AppMsg::Text {
                 msg_id: mid.clone(),
                 body: body.to_string(),
+                expires_at: expires_at.map(|e| e.max(0) as u64),
             },
             msg_id: Some(mid.clone()),
         };
@@ -2610,7 +2750,7 @@ impl Core {
         tokio::spawn(async move {
             me.deliver_or_queue(peer, item).await;
         });
-        Ok((mid, chat_id2))
+        Ok((mid, chat_id2, expires_at))
     }
 
     /// `contact.add` / `invite.accept` / `cinder add`: parse URI, create the
@@ -2753,6 +2893,7 @@ fn message_json(m: &crate::store::Message, sender: &PeerId, own_peer_str: &str) 
         "state": m.state.map(state_str),
         "ts": rfc3339(m.ts),
         "ts_ms": m.ts,
+        "expires_at_ms": m.expires_at,
         "revision": m.revision,
         "reactions": m.reactions.iter().map(|r| {
             json!({
@@ -2798,6 +2939,7 @@ fn chat_json(
         "display_name": meta.and_then(|m| m.display_name.clone()).or_else(|| name.map(String::from)),
         "trust": trust_str(trust),
         "unread": chat.unread.max(0) as u32,
+        "disappearing_ttl_ms": chat.disappear_ttl_ms,
         "last_activity": rfc3339(chat.last_activity),
         "last_message": chat.last_message.as_ref().map(|m| message_json(m, &peer, "")),
     })
@@ -2830,8 +2972,13 @@ fn ui_event(kind: &str, p: &Value) -> Option<tb::Event> {
                 text: m["body"]["text"].as_str().unwrap_or("").to_string(),
                 state: tb::MsgState::Delivered,
                 ts: m["ts_ms"].as_i64().unwrap_or(0) / 1000,
+                expires_at: m["expires_at_ms"].as_i64(),
             }))
         }
+        "msg.expired" => Some(tb::Event::MsgExpired {
+            chat_id: p["chat_id"].as_str()?.to_string(),
+            msg_id: p["msg_id"].as_str()?.to_string(),
+        }),
         "msg_state" => Some(tb::Event::MsgState {
             msg_id: p["msg_id"].as_str()?.to_string(),
             client_msg_id: p["client_msg_id"].as_str().unwrap_or("").to_string(),
@@ -2886,11 +3033,15 @@ impl CinderCore for Core {
 
     async fn msg_send(&self, p: MsgSendParams) -> Result<Value, RpcError> {
         let peer = self.resolve_to(&p.to)?;
-        let (msg_id, chat_id) = self
+        let (msg_id, chat_id, expires_at) = self
             .arc()
-            .send_text(peer, &p.body, &p.client_msg_id)
+            .send_text(peer, &p.body, &p.client_msg_id, p.ttl_ms)
             .await?;
-        Ok(json!({"msg_id": msg_id, "chat_id": chat_id}))
+        Ok(json!({
+            "msg_id": msg_id,
+            "chat_id": chat_id,
+            "expires_at": expires_at.map(rfc3339),
+        }))
     }
 
     async fn msg_edit(&self, p: MsgEditParams) -> Result<Value, RpcError> {
@@ -3156,6 +3307,23 @@ impl CinderCore for Core {
             "messages": items,
             "has_more": has_more,
             "next_before": next,
+        }))
+    }
+
+    /// `chat.set_disappearing` — local per-chat default TTL for `msg.send`.
+    /// `ttl_ms = 0` disables. Local-only in v1: never put on the wire, so a
+    /// peer's own default is unaffected (they keep honoring wire TTLs).
+    async fn chat_set_disappearing(&self, p: ChatSetDisappearingParams) -> Result<Value, RpcError> {
+        peer_of_chat(&p.chat_id)
+            .map_err(|_| RpcError::new(ErrorKind::NotFound, "chat not found"))?;
+        let ttl = p.ttl_ms.min(i64::MAX as u64) as i64;
+        let cid = p.chat_id.clone();
+        self.sblk(move |s| s.set_disappearing(&cid, ttl))
+            .await
+            .map_err(store_rpc)?;
+        Ok(json!({
+            "chat_id": p.chat_id,
+            "ttl_ms": p.ttl_ms,
         }))
     }
 
@@ -3555,6 +3723,7 @@ impl tb::Backend for TuiBackend {
                         _ => tb::MsgState::Queued,
                     },
                     ts: m.ts / 1000,
+                    expires_at: m.expires_at,
                 })
                 .collect(),
             has_more: next.is_some(),
@@ -3565,10 +3734,10 @@ impl tb::Backend for TuiBackend {
     async fn send(&mut self, chat_id: &str, body: &str) -> Result<tb::SendAck> {
         let peer = peer_of_chat(chat_id).map_err(|e| anyhow!("{e:?}"))?;
         let cmid = format!("tui:{}", b32(HsId::random().as_bytes()));
-        let (msg_id, _) = self
+        let (msg_id, _, expires_at) = self
             .core
             .clone()
-            .send_text(peer, body, &cmid)
+            .send_text(peer, body, &cmid, None)
             .await
             .map_err(|e| {
                 anyhow!(
@@ -3580,7 +3749,19 @@ impl tb::Backend for TuiBackend {
         Ok(tb::SendAck {
             msg_id,
             client_msg_id: cmid,
+            expires_at,
         })
+    }
+
+    async fn set_disappearing(&mut self, chat_id: &str, ttl_ms: u64) -> Result<()> {
+        peer_of_chat(chat_id).map_err(|e| anyhow!("{e:?}"))?;
+        let ttl = ttl_ms.min(i64::MAX as u64) as i64;
+        let cid = chat_id.to_string();
+        self.core
+            .sblk(move |s| s.set_disappearing(&cid, ttl))
+            .await
+            .map_err(|e| anyhow!("{e}"))?;
+        Ok(())
     }
 
     async fn add_contact(&mut self, uri: &str) -> Result<String> {

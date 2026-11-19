@@ -34,8 +34,12 @@ pub fn msg(msg_id: &str, dir: &str, text: &str, ts: &str) -> Value {
     })
 }
 
+/// (to, body, client_msg_id, ttl_ms) recorded by MockCore::msg_send.
+pub type SendCall = (String, String, String, Option<u64>);
+
 pub struct MockCore {
-    pub sends: Mutex<Vec<(String, String, String)>>,
+    pub sends: Mutex<Vec<SendCall>>,
+    pub disappearing: Mutex<Vec<(String, u64)>>,
     pub edits: Mutex<Vec<Value>>,
     pub deletes: Mutex<Vec<Value>>,
     pub reactions_calls: Mutex<Vec<Value>>,
@@ -62,6 +66,7 @@ impl MockCore {
             .collect();
         Self {
             sends: Mutex::new(Vec::new()),
+            disappearing: Mutex::new(Vec::new()),
             edits: Mutex::new(Vec::new()),
             deletes: Mutex::new(Vec::new()),
             reactions_calls: Mutex::new(Vec::new()),
@@ -123,11 +128,17 @@ impl CinderCore for MockCore {
 
     async fn msg_send(&self, p: MsgSendParams) -> Result<Value, RpcError> {
         self.check("msg.send")?;
-        self.sends
-            .lock()
-            .unwrap()
-            .push((p.to.clone(), p.body.clone(), p.client_msg_id.clone()));
-        Ok(json!({"msg_id": self.next_msg_id(), "chat_id": Self::resolve_chat(&p.to)}))
+        self.sends.lock().unwrap().push((
+            p.to.clone(),
+            p.body.clone(),
+            p.client_msg_id.clone(),
+            p.ttl_ms,
+        ));
+        Ok(json!({
+            "msg_id": self.next_msg_id(),
+            "chat_id": Self::resolve_chat(&p.to),
+            "expires_at": Value::Null,
+        }))
     }
 
     async fn msg_edit(&self, p: MsgEditParams) -> Result<Value, RpcError> {
@@ -167,7 +178,7 @@ impl CinderCore for MockCore {
         Ok(json!({"msg_id": p.msg_id, "reactions": reactions, "state": "queued"}))
     }
 
-    async fn chat_list(&self, p: ChatListParams) -> Result<Value, RpcError> {
+    async fn chat_list(&self, _p: ChatListParams) -> Result<Value, RpcError> {
         self.check("chat.list")?;
         let chat = json!({
             "chat_id": CHAT,
@@ -222,6 +233,15 @@ impl CinderCore for MockCore {
             Value::Null
         };
         Ok(json!({"messages": page, "has_more": has_more, "next_before": next_before}))
+    }
+
+    async fn chat_set_disappearing(&self, p: ChatSetDisappearingParams) -> Result<Value, RpcError> {
+        self.check("chat.set_disappearing")?;
+        self.disappearing
+            .lock()
+            .unwrap()
+            .push((p.chat_id.clone(), p.ttl_ms));
+        Ok(json!({"chat_id": p.chat_id, "ttl_ms": p.ttl_ms}))
     }
 
     async fn contact_list(&self, _p: ContactListParams) -> Result<Value, RpcError> {

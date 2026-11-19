@@ -8,6 +8,10 @@ pub struct MsgSendParams {
     pub to: String,
     pub body: String,
     pub client_msg_id: String,
+    /// Per-message TTL override (ms). Absent → the chat's local
+    /// `chat.set_disappearing` default applies; `0` sends a non-expiring
+    /// message; `t > 0` sets `expires_at = send_ts + t` on the wire.
+    pub ttl_ms: Option<u64>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -41,6 +45,13 @@ pub struct ChatHistoryParams {
     pub chat_id: String,
     pub before: Option<String>,
     pub limit: Option<u32>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ChatSetDisappearingParams {
+    pub chat_id: String,
+    /// Local default TTL for messages sent in this chat; `0` disables.
+    pub ttl_ms: u64,
 }
 
 #[derive(Debug, Deserialize)]
@@ -94,6 +105,12 @@ pub trait CinderCore: Send + Sync {
 
     async fn chat_list(&self, params: ChatListParams) -> Result<Value, RpcError>;
     async fn chat_history(&self, params: ChatHistoryParams) -> Result<Value, RpcError>;
+    /// Sets the local per-chat disappearing-message default; returns
+    /// `{chat_id, ttl_ms}`. Local-only — not synced to the peer.
+    async fn chat_set_disappearing(
+        &self,
+        params: ChatSetDisappearingParams,
+    ) -> Result<Value, RpcError>;
 
     async fn contact_list(&self, params: ContactListParams) -> Result<Value, RpcError>;
     async fn contact_add(&self, params: ContactAddParams) -> Result<Value, RpcError>;
@@ -117,6 +134,7 @@ pub trait CinderCore: Send + Sync {
 pub const CORE_EVENT_KINDS: &[&str] = &[
     "message.received",
     "msg_state",
+    "msg.expired",
     "contact.request",
     "contact.connected",
     "security.identity_changed",

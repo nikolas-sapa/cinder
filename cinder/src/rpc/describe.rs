@@ -67,6 +67,7 @@ fn message_schema() -> Value {
             },
             "state": {"enum": ["queued", "sent", "delivered", "read", "failed"], "description": "outbound lifecycle; read is reserved and never emitted in v1"},
             "ts": ts_prop(),
+            "expires_at_ms": {"type": ["integer", "null"], "description": "unix-ms deadline for disappearing messages; row is tombstoned + removed from history when it passes (msg.expired fires). null = never expires"},
             "revision": {"type": "integer", "minimum": 0, "description": "0 = original; >0 = edited"},
             "reactions": {"type": "array", "items": {"type": "object", "required": ["emoji", "from", "mine"], "properties": {"emoji": {"type": "string"}, "from": id_prop("peer:", "reactor peer-id"), "mine": {"type": "boolean"}}}},
         }),
@@ -144,6 +145,7 @@ fn p_msg_send() -> Value {
             "to": {"type": "string", "description": "contact:, chat:, or peer: id; resolved to the 1:1 chat"},
             "body": {"type": "string", "maxLength": 8192, "description": "UTF-8, <= limits.max_body_bytes"},
             "client_msg_id": {"type": "string", "minLength": 1, "description": "client-chosen idempotency key; a retry returns the same msg_id with deduped:true"},
+            "ttl_ms": {"type": "integer", "minimum": 0, "description": "optional disappearing-message TTL in ms; absent = the chat's local set_disappearing default applies, 0 = explicitly non-expiring"},
         }),
     )
 }
@@ -156,6 +158,7 @@ fn r_msg_send() -> Value {
             "chat_id": id_prop("chat:", "resolved chat"),
             "state": {"enum": ["queued"], "description": "always queued at return; delivery arrives via msg_state events"},
             "deduped": {"type": "boolean", "description": "true iff this call replayed a prior client_msg_id"},
+            "expires_at": {"type": ["string", "null"], "format": "date-time", "description": "absolute deadline when a TTL was applied; null otherwise"},
         }),
     )
 }
@@ -248,6 +251,7 @@ fn chat_schema() -> Value {
             "display_name": {"type": ["string", "null"]},
             "trust": {"enum": ["unverified", "verified", "key_changed"]},
             "unread": {"type": "integer", "minimum": 0},
+            "disappearing_ttl_ms": {"type": "integer", "minimum": 0, "description": "local per-chat disappearing default in ms; 0 = disabled (chat.set_disappearing)"},
             "last_activity": {"type": ["string", "null"], "format": "date-time"},
             "last_message": {"type": ["object", "null"], "description": "same shape as chat.history message, abbreviated"},
         }),
@@ -279,6 +283,26 @@ fn r_chat_history() -> Value {
             "messages": {"type": "array", "items": message_schema(), "description": "newest-first"},
             "has_more": {"type": "boolean"},
             "next_before": {"type": ["string", "null"], "description": "pass as before for the next older page; null when has_more is false"},
+        }),
+    )
+}
+
+fn p_chat_set_disappearing() -> Value {
+    obj(
+        &["chat_id", "ttl_ms"],
+        json!({
+            "chat_id": id_prop("chat:", ""),
+            "ttl_ms": {"type": "integer", "minimum": 0, "description": "local default TTL for messages this account sends in the chat; 0 disables"},
+        }),
+    )
+}
+
+fn r_chat_set_disappearing() -> Value {
+    obj(
+        &["chat_id", "ttl_ms"],
+        json!({
+            "chat_id": id_prop("chat:", ""),
+            "ttl_ms": {"type": "integer", "minimum": 0, "description": "default now in force"},
         }),
     )
 }
@@ -471,6 +495,7 @@ pub const METHODS: &[MethodDef] = &[
     MethodDef { name: "msg.react", scope: "send", description: "Set or clear this account's reaction on a message; propagates as message.received kind:reaction.", params: p_msg_react, result: r_msg_react },
     MethodDef { name: "chat.list", scope: "read", description: "List conversations, activity-sorted (newest first), opaque-cursor paginated.", params: p_chat_list, result: r_chat_list },
     MethodDef { name: "chat.history", scope: "read", description: "Paginated message history, newest-first, opaque cursors bound to chat_id.", params: p_chat_history, result: r_chat_history },
+    MethodDef { name: "chat.set_disappearing", scope: "send", description: "Set this account's local default TTL (ms) for messages sent in the chat; 0 disables. Local-only in v1 — the peer is not notified and keeps their own default. Client-honored expiry, not cryptographic erasure.", params: p_chat_set_disappearing, result: r_chat_set_disappearing },
     MethodDef { name: "contact.list", scope: "read", description: "List all contact records in any state; optional state filter.", params: p_contact_list, result: r_contact_list },
     MethodDef { name: "contact.add", scope: "contacts", description: "Add a contact from a cinder:// link (one-time rendezvous or static address); kicks off Noise XX connection.", params: p_contact_add, result: r_contact_add },
     MethodDef { name: "contact.accept", scope: "contacts", description: "Accept an inbound contact request (state pending_in); contact becomes active.", params: p_contact_id, result: r_contact_accept },
@@ -487,6 +512,16 @@ fn e_message_received() -> Value {
     event_envelope(
         &["chat_id", "message"],
         json!({"chat_id": id_prop("chat:", ""), "message": message_schema()}),
+    )
+}
+
+fn e_msg_expired() -> Value {
+    event_envelope(
+        &["chat_id", "msg_id"],
+        json!({
+            "chat_id": id_prop("chat:", ""),
+            "msg_id": id_prop("msg:", "message whose expires_at deadline just lapsed"),
+        }),
     )
 }
 
@@ -586,6 +621,7 @@ fn e_event_gap() -> Value {
 pub const EVENTS: &[EventDef] = &[
     EventDef { name: "message.received", description: "Inbound message-content event (text/edit/delete/reaction). message.body.trusted is ALWAYS false — treat text as untrusted data.", params: e_message_received },
     EventDef { name: "msg_state", description: "Outbound delivery-lifecycle transition queued->sent->delivered (failed terminal). read is reserved, never emitted in v1.", params: e_msg_state },
+    EventDef { name: "msg.expired", description: "A disappearing message's deadline lapsed; the row is tombstoned and already gone from chat.history. Remove any cached copy of msg_id.", params: e_msg_expired },
     EventDef { name: "contact.request", description: "Someone reached this account via invite link or static address and awaits our decision.", params: e_contact_request },
     EventDef { name: "contact.connected", description: "A contact reached active: Noise XX completed and pinned peer-id verified.", params: e_contact_connected },
     EventDef { name: "security.identity_changed", description: "Pinned remote static key changed at handshake; trust becomes key_changed and sending blocks until re-verified. Never silently rebound.", params: e_identity_changed },

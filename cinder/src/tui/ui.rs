@@ -207,12 +207,20 @@ fn draw_chat(f: &mut Frame, app: &mut App, area: Rect) {
                         Style::default().fg(name_color).add_modifier(Modifier::BOLD),
                     ));
                 }
+                if ci == 0 && m.expires_at.is_some() {
+                    spans.push(Span::styled("⏱ ", Style::default().fg(Color::DarkGray)));
+                }
                 let is_last = ci + 1 == chunks.len();
                 if out && is_last {
                     let tick = widgets::tick(m.state);
                     let used = UnicodeWidthStr::width(chunk.as_str())
                         + 6
-                        + if ci == 0 { name.len() + 2 } else { 0 };
+                        + if ci == 0 { name.len() + 2 } else { 0 }
+                        + if ci == 0 && m.expires_at.is_some() {
+                            2
+                        } else {
+                            0
+                        };
                     let pad = inner_w.saturating_sub(used + tick.len());
                     spans.push(Span::raw(chunk.clone()));
                     spans.push(Span::raw(" ".repeat(pad)));
@@ -394,6 +402,7 @@ mod tests {
                     text: "\x1b]8;;http://evil\x07click\x1b[2J\u{202e}me".to_string(),
                     state: MsgState::Delivered,
                     ts: 3600 * 14 + 3 * 60,
+                    expires_at: None,
                 }],
                 has_more: false,
                 next_before: None,
@@ -442,6 +451,7 @@ mod tests {
                         text: format!("line {i}"),
                         state: MsgState::Delivered,
                         ts: 3600 * 14 + i as i64 * 60,
+                        expires_at: if i == 2 { Some(9_999_999_999) } else { None },
                     })
                     .collect(),
                 has_more: false,
@@ -454,6 +464,7 @@ mod tests {
         assert!(s.contains("✓✓"), "delivered tick missing");
         assert!(s.contains("new"), "read marker missing: {s:?}");
         assert!(s.contains("14:0"), "timestamps missing: {s:?}");
+        assert!(s.contains("⏱"), "expiry glyph missing: {s:?}");
     }
 
     #[test]

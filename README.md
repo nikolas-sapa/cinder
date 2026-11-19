@@ -33,9 +33,10 @@ regenerated in CI, never hand-edited.*
   mailbox blobs. It sees peer-ids, frame sizes, and timing — never keys or
   plaintext. Blindness is asserted by an integration test.
 - **No accounts.** Your identity is a static X25519 keypair; your peer-id
-  is `SHA-256(pubkey)`. Keys live in the OS keyring, with an age-encrypted
-  file fallback (`0600`/`0700`, atomic writes, passphrase via TTY only —
-  never argv/env).
+  is `SHA-256(pubkey)`. Keys live in the OS keyring — on macOS gated by a
+  Touch ID / login-password check at every `cinder` start — with an
+  age-encrypted file fallback (`0600`/`0700`, atomic writes, passphrase
+  via TTY only — never argv/env).
 - **One-time rendezvous links.**
   `cinder://<base32-pubkey>@<relay-host>?rendezvous=<token>` is a
   single-use invite slot on the relay (SimpleX model): an intercepted link
@@ -137,17 +138,23 @@ EOF
 | `--data-dir` / `CINDER_DATA_DIR` | Identity, contacts, sqlite store location |
 | `--relay` / `CINDER_RELAY` | Relay `host[:port]` (default port 7000); falls back to the last address that connected |
 | `CINDER_IDENTITY=ephemeral` | Throwaway identity per process — no keyring/file touched. Dev-only: your peer-id changes every run |
-| `CINDER_KEYSTORE=age` | Skip the OS keyring entirely — always use the age-encrypted file. For headless/CI where a keychain prompt can never be answered |
+| `CINDER_KEYSTORE=age` | Skip the OS keyring entirely — always use the age-encrypted file. For headless/CI where a keychain prompt can never be answered. Also skips the macOS Touch ID gate |
 | `XDG_RUNTIME_DIR` | Daemon socket directory when set |
 
 Identity loads from the **OS keyring first**; without one (headless
 Linux, no Secret Service) it falls back to an age-encrypted file and
 prompts for the passphrase **on `/dev/tty`** — never stdin, so piped
-protocol frames stay clean. Keyring calls are bounded to ~8s — a
+protocol frames stay clean. On **macOS**, consulting the keyring first
+requires a user-presence check — Touch ID, or the login password as
+fallback; cancelling or failing it aborts startup rather than silently
+bypassing the prompt (`CINDER_KEYSTORE=age` skips both the keyring and
+the check). Keyring calls are bounded to ~8s — a
 keychain that blocks on an unseen permission dialog falls back to the
 file path rather than wedging. Truly TTY-less agents need either a
 working keyring or `CINDER_IDENTITY=ephemeral`; `rpassword` cannot
-prompt without a terminal.
+prompt without a terminal. New age passphrases must be ≥12 characters
+across ≥2 character classes (enforced at create time only — existing
+files are untouched).
 
 ### Methods at a glance
 
@@ -266,6 +273,36 @@ Also documented: mailbox capability tokens transit in cleartext on the
 client↔relay link — an observer of that link can spam deposits or delete
 queued mail on *that one mailbox*. Availability loss only, never
 plaintext.
+
+## Security at rest
+
+What someone with access to your **machine** gets, today:
+
+- **Identity key** — in the OS keyring. On macOS, every `cinder` process
+  start that would read it first runs an `LAContext` user-presence check
+  (Touch ID → login-password fallback). Decline, cancel, or time it out
+  and startup aborts — there is no silent path around the prompt.
+  *Honest limits:* this is an app-level gate. Putting the ACL on the
+  keychain item itself (`kSecAccessControlUserPresence`) needs the
+  `keychain-access-groups` entitlement — unavailable to unsigned
+  `cargo install` builds (`SecItemAdd` fails with
+  `errSecMissingEntitlement`). So same-uid malware could read the raw
+  item via other tooling (still subject to the item's normal keychain
+  ACL prompt) or patch the check out — that's endpoint compromise
+  (THREAT-MODEL §3.5), not a new hole. The gate stops the casual
+  "walk up to an unlocked terminal, run cinder" case.
+- **Age-file fallback** — `identity.age` (dir `0700`, file `0600`,
+  atomic writes). New passphrases must be ≥12 chars across ≥2 classes
+  (lower/upper/digit/other); enforced at create/change only.
+- **Message history & contacts** — `cinder.db` is SQLCipher whose key
+  is `HKDF(identity_secret, "cinder-store-v1")` — no standalone keyfile,
+  no static key. `contacts.json` is HMAC'd the same way (fail-closed on
+  mismatch). Reading history offline means breaking the identity secret
+  first.
+- **A running process is fair game.** Once `cinder` is unlocked and
+  running, its identity, session keys, and the daemon socket are
+  available to same-uid processes — by design in v1. The gate controls
+  *starting* a core, not the lifetime of a live one.
 
 ## Non-goals (v1)
 

@@ -93,6 +93,12 @@ impl AgeFileStore {
         let p = rpassword::prompt_password("cinder passphrase: ")
             .map_err(|e| Error::KeyUnavailable(format!("passphrase prompt failed: {e}")))?;
         if confirm {
+            // `confirm` marks a NEW passphrase being set (encrypt a
+            // just-created file) — the only point where a strength floor
+            // can apply without breaking existing stores. Programmatic
+            // passphrases (with_passphrase) return early above and are
+            // exempt: callers there supply their own policy.
+            check_passphrase_strength(&p)?;
             let p2 = rpassword::prompt_password("confirm passphrase: ")
                 .map_err(|e| Error::KeyUnavailable(format!("passphrase prompt failed: {e}")))?;
             if p != p2 {
@@ -150,6 +156,29 @@ impl KeyStore for AgeFileStore {
     }
 }
 
+/// Minimum strength for a newly set age passphrase: ≥12 characters and
+/// ≥2 of the four character classes (lower / upper / digit / other).
+fn check_passphrase_strength(p: &str) -> Result<(), Error> {
+    let classes = [
+        p.chars().any(|c| c.is_lowercase()),
+        p.chars().any(|c| c.is_uppercase()),
+        p.chars().any(|c| c.is_ascii_digit()),
+        p.chars().any(|c| !c.is_alphanumeric()),
+    ]
+    .into_iter()
+    .filter(|b| *b)
+    .count();
+    if p.chars().count() >= 12 && classes >= 2 {
+        Ok(())
+    } else {
+        Err(Error::KeyUnavailable(
+            "passphrase too weak: need at least 12 characters spanning at \
+             least 2 character classes (lowercase, uppercase, digit, other)"
+                .into(),
+        ))
+    }
+}
+
 pub(crate) fn ensure_private_dir(dir: &Path) -> Result<(), Error> {
     fs::create_dir_all(dir)?;
     #[cfg(unix)]
@@ -179,4 +208,26 @@ pub(crate) fn write_atomic_0600(path: &Path, data: &[u8]) -> Result<(), Error> {
         let _ = d.sync_all();
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::check_passphrase_strength;
+
+    #[test]
+    fn passphrase_strength_rule() {
+        // ≥12 chars and ≥2 classes is required.
+        assert!(check_passphrase_strength("correct horse battery").is_ok());
+        assert!(check_passphrase_strength("abcDEFGHIJKL").is_ok());
+        assert!(check_passphrase_strength("abcdefghij!1").is_ok());
+        // Too short, even with multiple classes.
+        assert!(check_passphrase_strength("aB3!").is_err());
+        // Long but single-class.
+        assert!(check_passphrase_strength("abcdefghijklmnop").is_err());
+        assert!(check_passphrase_strength("123456789012").is_err());
+        assert!(check_passphrase_strength("").is_err());
+        // Non-ASCII still counts as its classes (lower/upper apply to
+        // unicode letters; anything else lands in "other").
+        assert!(check_passphrase_strength("pässwörd_12345").is_ok());
+    }
 }

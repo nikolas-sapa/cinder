@@ -20,7 +20,7 @@ pub fn peer_uid(stream: &tokio::net::UnixStream) -> io::Result<Uid> {
     }
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "android"))]
 pub fn peer_uid(stream: &tokio::net::UnixStream) -> io::Result<Uid> {
     use std::os::unix::io::AsRawFd;
     let fd = stream.as_raw_fd();
@@ -42,7 +42,7 @@ pub fn peer_uid(stream: &tokio::net::UnixStream) -> io::Result<Uid> {
     }
 }
 
-#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+#[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "android")))]
 pub fn peer_uid(_stream: &tokio::net::UnixStream) -> io::Result<Uid> {
     Err(io::Error::new(
         io::ErrorKind::Unsupported,

@@ -210,7 +210,13 @@ async fn submit<B: Backend>(backend: &mut B, app: &mut App) -> Result<()> {
     }
     let chat_id = chat.chat_id.clone();
     match backend.send(&chat_id, &text).await {
-        Ok(ack) => app.push_outgoing(&chat_id, &ack.msg_id, &ack.client_msg_id, &text),
+        Ok(ack) => app.push_outgoing(
+            &chat_id,
+            &ack.msg_id,
+            &ack.client_msg_id,
+            &text,
+            ack.expires_at,
+        ),
         Err(e) => app.status_line = Some(format!("send: {e}")),
     }
     Ok(())
@@ -265,6 +271,26 @@ async fn run_command<B: Backend>(backend: &mut B, app: &mut App, line: &str) -> 
             };
             let contact_id = chat.contact_id.clone();
             show_finger(backend, app, &contact_id).await;
+        }
+        Command::Ttl(secs) => {
+            let Some(chat) = app.active_chat() else {
+                app.status_line = Some("no chat selected".to_string());
+                return Ok(());
+            };
+            let chat_id = chat.chat_id.clone();
+            match backend
+                .set_disappearing(&chat_id, secs.saturating_mul(1000))
+                .await
+            {
+                Ok(()) => {
+                    app.status_line = Some(if secs == 0 {
+                        "disappearing messages off".to_string()
+                    } else {
+                        format!("disappearing after {secs}s (local default)")
+                    });
+                }
+                Err(e) => app.status_line = Some(format!("ttl: {e}")),
+            }
         }
         Command::Unknown(msg) => app.status_line = Some(msg),
     }

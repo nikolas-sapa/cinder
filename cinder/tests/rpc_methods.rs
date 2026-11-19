@@ -13,6 +13,7 @@ const ALL_METHODS: &[&str] = &[
     "msg.react",
     "chat.list",
     "chat.history",
+    "chat.set_disappearing",
     "contact.list",
     "contact.add",
     "contact.accept",
@@ -138,6 +139,20 @@ async fn p1_all_methods_happy_path() {
         assert!(r["messages"][0].get(f).is_some(), "message.{f}");
     }
 
+    let r = call(
+        &mut h,
+        19,
+        "chat.set_disappearing",
+        json!({"chat_id": CHAT, "ttl_ms": 5000}),
+    )
+    .await;
+    required_fields(&r, &["chat_id", "ttl_ms"], "chat.set_disappearing");
+    assert_eq!(r["ttl_ms"], 5000);
+    assert_eq!(
+        h.core.disappearing.lock().unwrap().as_slice(),
+        &[(CHAT.to_string(), 5000)]
+    );
+
     let r = call(&mut h, 9, "contact.list", json!({})).await;
     assert!(r["contacts"].is_array());
     for f in [
@@ -244,8 +259,8 @@ async fn dispatch_covers_describe_table() {
     hello(&mut h).await;
     let d = call(&mut h, 2, "rpc.describe", json!({})).await;
     let described: Vec<String> = d["methods"].as_object().unwrap().keys().cloned().collect();
-    assert_eq!(described.len(), 18, "rpc.describe must describe 18 methods");
-    assert_eq!(METHODS.len(), 18);
+    assert_eq!(described.len(), 19, "rpc.describe must describe 19 methods");
+    assert_eq!(METHODS.len(), 19);
     for m in METHODS.iter() {
         assert!(
             described.contains(&m.name.to_string()),
@@ -259,7 +274,7 @@ async fn dispatch_covers_describe_table() {
             "METHODS table missing {name}"
         );
     }
-    assert_eq!(EVENTS.len(), 8);
+    assert_eq!(EVENTS.len(), 9);
 }
 
 // P2 — rpc.describe answers pre-auth and covers the whole surface.
@@ -282,6 +297,7 @@ async fn p2_describe_preauth() {
     for name in [
         "message.received",
         "msg_state",
+        "msg.expired",
         "contact.request",
         "contact.connected",
         "security.identity_changed",

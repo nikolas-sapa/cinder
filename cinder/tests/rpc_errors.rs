@@ -66,7 +66,7 @@ async fn p3_garbage_always_errors() {
     // array params -> -32602
     line(
         &mut h,
-        &"{\"jsonrpc\":\"2.0\",\"id\":5,\"method\":\"chat.list\",\"params\":[1,2]}".to_string(),
+        "{\"jsonrpc\":\"2.0\",\"id\":5,\"method\":\"chat.list\",\"params\":[1,2]}",
     )
     .await;
     let f = frame(&mut h.rx).await;
@@ -77,7 +77,7 @@ async fn p3_garbage_always_errors() {
     // string id echoes byte-for-byte
     line(
         &mut h,
-        &"{\"jsonrpc\":\"2.0\",\"id\":\"abc-01\",\"method\":\"no.such\"}".to_string(),
+        "{\"jsonrpc\":\"2.0\",\"id\":\"abc-01\",\"method\":\"no.such\"}",
     )
     .await;
     let f = frame(&mut h.rx).await;

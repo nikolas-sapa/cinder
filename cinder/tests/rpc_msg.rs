@@ -134,8 +134,10 @@ async fn dedup_only_on_acceptance() {
 // replayed key re-sends (spec-permitted after expiry).
 #[tokio::test]
 async fn dedup_table_bounded() {
-    let mut cfg = EngineConfig::default();
-    cfg.dedup_max_entries = 2;
+    let cfg = EngineConfig {
+        dedup_max_entries: 2,
+        ..Default::default()
+    };
     let mut h = harness_with(cfg);
     hello(&mut h).await;
 
@@ -177,8 +179,10 @@ async fn dedup_table_bounded() {
 // TTL expiry likewise frees the key.
 #[tokio::test]
 async fn dedup_ttl_expiry() {
-    let mut cfg = EngineConfig::default();
-    cfg.dedup_ttl = Duration::from_millis(20);
+    let cfg = EngineConfig {
+        dedup_ttl: Duration::from_millis(20),
+        ..Default::default()
+    };
     let mut h = harness_with(cfg);
     hello(&mut h).await;
     call(
@@ -198,6 +202,117 @@ async fn dedup_ttl_expiry() {
     .await;
     assert_eq!(r["deduped"], false);
     assert_eq!(h.core.sends.lock().unwrap().len(), 2);
+}
+
+// msg.send ttl_ms is forwarded to the core; the wire carries the absolute
+// expires_at inside the encrypted payload, not the TTL itself.
+#[tokio::test]
+async fn msg_send_forwards_ttl_ms() {
+    let mut h = harness();
+    hello(&mut h).await;
+    let r = call(
+        &mut h,
+        1,
+        "msg.send",
+        json!({"to": "contact:9f3b12", "body": "vanish", "client_msg_id": "ttl-1", "ttl_ms": 5000}),
+    )
+    .await;
+    assert_eq!(r["state"], "queued");
+    assert_eq!(h.core.sends.lock().unwrap().len(), 1);
+    assert_eq!(
+        h.core.sends.lock().unwrap()[0].3,
+        Some(5000),
+        "ttl_ms must reach the core"
+    );
+
+    // absent ttl_ms → None → the chat default decides
+    call(
+        &mut h,
+        2,
+        "msg.send",
+        json!({"to": "contact:9f3b12", "body": "stay", "client_msg_id": "ttl-2"}),
+    )
+    .await;
+    assert_eq!(h.core.sends.lock().unwrap()[1].3, None);
+}
+
+// chat.set_disappearing validates the chat: prefix and round-trips {chat_id,
+// ttl_ms}; a missing chat_id is -32602.
+#[tokio::test]
+async fn chat_set_disappearing_params() {
+    let mut h = harness();
+    hello(&mut h).await;
+    let r = call(
+        &mut h,
+        1,
+        "chat.set_disappearing",
+        json!({"chat_id": CHAT, "ttl_ms": 30_000}),
+    )
+    .await;
+    assert_eq!(r["chat_id"], CHAT);
+    assert_eq!(r["ttl_ms"], 30_000);
+    assert_eq!(
+        h.core.disappearing.lock().unwrap().as_slice(),
+        &[(CHAT.to_string(), 30_000)]
+    );
+
+    // disable
+    let r = call(
+        &mut h,
+        2,
+        "chat.set_disappearing",
+        json!({"chat_id": CHAT, "ttl_ms": 0}),
+    )
+    .await;
+    assert_eq!(r["ttl_ms"], 0);
+
+    let e = call_err(
+        &mut h,
+        3,
+        "chat.set_disappearing",
+        json!({"chat_id": "contact:x", "ttl_ms": 5}),
+    )
+    .await;
+    assert_eq!(e["code"], -32602);
+
+    let e = call_err(&mut h, 4, "chat.set_disappearing", json!({"ttl_ms": 5})).await;
+    assert_eq!(e["code"], -32602);
+}
+
+// msg.expired flows through the event pipeline and honors the chats filter.
+#[tokio::test]
+async fn msg_expired_event_flows() {
+    let mut h = harness();
+    hello(&mut h).await;
+    let r = call(
+        &mut h,
+        1,
+        "events.subscribe",
+        json!({"kinds": ["msg.expired"], "chats": [CHAT]}),
+    )
+    .await;
+    let sub = r["subscription_id"].clone();
+    let _backlog = frame(&mut h.rx).await;
+
+    // a different chat's expiry must NOT reach this subscription
+    h.core.emit(
+        "msg.expired",
+        Some("chat:other"),
+        json!({"chat_id": "chat:other", "msg_id": "msg:x"}),
+    );
+    assert!(maybe_frame(&mut h.rx, 100).await.is_none());
+
+    h.core.emit(
+        "msg.expired",
+        Some(CHAT),
+        json!({"chat_id": CHAT, "msg_id": "msg:gone1"}),
+    );
+    let ev = frame(&mut h.rx).await;
+    assert_eq!(ev["method"], "msg.expired");
+    assert_eq!(ev["params"]["subscription_id"], sub);
+    assert_eq!(ev["params"]["chat_id"], CHAT);
+    assert_eq!(ev["params"]["msg_id"], "msg:gone1");
+    assert!(ev["params"]["seq"].as_u64().unwrap() >= 1);
 }
 
 // client_op_id dedup on the mutating ops.
@@ -239,7 +354,7 @@ async fn client_op_id_dedup() {
 async fn send_accepts_and_core_events_flow() {
     let mut h = harness();
     hello(&mut h).await;
-    let r = call(
+    let _r = call(
         &mut h,
         1,
         "events.subscribe",

@@ -16,7 +16,7 @@ use serde_json::Value;
 use sha2::Sha256;
 
 const STORE_HKDF_INFO: &[u8] = b"cinder-store-v1";
-const SCHEMA_VERSION: i64 = 1;
+const SCHEMA_VERSION: i64 = 2;
 const EVENT_LOG_KEEP: i64 = 16384;
 const DEDUP_TTL_MS: i64 = 7 * 24 * 60 * 60 * 1000;
 const MAX_WINDOW: u32 = 500;
@@ -165,6 +165,9 @@ pub struct NewMessage {
     pub state: Option<MsgState>,
     pub client_msg_id: Option<String>,
     pub ts: i64,
+    /// Absolute expiry deadline (unix ms) for disappearing messages; `None`
+    /// means the message never expires.
+    pub expires_at: Option<i64>,
 }
 
 #[derive(Debug, Clone)]
@@ -188,6 +191,10 @@ pub struct Message {
     #[allow(dead_code)]
     pub edited_at: Option<i64>,
     pub deleted: bool,
+    /// Absolute expiry deadline (unix ms) while the message is still live;
+    /// `None` on non-expiring and already-tombstoned rows is indistinguishable,
+    /// so expired tombstones keep the deadline for audit.
+    pub expires_at: Option<i64>,
     pub reactions: Vec<Reaction>,
 }
 
@@ -204,6 +211,9 @@ pub struct Chat {
     // used by tests via #[path] include
     #[allow(dead_code)]
     pub read_upto: i64,
+    /// Local per-chat disappearing-message default (ms). `0` disables.
+    /// Local-only in v1 — never synced to the peer.
+    pub disappear_ttl_ms: i64,
     pub last_message: Option<Box<Message>>,
 }
 
@@ -237,6 +247,7 @@ type MsgRow = (
     i64,
     Option<i64>,
     i64,
+    Option<i64>,
 );
 
 #[derive(Serialize, Deserialize)]
@@ -360,8 +371,9 @@ impl Store {
             return Ok(());
         }
         let tx = conn.unchecked_transaction()?;
-        tx.execute_batch(
-            "CREATE TABLE schema_migrations(
+        if version < 1 {
+            tx.execute_batch(
+                "CREATE TABLE schema_migrations(
                 version INTEGER PRIMARY KEY,
                 applied_at INTEGER NOT NULL
             );
@@ -436,11 +448,26 @@ impl Store {
             INSERT INTO meta(key, val) VALUES
                 ('protocol_version', '1'),
                 ('oldest_event_seq', '0');",
-        )?;
-        tx.execute(
-            "INSERT INTO schema_migrations(version, applied_at) VALUES(?1, ?2)",
-            params![SCHEMA_VERSION, now_ms()],
-        )?;
+            )?;
+            tx.execute(
+                "INSERT INTO schema_migrations(version, applied_at) VALUES(?1, ?2)",
+                params![1, now_ms()],
+            )?;
+        }
+        if version < 2 {
+            // v2 — disappearing messages: absolute expiry deadline on each
+            // row plus a local per-chat default TTL. `expires_at` keeps its
+            // deadline past expiry so swept tombstones stay auditable.
+            tx.execute_batch(
+                "ALTER TABLE messages ADD COLUMN expires_at INTEGER;
+                 ALTER TABLE chats
+                    ADD COLUMN disappear_ttl_ms INTEGER NOT NULL DEFAULT 0;",
+            )?;
+            tx.execute(
+                "INSERT INTO schema_migrations(version, applied_at) VALUES(?1, ?2)",
+                params![2, now_ms()],
+            )?;
+        }
         tx.commit()?;
         conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         Ok(())
@@ -486,7 +513,7 @@ impl Store {
         let conn = self.conn()?;
         let mut stmt = conn.prepare(
             "SELECT chat_id, peer_id, title, last_activity, unread,
-                    verified, read_upto
+                    verified, read_upto, disappear_ttl_ms
              FROM chats ORDER BY last_activity DESC, chat_id ASC LIMIT ?1",
         )?;
         let chats = stmt
@@ -499,6 +526,7 @@ impl Store {
                     r.get::<_, i64>(4)?,
                     r.get::<_, i64>(5)?,
                     r.get::<_, i64>(6)?,
+                    r.get::<_, i64>(7)?,
                 ))
             })?
             .collect::<std::result::Result<Vec<_>, _>>()?;
@@ -506,7 +534,7 @@ impl Store {
         chats
             .into_iter()
             .map(
-                |(chat_id, peer, title, activity, unread, verified, read_upto)| {
+                |(chat_id, peer, title, activity, unread, verified, read_upto, ttl)| {
                     let peer_id: [u8; 32] = peer
                         .try_into()
                         .map_err(|_| StoreError::Internal("peer_id len"))?;
@@ -519,6 +547,7 @@ impl Store {
                         unread,
                         verified: verified != 0,
                         read_upto,
+                        disappear_ttl_ms: ttl,
                     })
                 },
             )
@@ -529,11 +558,12 @@ impl Store {
         let row = conn
             .query_row(
                 "SELECT msg_id, dir, kind, body, state, client_msg_id, ts,
-                        revision, edited_at, deleted
+                        revision, edited_at, deleted, expires_at
                  FROM messages
                  WHERE chat_id = ?1 AND deleted = 0
+                   AND (expires_at IS NULL OR expires_at > ?2)
                  ORDER BY ts DESC, msg_id DESC LIMIT 1",
-                [chat_id],
+                params![chat_id, now_ms()],
                 |r| {
                     Ok((
                         r.get::<_, String>(0)?,
@@ -546,6 +576,7 @@ impl Store {
                         r.get::<_, i64>(7)?,
                         r.get::<_, Option<i64>>(8)?,
                         r.get::<_, i64>(9)?,
+                        r.get::<_, Option<i64>>(10)?,
                     ))
                 },
             )
@@ -555,7 +586,8 @@ impl Store {
     }
 
     fn tuple_to_message(&self, conn: &Connection, chat_id: &str, t: MsgRow) -> Result<Message> {
-        let (msg_id, dir, kind, body, state, client_msg_id, ts, revision, edited_at, deleted) = t;
+        let (msg_id, dir, kind, body, state, client_msg_id, ts, revision, edited_at, deleted, exp) =
+            t;
         Ok(Message {
             reactions: self.reactions_locked(conn, &msg_id)?,
             msg_id,
@@ -569,6 +601,7 @@ impl Store {
             revision,
             edited_at,
             deleted: deleted != 0,
+            expires_at: exp,
         })
     }
 
@@ -605,17 +638,19 @@ impl Store {
     ) -> Result<(Vec<Message>, Option<String>)> {
         let limit = limit.clamp(1, MAX_WINDOW) as i64;
         let conn = self.conn()?;
+        let now = now_ms();
         let tuples = match before {
             None => {
                 let mut stmt = conn.prepare(
                     "SELECT msg_id, dir, kind, body, state, client_msg_id, ts,
-                            revision, edited_at, deleted
+                            revision, edited_at, deleted, expires_at
                      FROM messages
                      WHERE chat_id = ?1
-                     ORDER BY ts DESC, msg_id DESC LIMIT ?2",
+                       AND (expires_at IS NULL OR expires_at > ?2)
+                     ORDER BY ts DESC, msg_id DESC LIMIT ?3",
                 )?;
                 let rows = stmt
-                    .query_map(params![chat_id, limit + 1], Self::msg_tuple_row)?
+                    .query_map(params![chat_id, now, limit + 1], Self::msg_tuple_row)?
                     .collect::<std::result::Result<Vec<_>, _>>()?;
                 rows
             }
@@ -626,14 +661,18 @@ impl Store {
                 }
                 let mut stmt = conn.prepare(
                     "SELECT msg_id, dir, kind, body, state, client_msg_id, ts,
-                            revision, edited_at, deleted
+                            revision, edited_at, deleted, expires_at
                      FROM messages
                      WHERE chat_id = ?1
                        AND (ts < ?2 OR (ts = ?2 AND msg_id < ?3))
-                     ORDER BY ts DESC, msg_id DESC LIMIT ?4",
+                       AND (expires_at IS NULL OR expires_at > ?4)
+                     ORDER BY ts DESC, msg_id DESC LIMIT ?5",
                 )?;
                 let rows = stmt
-                    .query_map(params![chat_id, c.t, c.m, limit + 1], Self::msg_tuple_row)?
+                    .query_map(
+                        params![chat_id, c.t, c.m, now, limit + 1],
+                        Self::msg_tuple_row,
+                    )?
                     .collect::<std::result::Result<Vec<_>, _>>()?;
                 rows
             }
@@ -679,6 +718,7 @@ impl Store {
             r.get(7)?,
             r.get(8)?,
             r.get(9)?,
+            r.get(10)?,
         ))
     }
 
@@ -716,19 +756,35 @@ impl Store {
             tx.execute("DELETE FROM dedup WHERE ts < ?1", [now_ms() - DEDUP_TTL_MS])?;
         }
 
+        // A message whose deadline already passed on receipt is born a
+        // tombstone: body never lands, `expires_at` is kept for audit, and
+        // it never counts toward unread.
+        let born_expired = msg.expires_at.map(|e| e <= now_ms()).unwrap_or(false);
+        let (body, deleted) = if born_expired {
+            ("", 1)
+        } else {
+            (msg.body.as_str(), 0)
+        };
+        let state = match (msg.state, born_expired) {
+            (Some(s), true) if !s.is_terminal() => Some(MsgState::Expired),
+            (s, _) => s,
+        };
         let affected = tx.execute(
             "INSERT OR IGNORE INTO messages
-                (msg_id, chat_id, dir, kind, body, state, client_msg_id, ts)
-             VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                (msg_id, chat_id, dir, kind, body, state, client_msg_id, ts,
+                 expires_at, deleted)
+             VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
             params![
                 msg.msg_id,
                 msg.chat_id,
                 msg.dir.as_str(),
                 msg.kind.as_str(),
-                msg.body,
-                msg.state.map(|s| s.as_str()),
+                body,
+                state.map(|s| s.as_str()),
                 msg.client_msg_id,
-                msg.ts
+                msg.ts,
+                msg.expires_at,
+                deleted
             ],
         )?;
         if affected == 0 {
@@ -763,7 +819,17 @@ impl Store {
                 params![cmid, msg.msg_id, now_ms()],
             )?;
         }
-        let unread_delta = if msg.dir == Dir::In { 1 } else { 0 };
+        if born_expired && msg.state.is_some() {
+            tx.execute(
+                "INSERT INTO msg_states(msg_id, state, ts) VALUES(?1, 'expired', ?2)",
+                params![msg.msg_id, now_ms()],
+            )?;
+        }
+        let unread_delta = if msg.dir == Dir::In && !born_expired {
+            1
+        } else {
+            0
+        };
         tx.execute(
             "UPDATE chats SET
                 last_activity = MAX(last_activity, ?2),
@@ -837,7 +903,7 @@ impl Store {
         let row = conn
             .query_row(
                 "SELECT chat_id, msg_id, dir, kind, body, state, client_msg_id,
-                        ts, revision, edited_at, deleted
+                        ts, revision, edited_at, deleted, expires_at
                  FROM messages WHERE msg_id = ?1",
                 [msg_id],
                 |r| {
@@ -854,6 +920,7 @@ impl Store {
                             r.get::<_, i64>(8)?,
                             r.get::<_, Option<i64>>(9)?,
                             r.get::<_, i64>(10)?,
+                            r.get::<_, Option<i64>>(11)?,
                         ),
                     ))
                 },
@@ -968,6 +1035,92 @@ impl Store {
             return Err(StoreError::NotFound(msg_id.to_string()));
         }
         Ok(())
+    }
+
+    /// Expiry sweep: tombstones every live row whose `expires_at` deadline
+    /// has passed, writes an `expired` audit entry for each non-terminal
+    /// state, and drops the unread count by the number of still-unread
+    /// inbound rows caught in the same sweep. Returns `(chat_id, msg_id)`
+    /// pairs so the caller can emit `msg.expired` for each.
+    pub fn expire_due(&self, now_ms: i64) -> Result<Vec<(String, String)>> {
+        let conn = self.conn()?;
+        let tx = conn.unchecked_transaction()?;
+        let due: Vec<(String, String, String, Option<String>, i64)> = {
+            let mut stmt = tx.prepare(
+                "SELECT msg_id, chat_id, dir, state, ts FROM messages
+                 WHERE expires_at IS NOT NULL AND expires_at <= ?1 AND deleted = 0",
+            )?;
+            let rows = stmt
+                .query_map([now_ms], |r| {
+                    Ok((
+                        r.get::<_, String>(0)?,
+                        r.get::<_, String>(1)?,
+                        r.get::<_, String>(2)?,
+                        r.get::<_, Option<String>>(3)?,
+                        r.get::<_, i64>(4)?,
+                    ))
+                })?
+                .collect::<std::result::Result<Vec<_>, _>>()?;
+            rows
+        };
+        let mut out = Vec::with_capacity(due.len());
+        for (msg_id, chat_id, dir, state, ts) in due {
+            let non_terminal = matches!(
+                state.as_deref(),
+                Some("queued") | Some("sent") | Some("delivered")
+            );
+            if non_terminal {
+                tx.execute(
+                    "INSERT INTO msg_states(msg_id, state, ts) VALUES(?1, 'expired', ?2)",
+                    params![msg_id, now_ms],
+                )?;
+            }
+            tx.execute(
+                "UPDATE messages SET deleted = 1, body = '',
+                    state = CASE WHEN state IN('queued','sent','delivered')
+                                 THEN 'expired' ELSE state END
+                 WHERE msg_id = ?1",
+                [&msg_id],
+            )?;
+            if dir == "in" {
+                // Only rewind the counter for rows newer than read_upto —
+                // messages already marked read never counted toward unread.
+                tx.execute(
+                    "UPDATE chats SET unread = MAX(0, unread - 1)
+                     WHERE chat_id = ?1 AND read_upto < ?2",
+                    params![chat_id, ts],
+                )?;
+            }
+            out.push((chat_id, msg_id));
+        }
+        tx.commit()?;
+        Ok(out)
+    }
+
+    /// Local per-chat disappearing-message default (ms). `ttl_ms = 0`
+    /// disables. Local-only in v1 — the setting is never put on the wire.
+    pub fn set_disappearing(&self, chat_id: &str, ttl_ms: i64) -> Result<()> {
+        let affected = self.conn()?.execute(
+            "UPDATE chats SET disappear_ttl_ms = ?2 WHERE chat_id = ?1",
+            params![chat_id, ttl_ms],
+        )?;
+        if affected == 0 {
+            return Err(StoreError::NotFound(chat_id.to_string()));
+        }
+        Ok(())
+    }
+
+    /// The chat's disappearing default in ms, `None` when unset or `0`.
+    pub fn disappearing_ttl(&self, chat_id: &str) -> Result<Option<i64>> {
+        let ttl: Option<i64> = self
+            .conn()?
+            .query_row(
+                "SELECT disappear_ttl_ms FROM chats WHERE chat_id = ?1",
+                [chat_id],
+                |r| r.get(0),
+            )
+            .optional()?;
+        Ok(ttl.filter(|t| *t > 0))
     }
 
     pub fn add_reaction(&self, msg_id: &str, emoji: &str, reactor: &[u8; 32]) -> Result<()> {
@@ -1126,7 +1279,7 @@ impl Store {
         let conn = self.conn()?;
         let sql = "SELECT m.msg_id, m.dir, m.kind, m.body, m.state,
                           m.client_msg_id, m.ts, m.revision, m.edited_at,
-                          m.deleted, m.chat_id
+                          m.deleted, m.expires_at, m.chat_id
                    FROM messages_fts JOIN messages m ON m.rowid = messages_fts.rowid
                    WHERE messages_fts MATCH ?1";
         let tuples: Vec<(String, MsgRow)> = match chat_id {
@@ -1137,7 +1290,7 @@ impl Store {
                 let rows = stmt
                     .query_map(
                         params![query, cid, limit.clamp(1, MAX_WINDOW) as i64],
-                        |r| Ok((r.get::<_, String>(10)?, Self::msg_tuple_row(r)?)),
+                        |r| Ok((r.get::<_, String>(11)?, Self::msg_tuple_row(r)?)),
                     )?
                     .collect::<std::result::Result<Vec<_>, _>>()?;
                 rows
@@ -1146,7 +1299,7 @@ impl Store {
                 let mut stmt = conn.prepare(&format!("{sql} ORDER BY m.ts DESC LIMIT ?2"))?;
                 let rows = stmt
                     .query_map(params![query, limit.clamp(1, MAX_WINDOW) as i64], |r| {
-                        Ok((r.get::<_, String>(10)?, Self::msg_tuple_row(r)?))
+                        Ok((r.get::<_, String>(11)?, Self::msg_tuple_row(r)?))
                     })?
                     .collect::<std::result::Result<Vec<_>, _>>()?;
                 rows

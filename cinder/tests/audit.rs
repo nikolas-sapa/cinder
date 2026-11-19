@@ -1,3 +1,5 @@
+#![allow(dead_code)] // #[path] includes expose items other tests use
+
 //! Regressions for the code-audit findings: mailbox-drain deadlock, peer
 //! mutation scoping, contact-add wedge, inbound gating, offline queue
 //! flush, react gating, and unread marking.
@@ -15,13 +17,14 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 
+use cinder_core::frame::{wire_deserialize, wire_serialize};
 use cinder_core::identity::Identity;
 use cinder_core::proto::PeerId;
 use secrecy::ExposeSecret;
 use serde_json::Value;
 use tokio::net::TcpListener;
 
-use crate::core::{chat_str, contact_str, AppMsg, Core, MetaState};
+use crate::core::{chat_str, contact_str, decode_app, AppMsg, Core, MetaState};
 use crate::rpc::core::{
     ChatHistoryParams, ChatListParams, CinderCore, ContactIdParams, MsgReactParams, MsgSendParams,
 };
@@ -198,6 +201,7 @@ fn audit_peer_mutations_scoped() {
         state: Some(MsgState::Delivered),
         client_msg_id: None,
         ts: 1000,
+        expires_at: None,
     })
     .unwrap();
     s.insert_message(&NewMessage {
@@ -209,6 +213,7 @@ fn audit_peer_mutations_scoped() {
         state: Some(MsgState::Sent),
         client_msg_id: None,
         ts: 1001,
+        expires_at: None,
     })
     .unwrap();
     s.insert_message(&NewMessage {
@@ -220,6 +225,7 @@ fn audit_peer_mutations_scoped() {
         state: Some(MsgState::Delivered),
         client_msg_id: None,
         ts: 1002,
+        expires_at: None,
     })
     .unwrap();
 
@@ -286,6 +292,7 @@ async fn audit_declined_inbound_dropped() {
         AppMsg::Text {
             msg_id: "msg:declined".into(),
             body: "should never land".into(),
+            expires_at: None,
         },
     )
     .await;
@@ -331,6 +338,7 @@ async fn audit_react_gate_and_emoji_cap() {
             state: Some(MsgState::Sent),
             client_msg_id: None,
             ts: 5000,
+            expires_at: None,
         })
         .unwrap();
 
@@ -385,6 +393,7 @@ async fn audit_history_marks_read() {
             to: contact_str(&peer_a),
             body: marker.clone(),
             client_msg_id: "unread-1".into(),
+            ttl_ms: None,
         })
         .await
         .expect("msg.send");
@@ -522,6 +531,7 @@ async fn audit_mailbox_deposit_drain_no_deadlock() {
         to: contact_str(&peer_b),
         body: warm.clone(),
         client_msg_id: "warm-1".into(),
+        ttl_ms: None,
     })
     .await
     .expect("warm send");
@@ -541,6 +551,7 @@ async fn audit_mailbox_deposit_drain_no_deadlock() {
             to: contact_str(&peer_b),
             body: deposited.clone(),
             client_msg_id: "dep-1".into(),
+            ttl_ms: None,
         })
         .await
         .expect("deposit send");
@@ -582,6 +593,7 @@ async fn audit_mailbox_deposit_drain_no_deadlock() {
         to: contact_str(&peer_a),
         body: after.clone(),
         client_msg_id: "post-1".into(),
+        ttl_ms: None,
     })
     .await
     .expect("post-drain send");
@@ -638,6 +650,7 @@ async fn audit_offline_queue_flush_on_return() {
         to: contact_str(&peer_b),
         body: queued_body.clone(),
         client_msg_id: "q-1".into(),
+        ttl_ms: None,
     })
     .await
     .expect("queued send");
@@ -665,4 +678,68 @@ async fn audit_offline_queue_flush_on_return() {
         "pending_out to drain",
     )
     .await;
+}
+
+// ---------------------------------------------------------------------------
+// wire layout: AppMsg::Text carries the absolute deadline inside the Noise
+// channel; pre-TTL frames still decode through the AppMsgV1 fallback.
+// ---------------------------------------------------------------------------
+#[test]
+fn wire_text_ttl_roundtrip_and_v1_compat() {
+    let m = AppMsg::Text {
+        msg_id: "msg:x".into(),
+        body: "vanish".into(),
+        expires_at: Some(1_900_000_000_000),
+    };
+    let bytes = wire_serialize(&m).unwrap();
+    match wire_deserialize::<AppMsg>(&bytes).unwrap() {
+        AppMsg::Text {
+            msg_id,
+            body,
+            expires_at,
+        } => {
+            assert_eq!(msg_id, "msg:x");
+            assert_eq!(body, "vanish");
+            assert_eq!(expires_at, Some(1_900_000_000_000));
+        }
+        _ => panic!("variant changed"),
+    }
+
+    let m = AppMsg::Text {
+        msg_id: "msg:y".into(),
+        body: "stay".into(),
+        expires_at: None,
+    };
+    match wire_deserialize::<AppMsg>(&wire_serialize(&m).unwrap()).unwrap() {
+        AppMsg::Text { expires_at, .. } => assert_eq!(expires_at, None),
+        _ => panic!("variant changed"),
+    }
+
+    // A frame written by a pre-TTL build (no expires_at field on the wire):
+    // the strict decoder errors on the missing tail, decode_app falls back.
+    #[derive(serde::Serialize)]
+    enum V1 {
+        Text { msg_id: String, body: String },
+    }
+    let old = wire_serialize(&V1::Text {
+        msg_id: "msg:old".into(),
+        body: "hi".into(),
+    })
+    .unwrap();
+    assert!(
+        wire_deserialize::<AppMsg>(&old).is_err(),
+        "bincode fixint layout can't read a short Text — that is exactly why decode_app exists"
+    );
+    match decode_app(&old).expect("v1 fallback must decode") {
+        AppMsg::Text {
+            msg_id,
+            body,
+            expires_at,
+        } => {
+            assert_eq!(msg_id, "msg:old");
+            assert_eq!(body, "hi");
+            assert_eq!(expires_at, None, "v1 frames carry no deadline");
+        }
+        _ => panic!("variant changed"),
+    }
 }

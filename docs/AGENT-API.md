@@ -276,7 +276,7 @@ Full self-describing schema. MUST work pre-auth.
 | `errors` | object | `{"kinds": {<kind>: {"code": int, "retryable": bool, "description": string}}}` — full §7.2 table |
 | `limits` | object | Same fields as `capabilities.limits` |
 
-**Example (truncated — real result contains all 18 methods + 8 events)**
+**Example (truncated — real result contains all 19 methods + 9 events)**
 
 ```json
 → {"jsonrpc":"2.0","id":2,"method":"rpc.describe","params":{}}
@@ -301,6 +301,7 @@ pipeline, not at delivery.** Delivery progress arrives as `msg_state` events.
 | `to` | string | yes | `contact:`, `chat:`, or `peer:` id. Resolved to the 1:1 chat |
 | `body` | string | yes | UTF-8, ≤ 8192 bytes (`limits.max_body_bytes`) |
 | `client_msg_id` | string | yes | Client-chosen idempotency key, unique per logical send |
+| `ttl_ms` | int | no | Disappearing-message TTL in ms. Absent → the chat's local `chat.set_disappearing` default applies; `0` → explicitly non-expiring even when a default is set; `t>0` → this message expires |
 
 **Result**
 
@@ -310,6 +311,16 @@ pipeline, not at delivery.** Delivery progress arrives as `msg_state` events.
 | `chat_id` | `chat:` | Resolved chat |
 | `state` | `"queued"` | Always `queued` at return — delivery is async |
 | `deduped` | bool | `true` iff this call replayed a prior `client_msg_id` |
+| `expires_at` | ts\|null | Absolute deadline applied to this send (`send_ts + ttl_ms`); `null` for a non-expiring message |
+
+**Disappearing messages — honesty note.** `ttl_ms` travels as an absolute
+`expires_at` deadline *inside* the Noise-encrypted payload — the relay sees
+nothing. Expiry is a **client-honored contract**: each endpoint tombstones
+the row when the deadline passes and emits `msg.expired` (§5.3). It reduces
+honest-client retention and relay/store exposure; it is **not** cryptographic
+erasure — a peer running modified software can retain, screenshot, or forward
+the body before it disappears. Never treat a TTL'd message as unreadable by
+the recipient.
 
 **Idempotency — precise semantics.** `(account, client_msg_id)` is the dedup
 key, persisted. A retry with the same `client_msg_id` (after timeout, EOF,
@@ -467,8 +478,9 @@ List conversations, activity-sorted (newest first).
 | `display_name` | string\|null | |
 | `trust` | `"unverified"\|"verified"\|"key_changed"` | Contact trust state |
 | `unread` | int | |
+| `disappearing_ttl_ms` | int | Local disappearing default in ms; `0` = disabled (§4.9) |
 | `last_activity` | ts\|null | |
-| `last_message` | object\|null | Same shape as `chat.history` message, abbreviated |
+| `last_message` | object\|null | Same shape as `chat.history` message, abbreviated; never an expired row |
 
 **Example**
 
@@ -516,6 +528,7 @@ Paginated message history, **newest-first**, opaque cursors.
 | `body` | object | `{text: string, trusted: bool}` — **`trusted` is `false` for all `dir:"in"` messages** (§6) |
 | `state` | enum | `queued\|sent\|delivered\|read\|failed` — `dir:"out"` only meaningful; `read` is reserved and NEVER emitted in v1 (§5.2) |
 | `ts` | timestamp | |
+| `expires_at_ms` | int\|null | unix-ms deadline for a disappearing message; the row is tombstoned + dropped from history when it passes (`msg.expired`, §5.3). `null` = never expires |
 | `revision` | int | 0 = original; >0 = edited |
 | `reactions` | array | `[{emoji, from, mine}]`, may be empty |
 
@@ -542,7 +555,45 @@ be exclusive of the cursor point — no message appears twice across pages.
 
 ---
 
-### 4.9 `contact.list`
+### 4.9 `chat.set_disappearing`
+
+Set this account's **local** default TTL for messages sent in a chat;
+`0` disables. Once set, `msg.send` without an explicit `ttl_ms` inherits it;
+an explicit `ttl_ms` (including `0`) overrides per send.
+
+**Local-only in v1.** The setting lives in local chat metadata and is NEVER
+put on the wire: the peer is not notified, keeps their own default, and only
+honors the `expires_at` deadlines that actually arrive on their messages.
+`chat.list` exposes the current value as `disappearing_ttl_ms`.
+
+**Params**
+
+| Field | Type | Req | Description |
+|---|---|---|---|
+| `chat_id` | `chat:` | yes | |
+| `ttl_ms` | int | yes | Default TTL in ms; `0` disables the default |
+
+**Result**
+
+| Field | Type | Description |
+|---|---|---|
+| `chat_id` | `chat:` | |
+| `ttl_ms` | int | Default now in force |
+
+**Example**
+
+```json
+→ {"jsonrpc":"2.0","id":25,"method":"chat.set_disappearing","params":{"chat_id":"chat:77aa01","ttl_ms":30000}}
+← {"jsonrpc":"2.0","id":25,"result":{"chat_id":"chat:77aa01","ttl_ms":30000}}
+```
+
+**Errors:** `-32017`/`not_found` (unknown `chat_id`), `-32602` (malformed id).
+
+**Scope:** `send`.
+
+---
+
+### 4.10 `contact.list`
 
 List all contact records in any state.
 
@@ -576,7 +627,7 @@ List all contact records in any state.
 
 ---
 
-### 4.10 `contact.add`
+### 4.11 `contact.add`
 
 Add a contact from a `cinder://` link. This is the **generic add-by-link**:
 it accepts both one-time `?rendezvous=` invite links and bare static
@@ -610,7 +661,7 @@ with `substate:"retry"`).
 
 ---
 
-### 4.11 `contact.accept`
+### 4.12 `contact.accept`
 
 Accept an inbound contact request (`state:"pending_in"` — someone reached us
 through our invite link or static address). On success the contact becomes
@@ -633,7 +684,7 @@ through our invite link or static address). On success the contact becomes
 
 ---
 
-### 4.12 `contact.decline`
+### 4.13 `contact.decline`
 
 Decline an inbound contact request. The requester is not notified beyond the
 connection closing; the record moves to `declined` (repeat requests from the
@@ -657,7 +708,7 @@ sends to declined/blocked contacts).
 
 ---
 
-### 4.13 `invite.create`
+### 4.14 `invite.create`
 
 Mint a one-time rendezvous link to share out-of-band. Each link is a single
 invite slot on the relay — one redemption, then dead.
@@ -685,7 +736,7 @@ mint = relay spam), `-32010`/`not_connected`.
 
 ---
 
-### 4.14 `invite.accept`
+### 4.15 `invite.accept`
 
 Consume a one-time `?rendezvous=` invite link. Functionally `contact.add`
 specialized for invite links: the inviter's slot is pre-authorized, so
@@ -717,7 +768,7 @@ intercepted links die here), `-32010`/`not_connected`.
 
 ---
 
-### 4.15 `ident.verify`
+### 4.16 `ident.verify`
 
 **Sensitive write.** Record that the Short Authentication String was
 confirmed out-of-band (7 emoji, or digit fallback), flipping the contact to
@@ -754,7 +805,7 @@ holds; only `security.identity_changed` revokes it.
 
 ---
 
-### 4.16 `events.subscribe`
+### 4.17 `events.subscribe`
 
 Open a resumable event stream over this connection. Events arrive as
 JSON-RPC notifications (no `id`). Multiple subscriptions per connection are
@@ -811,7 +862,7 @@ allowed; each notification carries its `subscription_id`.
 
 ---
 
-### 4.17 `events.unsubscribe`
+### 4.18 `events.unsubscribe`
 
 Close a subscription. Notifications for it stop; the `seq` cursor remains
 resumable via a later `events.subscribe {since}` while inside the replay
@@ -834,7 +885,7 @@ window.
 
 ---
 
-### 4.18 `shutdown.request`
+### 4.19 `shutdown.request`
 
 Ask the server to shut down gracefully (stdio: process exits; daemon: daemon
 stops, all clients get the handshake). Requires `admin` scope.
@@ -973,7 +1024,40 @@ order.
 
 ---
 
-### 5.3 `contact.request`
+### 5.3 `msg.expired`
+
+A disappearing message's `expires_at` deadline lapsed on THIS endpoint: the
+row has been tombstoned (body cleared, deadline kept for audit) and is
+already absent from `chat.history`. Fires for inbound and outbound rows
+alike, and also when a peer-sent message arrives already past its deadline
+(in that case NO `message.received` precedes it).
+
+**Payload**
+
+| Field | Type | Description |
+|---|---|---|
+| `chat_id` | `chat:` | |
+| `msg_id` | `msg:` | Message whose deadline lapsed |
+
+**Example**
+
+```json
+{"jsonrpc":"2.0","method":"msg.expired","params":{"subscription_id":"sub:1","seq":1201,"ts":"2026-11-18T16:08:01Z","chat_id":"chat:77aa01","msg_id":"msg:f20b11"}}
+```
+
+**When emitted:** by the periodic expiry sweep (~1s) for each row that just
+lapsed, or immediately on receipt of an already-expired inbound message.
+Subscribers MUST drop any cached/rendered copy of `msg_id` — the body is
+gone locally, and agents MUST NOT surface it again. Chat-scoped: the `chats`
+subscription filter applies (§4.17).
+
+**Honesty note (mirrors §4.3):** expiry is enforced by each endpoint's own
+clock on its own store. It is not synchronized with the peer's deletion,
+not retroactive on backups or exports, and not protection against the peer.
+
+---
+
+### 5.4 `contact.request`
 
 Someone reached this account via an invite link or static address and awaits
 our decision.
@@ -990,7 +1074,7 @@ for that contact.
 
 ---
 
-### 5.4 `contact.connected`
+### 5.5 `contact.connected`
 
 A contact reached `active` — Noise XX completed and pinned peer-id verified.
 
@@ -1006,7 +1090,7 @@ inbound request accepted. Followed (same contact) by
 
 ---
 
-### 5.5 `security.identity_changed`
+### 5.6 `security.identity_changed`
 
 A pinned remote static key changed at handshake → `trust:"key_changed"`.
 **Sending to this contact is now blocked** (`key_changed_blocked`) until
@@ -1024,7 +1108,7 @@ Re-verify to restore sending.
 
 ---
 
-### 5.6 `security.verification_needed`
+### 5.7 `security.verification_needed`
 
 Nudge that a contact is connected-but-unverified and SAS verification is
 available.
@@ -1045,7 +1129,7 @@ need). Ordering: NEVER before `contact.connected` for that contact.
 
 ---
 
-### 5.7 `session.backlog`
+### 5.8 `session.backlog`
 
 Catch-up summary. Emitted **exactly once per subscription**, after replay
 completes (or immediately for live-only subscribes).
@@ -1064,7 +1148,7 @@ fresh `session.hello` if the process has queued outbound state to report
 
 ---
 
-### 5.8 `event.gap`
+### 5.9 `event.gap`
 
 Replay-expiry marker — **the only legal representation of lost events.**
 
@@ -1246,7 +1330,7 @@ Pre-implementation spec audit against BRIEF.md. Checked / changed:
   PROTOCOL `INVITE_MAX_TTL` = 72 h — corrected to 60–259200 with clamp note.
 - Added: SAS is per-session — `ident.verify` compares against the most
   recent handshake's SAS; `verified` persists while the pin holds;
-  `sas_hint` documented as changing on re-handshake (§4.15, §5.6).
+  `sas_hint` documented as changing on re-handshake (§4.16, §5.7).
 - Fixed: daemon socket permissions wording — parent dir 0700, socket file
   0600 (was a garbled "0600-permissioned dir") (§1.2).
 - Added: secret-hygiene MUST — no error data/hint/event/log may carry keys,

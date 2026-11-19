@@ -52,6 +52,8 @@ pub enum Command {
     Quit,
     Status,
     Next,
+    /// `/ttl <seconds>` sets the local disappearing default; `0`/`off` clears.
+    Ttl(u64),
     Unknown(String),
 }
 
@@ -73,6 +75,14 @@ pub fn parse_command(line: &str) -> Command {
         "/quit" | "/q" => Command::Quit,
         "/status" => Command::Status,
         "/next" => Command::Next,
+        "/ttl" => match arg.filter(|a| !a.is_empty()) {
+            Some("off") | Some("0") => Command::Ttl(0),
+            Some(a) => match a.parse::<u64>() {
+                Ok(secs) => Command::Ttl(secs),
+                Err(_) => Command::Unknown("usage: /ttl <seconds|off>".to_string()),
+            },
+            None => Command::Unknown("usage: /ttl <seconds|off>".to_string()),
+        },
         other => Command::Unknown(format!("unknown command {other} (/help)")),
     }
 }
@@ -277,6 +287,29 @@ impl App {
             } => {
                 self.on_msg_state(&chat_id, &msg_id, &client_msg_id, state);
             }
+            Event::MsgExpired { chat_id, msg_id } => {
+                // The row is tombstoned store-side; drop it from the live
+                // buffer and roll the chat preview back to the newest
+                // survivor.
+                if let Some(buf) = self.buffers.get_mut(&chat_id) {
+                    buf.messages.retain(|m| m.msg_id != msg_id);
+                    if let Some(mk) = buf.read_marker {
+                        let n = buf.messages.len();
+                        if mk > n {
+                            buf.read_marker = Some(n);
+                        }
+                    }
+                }
+                let preview = self
+                    .buffers
+                    .get(&chat_id)
+                    .and_then(|b| b.messages.last().map(|m| m.text.clone()));
+                if let Some(c) = self.chats.iter_mut().find(|c| c.chat_id == chat_id) {
+                    if c.last_message.is_some() {
+                        c.last_message = preview.map(|p| p.chars().take(60).collect());
+                    }
+                }
+            }
             Event::ContactConnected {
                 contact_id,
                 peer_id,
@@ -362,7 +395,14 @@ impl App {
         }
     }
 
-    pub fn push_outgoing(&mut self, chat_id: &str, msg_id: &str, client_msg_id: &str, body: &str) {
+    pub fn push_outgoing(
+        &mut self,
+        chat_id: &str,
+        msg_id: &str,
+        client_msg_id: &str,
+        body: &str,
+        expires_at: Option<i64>,
+    ) {
         let msg = Message {
             msg_id: msg_id.to_string(),
             chat_id: chat_id.to_string(),
@@ -371,6 +411,7 @@ impl App {
             text: body.to_string(),
             state: MsgState::Queued,
             ts: now_ts(),
+            expires_at,
         };
         self.pending
             .insert(client_msg_id.to_string(), msg_id.to_string());
@@ -489,6 +530,7 @@ mod tests {
             text: format!("m{n}"),
             state: MsgState::Delivered,
             ts: n as i64,
+            expires_at: None,
         }
     }
 
@@ -532,7 +574,7 @@ mod tests {
     fn msg_state_transitions() {
         let mut a = app();
         a.activate("a");
-        a.push_outgoing("a", "msg:1", "cid:1", "hi");
+        a.push_outgoing("a", "msg:1", "cid:1", "hi", None);
         let st = |a: &App| a.buffer("a").unwrap().messages.last().unwrap().state;
         assert_eq!(st(&a), MsgState::Queued);
         a.apply_event(Event::MsgState {
@@ -562,7 +604,7 @@ mod tests {
     fn failed_is_terminal() {
         let mut a = app();
         a.activate("a");
-        a.push_outgoing("a", "msg:1", "cid:1", "hi");
+        a.push_outgoing("a", "msg:1", "cid:1", "hi", None);
         a.apply_event(Event::MsgState {
             msg_id: "msg:1".into(),
             client_msg_id: "cid:1".into(),
@@ -597,7 +639,33 @@ mod tests {
         assert_eq!(parse_command("/clear"), Command::Clear);
         assert_eq!(parse_command("/status"), Command::Status);
         assert_eq!(parse_command("/next"), Command::Next);
+        assert_eq!(parse_command("/ttl 60"), Command::Ttl(60));
+        assert_eq!(parse_command("/ttl off"), Command::Ttl(0));
+        assert_eq!(parse_command("/ttl 0"), Command::Ttl(0));
+        assert!(matches!(parse_command("/ttl"), Command::Unknown(_)));
+        assert!(matches!(parse_command("/ttl bogus"), Command::Unknown(_)));
         assert!(matches!(parse_command("/bogus"), Command::Unknown(_)));
+    }
+
+    #[test]
+    fn expired_message_drops_from_buffer() {
+        let mut a = app();
+        a.activate("a");
+        a.apply_event(Event::MessageReceived(msg("a", 1, Dir::In)));
+        a.apply_event(Event::MessageReceived(msg("a", 2, Dir::In)));
+        a.apply_event(Event::MsgExpired {
+            chat_id: "a".into(),
+            msg_id: "msg:a:2".into(),
+        });
+        let buf = a.buffer("a").unwrap();
+        assert_eq!(buf.messages.len(), 1);
+        assert_eq!(buf.messages[0].msg_id, "msg:a:1");
+        let ca = a.chats.iter().find(|c| c.chat_id == "a").unwrap();
+        assert_eq!(
+            ca.last_message.as_deref(),
+            Some("m1"),
+            "preview rolls back to newest survivor"
+        );
     }
 
     #[test]

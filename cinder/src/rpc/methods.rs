@@ -272,7 +272,8 @@ async fn msg_send(eng: &Engine, params: Option<Value>) -> Result<Value, RpcError
     if p.client_msg_id.is_empty() {
         return Err(RpcError::invalid_params("client_msg_id must be non-empty"));
     }
-    let fingerprint = json!({"m": "msg.send", "to": p.to, "body": p.body}).to_string();
+    let fingerprint =
+        json!({"m": "msg.send", "to": p.to, "body": p.body, "ttl_ms": p.ttl_ms}).to_string();
     match eng.dedup_lookup(&p.client_msg_id, &fingerprint) {
         DedupHit::Replay(mut result) => {
             result
@@ -294,6 +295,7 @@ async fn msg_send(eng: &Engine, params: Option<Value>) -> Result<Value, RpcError
             to: p.to.clone(),
             body: p.body.clone(),
             client_msg_id: p.client_msg_id.clone(),
+            ttl_ms: p.ttl_ms,
         })
         .await?;
     let msg_id = core_res
@@ -306,7 +308,13 @@ async fn msg_send(eng: &Engine, params: Option<Value>) -> Result<Value, RpcError
         .and_then(Value::as_str)
         .ok_or_else(|| RpcError::internal("core returned no chat_id"))?
         .to_string();
-    let result = json!({"msg_id": msg_id, "chat_id": chat_id, "state": "queued", "deduped": false});
+    let result = json!({
+        "msg_id": msg_id,
+        "chat_id": chat_id,
+        "state": "queued",
+        "deduped": false,
+        "expires_at": core_res.get("expires_at").cloned().unwrap_or(Value::Null),
+    });
     eng.dedup_insert(p.client_msg_id.clone(), fingerprint, result.clone());
     Ok(result)
 }
@@ -426,6 +434,12 @@ async fn chat_history(eng: &Engine, params: Option<Value>) -> Result<Value, RpcE
         check_prefix(b, &["cur:"], "before")?;
     }
     eng.core().chat_history(p).await
+}
+
+async fn chat_set_disappearing(eng: &Engine, params: Option<Value>) -> Result<Value, RpcError> {
+    let p: ChatSetDisappearingParams = parse_params(params)?;
+    check_prefix(&p.chat_id, &["chat:"], "chat_id")?;
+    eng.core().chat_set_disappearing(p).await
 }
 
 async fn contact_list(eng: &Engine, params: Option<Value>) -> Result<Value, RpcError> {
@@ -765,6 +779,7 @@ pub async fn dispatch_method(
         "msg.react" => msg_react(eng, params).await,
         "chat.list" => chat_list(eng, params).await,
         "chat.history" => chat_history(eng, params).await,
+        "chat.set_disappearing" => chat_set_disappearing(eng, params).await,
         "contact.list" => contact_list(eng, params).await,
         "contact.add" => contact_add(eng, params).await,
         "contact.accept" => contact_accept(eng, params).await,

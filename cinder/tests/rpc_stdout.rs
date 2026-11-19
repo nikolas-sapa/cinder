@@ -34,8 +34,10 @@ async fn p8_stdout_purity() {
     let (cli_read, mut cli_write) = tokio::io::split(cli);
 
     let core = Arc::new(MockCore::basic());
-    let mut cfg = EngineConfig::default();
-    cfg.send_queue_frames = 64;
+    let cfg = EngineConfig {
+        send_queue_frames: 64,
+        ..Default::default()
+    };
     let engine = Engine::new(core.clone(), cfg);
     core.attach(engine.events.clone());
     let task = tokio::spawn(serve_connection(

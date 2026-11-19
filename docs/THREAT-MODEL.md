@@ -46,7 +46,7 @@ surface.
 
 | Asset | Where it lives | Primary protection |
 |---|---|---|
-| Static identity private key | OS keyring (`keyring` crate); fallback: age-encrypted file, `0600`/`0700`, atomic write, passphrase via TTY only (never argv/env) | OS credential store or age passphrase; `secrecy`/`zeroize` in memory; `mlockall` + `RLIMIT_CORE=0` best-effort |
+| Static identity private key | OS keyring (`keyring` crate); on macOS every read is preceded by an app-level `LAContext` user-presence check (Touch ID / login password); fallback: age-encrypted file, `0600`/`0700`, atomic write, passphrase via TTY only (never argv/env), ≥12 chars + ≥2 classes on new passphrases | OS credential store + LAContext gate (macOS), or age passphrase; `secrecy`/`zeroize` in memory; `mlockall` + `RLIMIT_CORE=0` best-effort |
 | Noise session keys (cipher states, chaining key, stored ephemerals) | Process memory only; `TransportState` is never serialized | In-memory only + `zeroize`; session death → resend over a *new* handshake |
 | Message plaintext | 8KiB cap; padded to next power-of-2 ≥256B before encrypt; at rest in SQLite via `rusqlite` + bundled `sqlcipher` | ChaChaPoly AEAD in transit; sqlcipher at rest |
 | Contact graph | Client-side `contacts.json` + relay-observable mailbox pairings | HMAC-SHA256 (keyed by `HKDF(static_secret)`) on the file; **only partially hidden from the relay — see §4** |
@@ -228,13 +228,31 @@ machine running `cinder`/`cinder daemon`.
 
 - Static key at rest: OS keyring primary; age-encrypted file fallback
   (dir `0700`, file `0600`, atomic write). Passphrase entry is TTY-only — never
-  argv, never env (both are scrapable via `/proc` and `ps`).
+  argv, never env (both are scrapable via `/proc` and `ps`); new
+  passphrases must be ≥12 chars spanning ≥2 character classes
+  (create/change only, never retroactive).
+- **macOS user-presence gate** (`cinder/src/presence.rs`): before any
+  keychain access, `LAContext::evaluatePolicy(DeviceOwnerAuthentication)`
+  requires Touch ID or the login password — once per process start.
+  Denial/cancel/timeout aborts startup; a context where no UI is possible
+  (`LAErrorNotInteractive`) degrades to the ungated path so headless/CI
+  keeps working. This is *app-level*: the preferred
+  `kSecAttrAccessControl` on the item needs the `keychain-access-groups`
+  entitlement, impossible for unsigned `cargo install` binaries
+  (`errSecMissingEntitlement`, verified). What it stops: a casual user at
+  an unlocked session running `cinder tui`/`rpc`/`id` and thereby reading
+  history or sending as you. What it does **not** stop: same-uid malware
+  reading the raw item through other tooling (the item's own keychain
+  ACL still prompts a human first), patching the check out of the
+  binary, or driving the socket of an already-running core — a live
+  unlocked process stays fully usable by your uid.
 - In memory: `secrecy`/`zeroize` on key material; `TransportState` never
   serialized to disk; `RLIMIT_CORE=0` (no core dumps), `PR_SET_DUMPABLE`
   on Linux (blocks ptrace from non-parent processes), best-effort
-  `mlockall` (limits key pages reaching swap). All in the single
-  `#[allow(unsafe_code)]` island `cinder/src/hardening.rs`; everything else
-  is `#![forbid(unsafe_code)]` / `#![deny(unsafe_code)]`.
+  `mlockall` (limits key pages reaching swap). All in the
+  `#[allow(unsafe_code)]` islands `cinder/src/hardening.rs` and
+  `cinder/src/presence.rs` (macOS only, LAContext bindings); everything
+  else is `#![forbid(unsafe_code)]` / `#![deny(unsafe_code)]`.
 - On-path tampering of `contacts.json`: HMAC-SHA256 keyed by
   `HKDF(static_secret)`, fail-closed on mismatch — malware with file
   write access but no keyring access cannot forge contacts.
@@ -302,6 +320,7 @@ you.
 | **IP ↔ peer-id binding vs. relay** | ❌ | Inherent to a direct TCP hub; no Tor/mix layer |
 | **Global passive adversary flow correlation** | ❌ | Buckets + no constant-rate shaping; stated plainly, not mitigated |
 | **Endpoint / root compromise** | ❌ | Keyring+age+hardening reduce leakage; root wins |
+| **Interactive misuse of an unlocked session (macOS)** | ⚠️ partial | LAContext user-presence check gates every `cinder` start before keychain access — Touch ID or login password. App-level only: item-level `kSecAttrAccessControl` needs an entitlement unsigned builds lack; a live unlocked process and same-uid tooling remain exposed |
 | **Post-compromise security (new keys heal a stolen session)** | ❌ | rekey-lite is not a ratchet — §5 |
 | **Per-message forward secrecy within a key window** | ❌ | One cipher key covers the whole rekey window |
 | **Formal deniability** | ❌ | No signatures (repudiation is plausible), but we make no deniability *claim* — peer-id pinning means both parties know exactly who they talked to |
@@ -309,6 +328,8 @@ you.
 | **Relay availability guarantees** | ❌ | Your relay can starve you; gaps are surfaced, not prevented |
 | **Unverified-contact MITM** | ⚠️ partial | Pin works only if the link was authentic; SAS closes it |
 | **Malicious-agent actions** | ⚠️ partial | Same-uid bound + schema hygiene only; full user capability by design |
+| **Disappearing messages vs. honest-client retention** | ⚠️ partial | `expires_at` rides inside the E2E payload (relay-invisible); each endpoint's sweep tombstones the row, clears the body, and drops it from history/previews — reduces at-rest exposure on both sides' stores and shrinks relay-mailbox dwell time. Enforced by each endpoint's own clock on its own store |
+| **Disappearing messages vs. the peer** | ❌ | A modified client can retain, log, screenshot, or forward a body before/without honoring the deadline. The feature is an honest-client retention contract, **not** cryptographic erasure — treat TTL'd content as fully readable by the recipient |
 
 ---
 
@@ -409,6 +430,16 @@ RUSTSEC-2024-0344 (the dalek timing-signal advisory).
    `cinder://<pubkey>@<relay>` path carries no rendezvous token; anyone
    who learns your pubkey+relay can force a `pending_in` request. Gated
    by accept/decline and relay rate limits, nothing more (PROTOCOL §7).
+10. **Disappearing messages are client-honored.** The `expires_at` deadline
+    travels inside the encrypted payload and is enforced by each endpoint's
+    sweep — it reduces honest-client retention and relay/store exposure,
+    but a malicious peer keeps every body it received. Not retroactive on
+    backups/exports/screenshots, not synchronized with the peer's deletion,
+    and local per-chat defaults are local-only in v1 (never synced, the
+    peer's own default is unaffected). Accepted: the honest-client case is
+    the common one, and the alternative (key-erasure schemes) does not
+    survive the peer boundary anyway — but users must read it as a
+    *tidiness* property, not secrecy against recipients.
 
 ---
 

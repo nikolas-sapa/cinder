@@ -61,8 +61,10 @@ async fn p5_subscribe_replays_since() {
 // log still holds. Silent omission is a protocol violation.
 #[tokio::test]
 async fn p6_gap_marker_on_expiry() {
-    let mut cfg = EngineConfig::default();
-    cfg.replay_log_max_events = 4;
+    let cfg = EngineConfig {
+        replay_log_max_events: 4,
+        ..Default::default()
+    };
     let mut h = harness_with(cfg);
     hello(&mut h).await;
     emit_msgs(&h, 10); // retained: seqs 7,8,9,10
@@ -220,15 +222,17 @@ async fn unsubscribe_stops_and_resume_works() {
 // killed; other clients are untouched. Never unbounded, never silent.
 #[tokio::test]
 async fn queue_overflow_kills_only_that_conn() {
-    let mut cfg = EngineConfig::default();
-    cfg.send_queue_frames = 4;
+    let cfg = EngineConfig {
+        send_queue_frames: 4,
+        ..Default::default()
+    };
     let mut h = harness_with(cfg);
     hello(&mut h).await;
     call(&mut h, 1, "events.subscribe", json!({})).await;
     frame(&mut h.rx).await; // backlog fills slot 1
 
     // second client stays healthy
-    let (mut sess2, mut rx2) = h.engine.connect(Transport::Stdio);
+    let (sess2, mut rx2) = h.engine.connect(Transport::Stdio);
     let mut h2sess = sess2;
     let _ = &mut h2sess;
     h2sess.handle_line(b"{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"session.hello\",\"params\":{\"protocol_version\":1}}").await;
@@ -244,8 +248,10 @@ async fn queue_overflow_kills_only_that_conn() {
 // the queue as it drains (send().await), and live events buffer meanwhile.
 #[tokio::test]
 async fn large_replay_streams_through_bounded_queue() {
-    let mut cfg = EngineConfig::default();
-    cfg.send_queue_frames = 4;
+    let cfg = EngineConfig {
+        send_queue_frames: 4,
+        ..Default::default()
+    };
     let mut h = harness_with(cfg);
     hello(&mut h).await;
     emit_msgs(&h, 12);
@@ -271,8 +277,10 @@ async fn large_replay_streams_through_bounded_queue() {
 // Events emitted DURING a replay arrive after the backlog, in seq order.
 #[tokio::test]
 async fn live_events_during_replay_buffer_behind_backlog() {
-    let mut cfg = EngineConfig::default();
-    cfg.send_queue_frames = 8;
+    let cfg = EngineConfig {
+        send_queue_frames: 8,
+        ..Default::default()
+    };
     let mut h = harness_with(cfg);
     hello(&mut h).await;
     emit_msgs(&h, 5);

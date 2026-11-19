@@ -93,6 +93,7 @@ pub fn help_lines() -> Vec<Line<'static>> {
         ("/verify [sas]", "mark contact verified"),
         ("/finger", "show peer fingerprint + SAS"),
         ("/clear", "clear draft"),
+        ("/ttl <s|off>", "local disappearing default"),
         ("/status", "connection info"),
         ("/next", "next unread"),
         ("/quit", "quit"),

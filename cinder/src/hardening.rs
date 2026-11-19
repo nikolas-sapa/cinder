@@ -21,7 +21,7 @@ pub fn apply() {
             tracing::warn!("hardening: mlockall failed (insufficient limit?)");
         }
     }
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "android"))]
     {
         // Belt-and-suspenders vs ptrace/dumpable dumps.
         if unsafe { libc::prctl(libc::PR_SET_DUMPABLE, 0, 0, 0, 0) } != 0 {

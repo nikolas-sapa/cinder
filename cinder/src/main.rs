@@ -3,6 +3,9 @@
 mod core;
 #[allow(unsafe_code)]
 mod hardening;
+#[cfg(target_os = "macos")]
+#[allow(unsafe_code)]
+mod presence;
 mod rpc;
 mod store;
 mod tui;
@@ -117,9 +120,38 @@ async fn load_identity(dir: &Path) -> Result<Identity> {
         return Identity::generate().context("identity generate");
     }
     let dir = dir.to_path_buf();
-    tokio::task::spawn_blocking(move || Identity::load_or_create(&dir))
-        .await?
-        .context("identity load_or_create")
+    tokio::task::spawn_blocking(move || -> Result<Identity> {
+        keychain_permitted()?;
+        Identity::load_or_create(&dir).context("identity load_or_create")
+    })
+    .await?
+}
+
+/// macOS: require user presence (Touch ID, or the login password as
+/// fallback) before the OS keychain may be consulted — once per process
+/// start. Denial/cancel/timeout is fatal: no silent path around the
+/// prompt. When the LA API can't prompt at all (headless, CI, SSH) the
+/// gate is inert and the existing keyring→age fallback chain applies.
+/// Skipped entirely under `CINDER_KEYSTORE=age` — no keyring use, no
+/// prompt. Other platforms: no-op, keyring already has no presence gate.
+#[cfg(target_os = "macos")]
+fn keychain_permitted() -> Result<()> {
+    if std::env::var("CINDER_KEYSTORE").ok().as_deref() == Some("age") {
+        return Ok(());
+    }
+    match presence::verify_user_presence() {
+        presence::Presence::Authenticated | presence::Presence::Unavailable => Ok(()),
+        presence::Presence::Denied => anyhow::bail!(
+            "user-presence check failed or was cancelled; \
+             cannot unlock the keychain identity \
+             (CINDER_KEYSTORE=age uses the passphrase store instead)"
+        ),
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn keychain_permitted() -> Result<()> {
+    Ok(())
 }
 
 /// Relay selection: `--relay` > `CINDER_RELAY` > persisted last-good address

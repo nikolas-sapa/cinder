@@ -1,3 +1,5 @@
+#![allow(dead_code)] // #[path] includes expose items other tests use
+
 #[path = "../src/store.rs"]
 mod store;
 
@@ -7,6 +9,13 @@ use tempfile::TempDir;
 
 const SECRET: [u8; 32] = [0x42; 32];
 const PEER: [u8; 32] = [0x07; 32];
+
+fn now_ms() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as i64
+}
 
 fn open(dir: &TempDir) -> Store {
     Store::open(dir.path(), &SECRET).unwrap()
@@ -19,9 +28,13 @@ fn msg(msg_id: &str, chat_id: &str, dir: Dir, body: &str, ts: i64) -> NewMessage
         dir,
         kind: MsgKind::Text,
         body: body.to_string(),
-        state: (dir == Dir::Out).then_some(MsgState::Queued),
+        state: match dir {
+            Dir::Out => Some(MsgState::Queued),
+            Dir::In => Some(MsgState::Delivered),
+        },
         client_msg_id: None,
         ts,
+        expires_at: None,
     }
 }
 
@@ -373,4 +386,210 @@ fn fts_search() {
         .iter()
         .all(|m| m.chat_id == "chat:a"));
     assert!(s.search("nonexistent", None, 10).unwrap().is_empty());
+}
+
+#[test]
+fn expire_due_tombstones_and_unwinds_unread() {
+    let dir = TempDir::new().unwrap();
+    let s = open(&dir);
+    s.upsert_chat("chat:a", &PEER, None, false).unwrap();
+    let now = now_ms();
+
+    let mut dying = msg("msg:ephem", "chat:a", Dir::In, "vanish", now);
+    dying.expires_at = Some(now + 1_000);
+    s.insert_message(&dying).unwrap();
+    let mut live = msg("msg:keep", "chat:a", Dir::In, "stay", now);
+    live.expires_at = Some(now + 60_000);
+    s.insert_message(&live).unwrap();
+    s.insert_message(&msg("msg:plain", "chat:a", Dir::In, "no ttl", now))
+        .unwrap();
+    // one outbound row with a deadline too — sweep tombstones both dirs
+    let mut out = msg("msg:out", "chat:a", Dir::Out, "mine", now);
+    out.expires_at = Some(now + 1_000);
+    s.insert_message(&out).unwrap();
+
+    // before the deadline: both expiring rows visible with their deadline
+    let (page, _) = s.window("chat:a", None, 10).unwrap();
+    assert_eq!(page.len(), 4);
+    let dying_row = page.iter().find(|m| m.msg_id == "msg:ephem").unwrap();
+    assert_eq!(dying_row.expires_at, Some(now + 1_000));
+    assert!(!dying_row.deleted);
+    assert!(s.expire_due(now + 999).unwrap().is_empty());
+
+    // past the deadline: sweep tombstones + unwinds the unread inbound
+    let gone = s.expire_due(now + 1_000).unwrap();
+    assert_eq!(gone.len(), 2);
+    assert!(gone.contains(&("chat:a".to_string(), "msg:ephem".to_string())));
+    assert!(gone.contains(&("chat:a".to_string(), "msg:out".to_string())));
+
+    // audit: the row survives as a tombstone with body cleared, deadline kept;
+    // both non-terminal states (delivered in, queued out) transition + log
+    let t = s.get_message("msg:ephem").unwrap().unwrap();
+    assert!(t.deleted);
+    assert_eq!(t.body, "");
+    assert_eq!(t.expires_at, Some(now + 1_000));
+    assert_eq!(t.state, Some(MsgState::Expired));
+    let t = s.get_message("msg:out").unwrap().unwrap();
+    assert_eq!(t.state, Some(MsgState::Expired));
+    for mid in ["msg:ephem", "msg:out"] {
+        let hist = s.state_history(mid).unwrap();
+        assert_eq!(
+            hist.iter().map(|(st, _)| *st).collect::<Vec<_>>(),
+            vec![MsgState::Expired]
+        );
+    }
+
+    // unread: 3 inbound arrived, the expiring one was still unread → back to 2
+    let chats = s.list_chats_sorted(10).unwrap();
+    assert_eq!(chats[0].unread, 2);
+
+    // second sweep is a no-op — tombstones don't re-emit
+    assert!(s.expire_due(now + 1_000).unwrap().is_empty());
+}
+
+#[test]
+fn window_excludes_expired_rows() {
+    let dir = TempDir::new().unwrap();
+    let s = open(&dir);
+    s.upsert_chat("chat:a", &PEER, None, false).unwrap();
+    let now = now_ms();
+
+    let mut past = msg("msg:gone", "chat:a", Dir::In, "too late", now - 10_000);
+    past.expires_at = Some(now - 5_000); // lapsed but not yet swept
+    s.insert_message(&past).unwrap();
+    let mut fut = msg("msg:here", "chat:a", Dir::In, "still alive", now - 1_000);
+    fut.expires_at = Some(now + 60_000);
+    s.insert_message(&fut).unwrap();
+    s.insert_message(&msg("msg:plain", "chat:a", Dir::In, "forever", now))
+        .unwrap();
+
+    // history hides lapsed rows even before the sweep tombstones them
+    let (page, _) = s.window("chat:a", None, 10).unwrap();
+    let ids: Vec<&str> = page.iter().map(|m| m.msg_id.as_str()).collect();
+    assert_eq!(ids, vec!["msg:plain", "msg:here"]);
+
+    // chat.list's last_message skips the lapsed row too
+    let chats = s.list_chats_sorted(10).unwrap();
+    assert_eq!(chats[0].last_message.as_ref().unwrap().msg_id, "msg:plain");
+}
+
+#[test]
+fn born_expired_never_displays() {
+    let dir = TempDir::new().unwrap();
+    let s = open(&dir);
+    s.upsert_chat("chat:a", &PEER, None, false).unwrap();
+    let now = now_ms();
+
+    // receiver path: deadline already passed when the frame arrived —
+    // persisted as a tombstone for audit, never readable, never unread.
+    let mut late = msg("msg:late", "chat:a", Dir::In, "secret", now - 2_000);
+    late.expires_at = Some(now - 1_000);
+    s.insert_message(&late).unwrap();
+
+    let m = s.get_message("msg:late").unwrap().unwrap();
+    assert!(m.deleted);
+    assert_eq!(m.body, "");
+    assert_eq!(m.state, Some(MsgState::Expired));
+    assert_eq!(m.expires_at, Some(now - 1_000));
+
+    let (page, _) = s.window("chat:a", None, 10).unwrap();
+    assert!(page.is_empty(), "born-expired must never render in history");
+    let chats = s.list_chats_sorted(10).unwrap();
+    assert_eq!(chats[0].unread, 0, "born-expired never bumps unread");
+}
+
+#[test]
+fn v1_to_v2_migration_preserves_rows() {
+    let dir = TempDir::new().unwrap();
+    // Build a v1-shaped store by hand: same SQLCipher key derivation, the
+    // pre-v2 DDL, one chat + one message. Store::open then applies v2.
+    {
+        let hk = hkdf::Hkdf::<sha2::Sha256>::new(None, &SECRET);
+        let mut okm = [0u8; 32];
+        hk.expand(b"cinder-store-v1", &mut okm).unwrap();
+        let key_hex = data_encoding::HEXLOWER.encode(&okm);
+        let conn = rusqlite::Connection::open(dir.path().join("cinder.db")).unwrap();
+        conn.execute_batch(&format!(
+            "PRAGMA key = \"x'{key_hex}'\";
+             CREATE TABLE schema_migrations(
+                version INTEGER PRIMARY KEY, applied_at INTEGER NOT NULL);
+             INSERT INTO schema_migrations VALUES(1, 0);
+             CREATE TABLE chats(
+                chat_id TEXT PRIMARY KEY, peer_id BLOB UNIQUE NOT NULL, title TEXT,
+                created_at INTEGER NOT NULL, last_activity INTEGER NOT NULL,
+                unread INTEGER NOT NULL DEFAULT 0, verified INTEGER NOT NULL DEFAULT 0,
+                read_upto INTEGER NOT NULL DEFAULT 0);
+             CREATE TABLE messages(
+                msg_id TEXT PRIMARY KEY, chat_id TEXT NOT NULL,
+                dir TEXT NOT NULL CHECK(dir IN('in','out')), kind TEXT NOT NULL,
+                body TEXT NOT NULL DEFAULT '', state TEXT, client_msg_id TEXT,
+                ts INTEGER NOT NULL, edited_at INTEGER,
+                revision INTEGER NOT NULL DEFAULT 0, deleted INTEGER NOT NULL DEFAULT 0);
+             CREATE TABLE reactions(
+                msg_id TEXT NOT NULL, emoji TEXT NOT NULL, reactor BLOB NOT NULL,
+                ts INTEGER NOT NULL, PRIMARY KEY(msg_id, emoji, reactor));"
+        ))
+        .unwrap();
+        conn.execute(
+            "INSERT INTO chats VALUES('chat:a', ?1, NULL, 0, 0, 1, 0, 0)",
+            rusqlite::params![PEER.as_slice()],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO messages(msg_id, chat_id, dir, kind, body, state, ts)
+             VALUES('msg:old', 'chat:a', 'in', 'text', 'pre-migration', 'delivered', 42)",
+            [],
+        )
+        .unwrap();
+        conn.pragma_update(None, "user_version", 1).unwrap();
+    }
+
+    let s = open(&dir);
+    // v2 columns landed and the pre-migration rows survived untouched
+    let chats = s.list_chats_sorted(10).unwrap();
+    assert_eq!(chats.len(), 1);
+    assert_eq!(chats[0].disappear_ttl_ms, 0);
+    assert_eq!(chats[0].unread, 1);
+    let m = s.get_message("msg:old").unwrap().unwrap();
+    assert_eq!(m.body, "pre-migration");
+    assert_eq!(m.expires_at, None);
+    let (page, _) = s.window("chat:a", None, 10).unwrap();
+    assert_eq!(page.len(), 1);
+
+    // migrated db takes v2 features: chat default + per-message deadlines
+    s.set_disappearing("chat:a", 5_000).unwrap();
+    assert_eq!(s.disappearing_ttl("chat:a").unwrap(), Some(5_000));
+    let mut eph = msg("msg:new", "chat:a", Dir::In, "post-migration", now_ms());
+    eph.expires_at = Some(now_ms() + 60_000);
+    s.insert_message(&eph).unwrap();
+    assert_eq!(
+        s.get_message("msg:new").unwrap().unwrap().expires_at,
+        eph.expires_at
+    );
+}
+
+#[test]
+fn chat_disappearing_default_roundtrip() {
+    let dir = TempDir::new().unwrap();
+    let s = open(&dir);
+    s.upsert_chat("chat:a", &PEER, None, false).unwrap();
+
+    assert_eq!(s.disappearing_ttl("chat:a").unwrap(), None);
+    assert_eq!(s.list_chats_sorted(10).unwrap()[0].disappear_ttl_ms, 0);
+
+    s.set_disappearing("chat:a", 30_000).unwrap();
+    assert_eq!(s.disappearing_ttl("chat:a").unwrap(), Some(30_000));
+    assert_eq!(s.list_chats_sorted(10).unwrap()[0].disappear_ttl_ms, 30_000);
+
+    // ttl 0 disables; upsert_chat never stomps the setting
+    s.upsert_chat("chat:a", &PEER, Some("alpha"), false)
+        .unwrap();
+    assert_eq!(s.disappearing_ttl("chat:a").unwrap(), Some(30_000));
+    s.set_disappearing("chat:a", 0).unwrap();
+    assert_eq!(s.disappearing_ttl("chat:a").unwrap(), None);
+
+    assert!(matches!(
+        s.set_disappearing("chat:missing", 1),
+        Err(StoreError::NotFound(_))
+    ));
 }

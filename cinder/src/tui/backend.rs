@@ -51,6 +51,8 @@ pub struct Message {
     pub text: String,
     pub state: MsgState,
     pub ts: i64,
+    /// unix-ms deadline for a disappearing message; `None` never expires.
+    pub expires_at: Option<i64>,
 }
 
 #[derive(Debug, Clone)]
@@ -64,6 +66,8 @@ pub struct HistoryPage {
 pub struct SendAck {
     pub msg_id: String,
     pub client_msg_id: String,
+    /// unix-ms deadline when the send carried a TTL; `None` otherwise.
+    pub expires_at: Option<i64>,
 }
 
 #[derive(Debug, Clone)]
@@ -74,6 +78,11 @@ pub enum Event {
         client_msg_id: String,
         chat_id: String,
         state: MsgState,
+    },
+    /// A disappearing message's deadline lapsed; drop it from the buffer.
+    MsgExpired {
+        chat_id: String,
+        msg_id: String,
     },
     ContactConnected {
         contact_id: String,
@@ -105,6 +114,8 @@ pub trait Backend {
         limit: usize,
     ) -> Result<HistoryPage>;
     async fn send(&mut self, chat_id: &str, body: &str) -> Result<SendAck>;
+    /// Set the local per-chat disappearing default (ms); `0` disables.
+    async fn set_disappearing(&mut self, chat_id: &str, ttl_ms: u64) -> Result<()>;
     async fn add_contact(&mut self, uri: &str) -> Result<String>;
     async fn verify_contact(&mut self, contact_id: &str, sas: &str) -> Result<()>;
     async fn sas_hint(&mut self, contact_id: &str) -> Result<String>;

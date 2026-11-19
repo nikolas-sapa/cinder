@@ -1,3 +1,5 @@
+#![allow(dead_code)] // #[path] includes expose items other tests use
+
 //! End-to-end: real relay, real Core, real Noise — plus a wire tap proving
 //! the relay never sees plaintext, and a full `cinder rpc` subprocess
 //! round-trip.
@@ -24,7 +26,9 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 
 use crate::core::{contact_str, Core, MetaState};
-use crate::rpc::core::{ChatHistoryParams, CinderCore, ContactIdParams, MsgSendParams};
+use crate::rpc::core::{
+    ChatHistoryParams, ChatSetDisappearingParams, CinderCore, ContactIdParams, MsgSendParams,
+};
 
 const CONNECT_WAIT: Duration = Duration::from_secs(15);
 const HANDSHAKE_WAIT: Duration = Duration::from_secs(20);
@@ -140,6 +144,26 @@ async fn wait_for_body(core: &Arc<Core>, chat_id: &str, text: &str, dur: Duratio
     panic!("message {text:?} never arrived in {chat_id}");
 }
 
+async fn wait_for<T>(mut f: impl FnMut() -> Option<T>, dur: Duration, what: &str) -> T {
+    let step = Duration::from_millis(100);
+    let mut waited = Duration::ZERO;
+    while waited < dur {
+        if let Some(t) = f() {
+            return t;
+        }
+        tokio::time::sleep(step).await;
+        waited += step;
+    }
+    panic!("timed out waiting for {what}");
+}
+
+fn now_ms() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as i64
+}
+
 // ---------------------------------------------------------------------------
 // 1. in-process round-trip: two Cores, one relay, encrypted send both ways.
 // ---------------------------------------------------------------------------
@@ -158,6 +182,7 @@ async fn two_cores_roundtrip_via_relay() {
             to: contact_str(&peer_a),
             body: marker.clone(),
             client_msg_id: "e2e-cmid-1".into(),
+            ttl_ms: None,
         })
         .await
         .expect("msg.send");
@@ -174,6 +199,7 @@ async fn two_cores_roundtrip_via_relay() {
         to: contact_str(&peer_b),
         body: reply.into(),
         client_msg_id: "e2e-cmid-2".into(),
+        ttl_ms: None,
     })
     .await
     .expect("msg.send reply");
@@ -274,6 +300,7 @@ async fn relay_never_sees_plaintext() {
         to: contact_str(&peer_a),
         body: marker.into(),
         client_msg_id: "e2e-tap-1".into(),
+        ttl_ms: None,
     })
     .await
     .expect("msg.send");
@@ -352,7 +379,7 @@ impl RpcChild {
     /// Non-matching frames are parked in `backlog` so event frames consumed
     /// while awaiting a response stay visible to later waits.
     fn wait_for(&mut self, pred: impl Fn(&Value) -> bool, dur: Duration) -> Value {
-        if let Some(i) = self.backlog.iter().position(|v| pred(v)) {
+        if let Some(i) = self.backlog.iter().position(&pred) {
             return self.backlog.remove(i).unwrap();
         }
         let deadline = std::time::Instant::now() + dur;
@@ -451,4 +478,161 @@ fn rpc_subprocess_roundtrip() {
         evt["params"]["message"]["body"]["trusted"], false,
         "inbound body must be untrusted"
     );
+}
+
+// ---------------------------------------------------------------------------
+// 4. disappearing messages: the wire TTL rides inside the encrypted payload —
+//    the receiver persists the deadline, the ~1s sweep tombstones it, and
+//    msg.expired lands in the event log while history drops the body.
+// ---------------------------------------------------------------------------
+#[tokio::test(flavor = "multi_thread", worker_threads = 8)]
+async fn disappearing_roundtrip_and_sweep() {
+    init_logs();
+    let relay = spawn_relay().await;
+    let dir_a = tempfile::tempdir().unwrap();
+    let dir_b = tempfile::tempdir().unwrap();
+    let (a, b) = paired(relay, dir_a.path(), dir_b.path()).await;
+    // Production wires SqliteReplayLog → EventManager → attach_sink in
+    // build_engine; the in-process open does none of that, so attach it here
+    // to observe msg.expired in the persisted event log.
+    let log = crate::core::SqliteReplayLog::open(a.store().clone(), 16_384)
+        .await
+        .unwrap();
+    a.attach_sink(Arc::new(crate::rpc::events::EventManager::new(
+        Box::new(log),
+        1024,
+    )));
+
+    let peer_a = a.identity().peer_id();
+    let peer_b = b.identity().peer_id();
+    let chat_on_a = crate::core::chat_str(&peer_b);
+    let marker = format!("e2e-vanish-{}", std::process::id());
+    let sent_at = now_ms();
+
+    let r = b
+        .msg_send(MsgSendParams {
+            to: contact_str(&peer_a),
+            body: marker.clone(),
+            client_msg_id: "e2e-ttl-1".into(),
+            ttl_ms: Some(1_500),
+        })
+        .await
+        .expect("msg.send");
+    let msg_id = r["msg_id"].as_str().unwrap().to_string();
+    assert!(
+        r["expires_at"].is_string(),
+        "send result must report its deadline"
+    );
+
+    // Live on receipt: the row lands with the peer-supplied deadline.
+    let m = wait_for_body(&a, &chat_on_a, &marker, DELIVERY_WAIT).await;
+    let exp = m["expires_at_ms"]
+        .as_i64()
+        .expect("receiver must persist expires_at_ms");
+    assert!(exp > sent_at, "deadline must be in the sender's future");
+
+    // Past the deadline the sweep tombstones it: msg.expired in the event
+    // log, body cleared, deadline retained for audit, history drops the row.
+    wait_for(
+        || {
+            a.store().events_since(0, 500).ok().and_then(|p| {
+                p.events
+                    .iter()
+                    .any(|e| e.kind == "msg.expired" && e.payload["msg_id"] == msg_id)
+                    .then_some(())
+            })
+        },
+        Duration::from_secs(15),
+        "msg.expired for the vanishing message",
+    )
+    .await;
+
+    let tomb = a.store().get_message(&msg_id).unwrap().unwrap();
+    assert!(
+        tomb.deleted && tomb.body.is_empty(),
+        "swept row is a tombstone"
+    );
+    assert_eq!(tomb.expires_at, Some(exp), "audit keeps the deadline");
+    let hist = a
+        .chat_history(ChatHistoryParams {
+            chat_id: chat_on_a.clone(),
+            before: None,
+            limit: Some(50),
+        })
+        .await
+        .unwrap();
+    assert!(
+        hist["messages"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|m| m["msg_id"] != msg_id),
+        "expired message must not appear in history"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// 5. the per-chat default: chat.set_disappearing on the sender makes a bare
+//    msg.send inherit the TTL, while an explicit ttl_ms=0 still opts out.
+// ---------------------------------------------------------------------------
+#[tokio::test(flavor = "multi_thread", worker_threads = 8)]
+async fn disappearing_chat_default_applies() {
+    init_logs();
+    let relay = spawn_relay().await;
+    let dir_a = tempfile::tempdir().unwrap();
+    let dir_b = tempfile::tempdir().unwrap();
+    let (a, b) = paired(relay, dir_a.path(), dir_b.path()).await;
+
+    let peer_a = a.identity().peer_id();
+    let peer_b = b.identity().peer_id();
+    let chat_on_b = crate::core::chat_str(&peer_a);
+    let chat_on_a = crate::core::chat_str(&peer_b);
+
+    b.chat_set_disappearing(ChatSetDisappearingParams {
+        chat_id: chat_on_b.clone(),
+        ttl_ms: 300_000,
+    })
+    .await
+    .expect("chat.set_disappearing");
+
+    // No ttl_ms on the call → the chat default (5 min) applies end-to-end.
+    let marker = format!("e2e-ttl-default-{}", std::process::id());
+    let sent_at = now_ms();
+    let r = b
+        .msg_send(MsgSendParams {
+            to: contact_str(&peer_a),
+            body: marker.clone(),
+            client_msg_id: "e2e-ttl-2".into(),
+            ttl_ms: None,
+        })
+        .await
+        .expect("msg.send with chat default");
+    assert!(
+        r["expires_at"].is_string(),
+        "default TTL must produce a deadline"
+    );
+    let m = wait_for_body(&a, &chat_on_a, &marker, DELIVERY_WAIT).await;
+    let exp = m["expires_at_ms"].as_i64().unwrap();
+    assert!(
+        exp >= sent_at + 299_000 && exp <= sent_at + 301_000,
+        "receiver deadline must match the 5-min default, got {exp} (sent {sent_at})"
+    );
+
+    // Explicit ttl_ms=0 opts this one message out of the default.
+    let keep = format!("e2e-ttl-keep-{}", std::process::id());
+    let r = b
+        .msg_send(MsgSendParams {
+            to: contact_str(&peer_a),
+            body: keep.clone(),
+            client_msg_id: "e2e-ttl-3".into(),
+            ttl_ms: Some(0),
+        })
+        .await
+        .expect("msg.send ttl 0");
+    assert!(
+        r["expires_at"].is_null(),
+        "ttl 0 sends a non-expiring message"
+    );
+    let m = wait_for_body(&a, &chat_on_a, &keep, DELIVERY_WAIT).await;
+    assert!(m["expires_at_ms"].is_null());
 }

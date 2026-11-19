@@ -94,7 +94,7 @@ impl Filters {
                 return false;
             }
         }
-        if kind == "message.received" || kind == "msg_state" {
+        if matches!(kind, "message.received" | "msg_state" | "msg.expired") {
             if let Some(chats) = &self.chats {
                 return chat_id.map(|c| chats.contains(c)).unwrap_or(false);
             }

@@ -405,13 +405,18 @@ async fn deny_closes_every_lane() {
     )
     .await;
 
-    // contact.denied emitted.
-    assert!(
-        events_of(&b, "contact.denied")
-            .iter()
-            .any(|p| p["contact_id"] == contact_str(&peer_a)),
-        "contact.denied must emit"
-    );
+    // contact.denied emitted (poll: event_log persist is async).
+    wait_for(
+        || {
+            events_of(&b, "contact.denied")
+                .iter()
+                .any(|p| p["contact_id"] == contact_str(&peer_a))
+                .then_some(())
+        },
+        Duration::from_secs(10),
+        "contact.denied must emit",
+    )
+    .await;
 
     // Every write path refuses with peer_denied.
     let e = b
@@ -652,12 +657,19 @@ async fn chat_wipe_e2e_both_sides() {
         .await
         .unwrap();
     assert!(hist["messages"].as_array().unwrap().is_empty());
-    assert!(
-        events_of(&b, "chat.wiped")
-            .iter()
-            .any(|p| p["chat_id"] == chat_on_b && p["by"] == "local"),
-        "chat.wiped by:local must emit on B"
-    );
+    // The event lands in the mirror synchronously but reaches event_log via
+    // the persist task — poll rather than assert it landed already.
+    wait_for(
+        || {
+            events_of(&b, "chat.wiped")
+                .iter()
+                .any(|p| p["chat_id"] == chat_on_b && p["by"] == "local")
+                .then_some(())
+        },
+        Duration::from_secs(10),
+        "chat.wiped by:local must emit on B",
+    )
+    .await;
 
     // Remote: the ChatWipe frame lands on A and erases its copy identically.
     wait_for(

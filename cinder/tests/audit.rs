@@ -671,14 +671,16 @@ async fn audit_offline_queue_flush_on_return() {
     .await;
 
     // B returns: PeerStatus{online} kicks a handshake, the queue flushes,
-    // and the message lands.
+    // and the message lands. Extra slack: presence→handshake→flush→decrypt
+    // is a 5-hop async chain — starved CI runners (macos, 3 cores, dozens
+    // of concurrent test runtimes) can stretch it well past 45s.
     let b2 = reopen_core(dir_b.path(), relay, &blob_b).await;
     assert!(b2.wait_connected(CONNECT_WAIT).await);
     wait_for_body(
         &b2,
         &chat_str(&peer_a),
         &queued_body,
-        HANDSHAKE_WAIT + DELIVERY_WAIT,
+        HANDSHAKE_WAIT + DELIVERY_WAIT + Duration::from_secs(45),
     )
     .await;
     wait_for(

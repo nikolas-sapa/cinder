@@ -6,13 +6,37 @@ use ratatui::Frame;
 use unicode_width::UnicodeWidthStr;
 
 use super::app::{App, Overlay};
-use super::backend::{ConnState, Dir, Trust};
+use super::backend::{ConnState, Dir, FileMeta, Trust};
 use super::sanitize::sanitize;
 use super::widgets;
+use crate::xfer::{fmt_duration, fmt_size};
 
 pub fn fmt_hhmm(ts: i64) -> String {
     let t = ts.rem_euclid(86_400);
     format!("{:02}:{:02}", t / 3600, t % 3600 / 60)
+}
+
+/// `[file] name · size` / `[image] …` / `[voice m:ss]` — the peer-claimed
+/// name passes through the same sanitize pass as message text (§10).
+fn file_label(fm: &FileMeta) -> String {
+    let name = {
+        let n = sanitize(&fm.name);
+        if n.is_empty() {
+            "file.bin".to_string()
+        } else {
+            n
+        }
+    };
+    match fm.kind.as_str() {
+        "image" => format!("[image] {name} · {}", fmt_size(fm.size)),
+        "audio" => format!(
+            "[voice {}]",
+            fm.duration_ms
+                .map(fmt_duration)
+                .unwrap_or_else(|| "0:00".into())
+        ),
+        _ => format!("[file] {name} · {}", fmt_size(fm.size)),
+    }
 }
 
 pub fn wrap_text(s: &str, width: usize) -> Vec<String> {
@@ -107,6 +131,23 @@ pub fn draw(f: &mut Frame, app: &mut App) {
             let text: Vec<Line> = lines.iter().map(|l| Line::raw(l.clone())).collect();
             f.render_widget(Paragraph::new(Text::from(text)).block(block), rect);
         }
+        Some(Overlay::Files { lines }) => {
+            let w = lines
+                .iter()
+                .map(|l| UnicodeWidthStr::width(l.as_str()))
+                .max()
+                .unwrap_or(20)
+                .min(72) as u16
+                + 4;
+            let rect = widgets::centered(w.max(30), (lines.len() + 2) as u16, area);
+            f.render_widget(Clear, rect);
+            let block = Block::default()
+                .title(" files ")
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(Color::Cyan));
+            let text: Vec<Line> = lines.iter().map(|l| Line::raw(l.clone())).collect();
+            f.render_widget(Paragraph::new(Text::from(text)).block(block), rect);
+        }
         None => {}
     }
 }
@@ -186,7 +227,33 @@ fn draw_chat(f: &mut Frame, app: &mut App, area: Rect) {
                 chat_title(chat.display_name.as_deref(), &m.from)
             };
             let body_w = inner_w.saturating_sub(8).max(1);
-            let chunks = wrap_text(&sanitize(&m.text), body_w);
+            // kind:file anchors render the placeholder + live progress; the
+            // peer-claimed name goes through the same sanitize pass as text.
+            let body_text = match &m.file {
+                Some(fm) => {
+                    let mut t = file_label(fm);
+                    if let Some(p) = app.file_progress.get(&m.msg_id) {
+                        let pct = p.done.saturating_mul(100).checked_div(p.total).unwrap_or(0);
+                        t = match p.state.as_str() {
+                            "transferring" => format!("{t} · transferring {pct}%"),
+                            "verifying" => format!("{t} · verifying"),
+                            "complete" => format!("{t} · complete"),
+                            "offered" if m.dir == Dir::In => {
+                                format!("{t} · offered — /accept /decline")
+                            }
+                            s => format!("{t} · {s}"),
+                        };
+                        if let Some(r) = &p.reason {
+                            t = format!("{t} ({})", sanitize(r));
+                        }
+                    } else if m.dir == Dir::In {
+                        t = format!("{t} — /accept /decline");
+                    }
+                    t
+                }
+                None => sanitize(&m.text),
+            };
+            let chunks = wrap_text(&body_text, body_w);
             let name_color = if out {
                 Color::White
             } else {
@@ -403,6 +470,7 @@ mod tests {
                     state: MsgState::Delivered,
                     ts: 3600 * 14 + 3 * 60,
                     expires_at: None,
+                    file: None,
                 }],
                 has_more: false,
                 next_before: None,
@@ -452,6 +520,7 @@ mod tests {
                         state: MsgState::Delivered,
                         ts: 3600 * 14 + i as i64 * 60,
                         expires_at: if i == 2 { Some(9_999_999_999) } else { None },
+                        file: None,
                     })
                     .collect(),
                 has_more: false,

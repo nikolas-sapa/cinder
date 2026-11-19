@@ -12,6 +12,8 @@ mod rpc;
 mod store;
 #[path = "../src/tui/mod.rs"]
 mod tui;
+#[path = "../src/xfer.rs"]
+mod xfer;
 
 use std::io::{BufRead, BufReader, Write};
 use std::net::SocketAddr;
@@ -27,7 +29,8 @@ use tokio::net::{TcpListener, TcpStream};
 
 use crate::core::{contact_str, Core, MetaState};
 use crate::rpc::core::{
-    ChatHistoryParams, ChatSetDisappearingParams, CinderCore, ContactIdParams, MsgSendParams,
+    ChatHistoryParams, ChatSetDisappearingParams, CinderCore, ContactIdParams, FileIdParams,
+    FileSaveParams, FileSendParams, MsgSendParams,
 };
 
 const CONNECT_WAIT: Duration = Duration::from_secs(15);
@@ -635,4 +638,190 @@ async fn disappearing_chat_default_applies() {
     );
     let m = wait_for_body(&a, &chat_on_a, &keep, DELIVERY_WAIT).await;
     assert!(m["expires_at_ms"].is_null());
+}
+
+// ---------------------------------------------------------------------------
+// FT10: end-to-end encrypted file round-trip — path send, auto-accept,
+// chunked delivery, hash verification, save, byte equality.
+// ---------------------------------------------------------------------------
+#[tokio::test(flavor = "multi_thread", worker_threads = 8)]
+async fn file_roundtrip_via_relay() {
+    init_logs();
+    let relay = spawn_relay().await;
+    let dir_a = tempfile::tempdir().unwrap();
+    let dir_b = tempfile::tempdir().unwrap();
+    let (a, b) = paired(relay, dir_a.path(), dir_b.path()).await;
+
+    let payload: Vec<u8> = (0..150_000u32).map(|i| (i % 251) as u8).collect();
+    let src = dir_b.path().join("photo bin.dat");
+    std::fs::write(&src, &payload).unwrap();
+
+    let peer_a = a.identity().peer_id();
+    let sent = b
+        .file_send(FileSendParams {
+            to: contact_str(&peer_a),
+            path: Some(src.to_string_lossy().to_string()),
+            data: None,
+            name: Some("photo bin.dat".into()),
+            mime: None,
+            kind: None,
+            audio: None,
+            caption: Some("roundtrip".into()),
+            client_xfer_id: "ft10-x1".into(),
+        })
+        .await
+        .expect("file.send");
+    let fid = sent["file_id"].as_str().unwrap().to_string();
+    assert!(sent["msg_id"].as_str().unwrap().starts_with("msg:"));
+    assert_eq!(sent["state"], "offered");
+    assert!(sent["chunks"].as_u64().unwrap() >= 1);
+    assert_eq!(sent["bytes"], payload.len() as u64);
+
+    let peer_b = b.identity().peer_id();
+    let chat_on_a = crate::core::chat_str(&peer_b);
+
+    let done = wait_for(
+        || {
+            a.store()
+                .get_file(&fid)
+                .ok()
+                .flatten()
+                .filter(|r| r.state == "complete")
+        },
+        Duration::from_secs(60),
+        "inbound file completion",
+    )
+    .await;
+    assert_eq!(done.sha256, {
+        use sha2::{Digest, Sha256};
+        Sha256::digest(&payload).to_vec()
+    });
+
+    // Saved bytes identical; name sanitized.
+    let outdir = tempfile::tempdir().unwrap();
+    let saved = a
+        .file_save(FileSaveParams {
+            file_id: fid.clone(),
+            dir: Some(outdir.path().to_string_lossy().to_string()),
+            name: None,
+        })
+        .await
+        .expect("file.save");
+    let saved_path = std::path::PathBuf::from(saved["path"].as_str().unwrap());
+    assert_eq!(saved["bytes"], payload.len() as u64);
+    assert_eq!(std::fs::read(&saved_path).unwrap(), payload);
+    let canon_out = std::fs::canonicalize(outdir.path()).unwrap();
+    assert_eq!(saved_path.parent(), Some(canon_out.as_path()));
+
+    // file.info on the sender reports complete + correct sha256.
+    let info = b
+        .file_info(FileIdParams {
+            file_id: fid.clone(),
+        })
+        .await
+        .expect("file.info");
+    assert_eq!(info["state"], "complete");
+    assert_eq!(
+        data_encoding::BASE64
+            .decode(info["sha256"].as_str().unwrap().as_bytes())
+            .unwrap(),
+        {
+            use sha2::{Digest, Sha256};
+            Sha256::digest(&payload).to_vec()
+        }
+    );
+    // chat.history shows the file body, not raw text.
+    let hist = a
+        .chat_history(ChatHistoryParams {
+            chat_id: chat_on_a.clone(),
+            before: None,
+            limit: Some(20),
+        })
+        .await
+        .expect("chat.history");
+    let file_msg = hist["messages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|m| m["body"]["file"]["file_id"] == fid);
+    assert!(file_msg.is_some(), "anchor message must carry body.file");
+}
+
+// ---------------------------------------------------------------------------
+// FT15: relay blindness for file traffic — every byte of the transfer goes
+// through the tap; neither filename nor chunk plaintext may appear.
+// ---------------------------------------------------------------------------
+#[tokio::test(flavor = "multi_thread", worker_threads = 8)]
+async fn relay_never_sees_file_plaintext() {
+    init_logs();
+    let relay = spawn_relay().await;
+    let (tap, cap) = spawn_tap(relay).await;
+
+    // Prove the tap sees raw bytes (canary) before claiming blindness.
+    let canary = b"TAP-CANARY-ft15-0123456789";
+    {
+        let mut s = TcpStream::connect(tap).await.unwrap();
+        s.write_all(canary).await.unwrap();
+        s.shutdown().await.unwrap();
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        assert!(
+            cap.lock()
+                .unwrap()
+                .windows(canary.len())
+                .any(|w| w == canary.as_slice()),
+            "tap failed to capture a canary"
+        );
+    }
+
+    let dir_a = tempfile::tempdir().unwrap();
+    let dir_b = tempfile::tempdir().unwrap();
+    let (a, b) = paired(tap, dir_a.path(), dir_b.path()).await;
+
+    let content_marker = b"FT15-SECRET-CHUNK-PLAINTEXT-never-on-wire";
+    let name_marker = "FT15-SECRET-FILENAME.bin";
+    let mut payload = vec![0u8; 40_000];
+    payload[12345..12345 + content_marker.len()].copy_from_slice(content_marker);
+    let src = dir_b.path().join(name_marker);
+    std::fs::write(&src, &payload).unwrap();
+
+    let peer_a = a.identity().peer_id();
+    let sent = b
+        .file_send(FileSendParams {
+            to: contact_str(&peer_a),
+            path: Some(src.to_string_lossy().to_string()),
+            data: None,
+            name: Some(name_marker.into()),
+            mime: None,
+            kind: None,
+            audio: None,
+            caption: None,
+            client_xfer_id: "ft15-x1".into(),
+        })
+        .await
+        .expect("file.send");
+    let fid = sent["file_id"].as_str().unwrap().to_string();
+
+    // Drive the whole transfer, then inspect the capture.
+    wait_for(
+        || {
+            a.store()
+                .get_file(&fid)
+                .ok()
+                .flatten()
+                .filter(|r| r.state == "complete")
+        },
+        Duration::from_secs(60),
+        "ft15 completion",
+    )
+    .await;
+    tokio::time::sleep(Duration::from_millis(400)).await;
+
+    let seen = cap.lock().unwrap();
+    assert!(!seen.is_empty(), "tap captured nothing");
+    for marker in [name_marker.as_bytes(), &content_marker[..]] {
+        assert!(
+            !seen.windows(marker.len()).any(|w| w == marker),
+            "file plaintext leaked onto the wire"
+        );
+    }
 }

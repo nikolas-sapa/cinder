@@ -88,6 +88,52 @@ pub struct IdentVerifyParams {
     pub sas: String,
 }
 
+/// `file.send` — exactly one of `path` / `data` (base64). `kind` is
+/// `file` | `image` | `voice`; `voice` requires `audio`. `client_xfer_id`
+/// is the idempotency key, mirroring `client_msg_id`.
+#[derive(Debug, Deserialize)]
+pub struct FileSendParams {
+    pub to: String,
+    pub path: Option<String>,
+    pub data: Option<String>,
+    pub name: Option<String>,
+    pub mime: Option<String>,
+    pub kind: Option<String>,
+    pub audio: Option<AudioMetaParams>,
+    pub caption: Option<String>,
+    pub client_xfer_id: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct AudioMetaParams {
+    pub duration_ms: u32,
+    pub codec: String,
+    #[serde(default)]
+    pub sample_rate_hz: u32,
+    #[serde(default)]
+    pub channels: u8,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct FileIdParams {
+    pub file_id: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct FileListParams {
+    pub chat_id: Option<String>,
+    pub state: Option<String>,
+    pub limit: Option<u32>,
+    pub cursor: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct FileSaveParams {
+    pub file_id: String,
+    pub dir: Option<String>,
+    pub name: Option<String>,
+}
+
 /// Domain seam to the messenger core. One async call per RPC method; the
 /// engine owns session.hello / rpc.describe / events.* / shutdown.request
 /// but consults the core for identity, backlog counters, and shutdown.
@@ -122,6 +168,19 @@ pub trait CinderCore: Send + Sync {
 
     async fn ident_verify(&self, params: IdentVerifyParams) -> Result<Value, RpcError>;
 
+    /// `{file_id, msg_id, chat_id, state, chunks_total, deduped}` on
+    /// acceptance; the offer rides the existing outbound lane.
+    async fn file_send(&self, params: FileSendParams) -> Result<Value, RpcError>;
+    async fn file_accept(&self, params: FileIdParams) -> Result<Value, RpcError>;
+    async fn file_decline(&self, params: FileIdParams) -> Result<Value, RpcError>;
+    async fn file_cancel(&self, params: FileIdParams) -> Result<Value, RpcError>;
+    async fn file_info(&self, params: FileIdParams) -> Result<Value, RpcError>;
+    async fn file_list(&self, params: FileListParams) -> Result<Value, RpcError>;
+    async fn file_save(&self, params: FileSaveParams) -> Result<Value, RpcError>;
+    /// `{file_id, thumb_b64, mime}` — peer-controlled bytes; consumers MUST
+    /// decode under the same size guards as `xfer::make_thumb`.
+    async fn file_thumb(&self, params: FileIdParams) -> Result<Value, RpcError>;
+
     /// `{unread_chats, pending_contact_requests, queued_outbound}` for the
     /// session.backlog summary.
     async fn backlog_summary(&self) -> Result<Value, RpcError>;
@@ -139,6 +198,7 @@ pub const CORE_EVENT_KINDS: &[&str] = &[
     "contact.connected",
     "security.identity_changed",
     "security.verification_needed",
+    "file_state",
 ];
 
 /// Push channel the core uses to report domain events. Emission assigns the

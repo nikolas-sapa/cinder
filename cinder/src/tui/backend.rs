@@ -42,6 +42,18 @@ pub struct ChatSummary {
     pub last_message: Option<String>,
 }
 
+/// File-transfer metadata attached to a `kind:file` message — peer-claimed
+/// until the transfer completes.
+#[derive(Debug, Clone)]
+pub struct FileMeta {
+    pub file_id: String,
+    pub kind: String,
+    pub name: String,
+    pub size: u64,
+    /// Voice-note duration for the `[voice m:ss]` placeholder.
+    pub duration_ms: Option<u32>,
+}
+
 #[derive(Debug, Clone)]
 pub struct Message {
     pub msg_id: String,
@@ -53,6 +65,8 @@ pub struct Message {
     pub ts: i64,
     /// unix-ms deadline for a disappearing message; `None` never expires.
     pub expires_at: Option<i64>,
+    /// `Some` on `kind:file` messages — renders the file placeholder.
+    pub file: Option<FileMeta>,
 }
 
 #[derive(Debug, Clone)]
@@ -99,6 +113,16 @@ pub enum Event {
         contact_id: String,
         sas: String,
     },
+    /// Live transfer progress for the `[file] …` placeholders.
+    FileState {
+        file_id: String,
+        msg_id: String,
+        chat_id: String,
+        state: String,
+        bytes_done: u64,
+        bytes_total: u64,
+        reason: Option<String>,
+    },
     ConnChanged(ConnState),
 }
 
@@ -114,6 +138,16 @@ pub trait Backend {
         limit: usize,
     ) -> Result<HistoryPage>;
     async fn send(&mut self, chat_id: &str, body: &str) -> Result<SendAck>;
+    /// `file.send` shorthand for `/send` — `client_msg_id` in the ack is the
+    /// client_xfer_id used for the transfer.
+    async fn send_file(&mut self, chat_id: &str, path: &str) -> Result<SendAck>;
+    /// `file.save` for `/save`: returns the canonical saved path.
+    async fn file_save(&mut self, file_id: &str, dir: Option<String>) -> Result<String>;
+    /// `file.cancel` for `/cancel`.
+    async fn file_cancel(&mut self, file_id: &str) -> Result<()>;
+    /// `file.accept`/`file.decline` for inbound offers.
+    async fn file_accept(&mut self, file_id: &str) -> Result<()>;
+    async fn file_decline(&mut self, file_id: &str) -> Result<()>;
     /// Set the local per-chat disappearing default (ms); `0` disables.
     async fn set_disappearing(&mut self, chat_id: &str, ttl_ms: u64) -> Result<()>;
     async fn add_contact(&mut self, uri: &str) -> Result<String>;

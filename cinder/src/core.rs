@@ -5,7 +5,7 @@
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::net::SocketAddr;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, RwLock, Weak};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -33,13 +33,15 @@ use cinder_core::transport::{ClientEvent, Link, RelayTransport};
 
 use crate::rpc::core::{
     ChatHistoryParams, ChatListParams, ChatSetDisappearingParams, CinderCore, ContactAddParams,
-    ContactIdParams, ContactListParams, EventSink, IdentVerifyParams, InviteAcceptParams,
-    InviteCreateParams, MsgDeleteParams, MsgEditParams, MsgReactParams, MsgSendParams,
+    ContactIdParams, ContactListParams, EventSink, FileIdParams, FileListParams, FileSaveParams,
+    FileSendParams, IdentVerifyParams, InviteAcceptParams, InviteCreateParams, MsgDeleteParams,
+    MsgEditParams, MsgReactParams, MsgSendParams,
 };
 use crate::rpc::events::{EventRecord, ReplayLog};
 use crate::rpc::protocol::{ErrorKind, RpcError};
-use crate::store::{Dir, MsgKind, MsgState, NewMessage, Store, StoreError};
+use crate::store::{Dir, FileRow, MsgKind, MsgState, NewFile, NewMessage, Store, StoreError};
 use crate::tui::backend as tb;
+use crate::xfer::{self, AudioMeta, FileCancelReason, FileKind, FileState, XferCaps};
 
 const PENDING_OUT_CAP: usize = 64;
 const CMD_CHANNEL_CAP: usize = 256;
@@ -117,6 +119,29 @@ fn new_msg_id() -> String {
     format!("msg:{}", b32(HsId::random().as_bytes()))
 }
 
+fn new_file_id() -> ([u8; 32], String) {
+    let raw = *Token::random().as_bytes();
+    (raw, format!("file:{}", b32(&raw)))
+}
+
+fn file_id_str(raw: &[u8; 32]) -> String {
+    format!("file:{}", b32(raw))
+}
+
+fn file_id_raw(s: &str) -> Option<[u8; 32]> {
+    b32_decode_32(s.strip_prefix("file:")?)
+}
+
+/// Positioned read of one outbound chunk from the staged blob (pump lane).
+fn read_chunk_at(abs: &Path, offset: u64, len: usize) -> std::io::Result<Vec<u8>> {
+    use std::io::{Read, Seek, SeekFrom};
+    let mut f = std::fs::File::open(abs)?;
+    f.seek(SeekFrom::Start(offset))?;
+    let mut buf = vec![0u8; len];
+    f.read_exact(&mut buf)?;
+    Ok(buf)
+}
+
 fn new_invite_id() -> String {
     format!("inv:{}", b32(&HsId::random().as_bytes()[..8]))
 }
@@ -149,6 +174,7 @@ fn token_hash(t: &Token) -> TokenHash {
 /// serialized, then `Session::encrypt` pads it. The relay only ever sees the
 /// outer `Transport` frame.
 #[derive(Debug, Serialize, Deserialize)]
+#[allow(clippy::large_enum_variant)] // wire enum; FileOffer is metadata-heavy by design
 pub(crate) enum AppMsg {
     Text {
         msg_id: String,
@@ -177,6 +203,55 @@ pub(crate) enum AppMsg {
     /// In-band delivery acknowledgment (§11): flips sent->delivered.
     Ack {
         msg_ids: Vec<String>,
+    },
+    /// File/image/voice offer (docs/plans/files-images.md §3). The whole
+    /// serialized variant must fit the 8192 B plaintext bucket — senders
+    /// trim `thumb` when the budget would blow (DEVIATION: the spec's
+    /// 16 KiB thumb cap cannot coexist with the pad bucket, so the
+    /// effective thumb ceiling is the serialized-offer budget).
+    FileOffer {
+        file_id: [u8; 32],
+        fetch_token: [u8; 32],
+        name: String,
+        mime: String,
+        size: u64,
+        sha256: [u8; 32],
+        chunk_size: u32,
+        chunks_total: u32,
+        kind: FileKind,
+        thumb: Option<Vec<u8>>,
+        audio: Option<AudioMeta>,
+        caption: Option<String>,
+        /// Anchor chat message id (`msg:`) the transfer binds to.
+        reply_msg: String,
+    },
+    /// One chunk of file data — self-indexed, dup/reorder-tolerant.
+    FileChunk {
+        file_id: [u8; 32],
+        index: u32,
+        data: Vec<u8>,
+    },
+    /// Receiver progress: coalesced inclusive ranges of verified chunks.
+    FileHave {
+        file_id: [u8; 32],
+        ranges: Vec<(u32, u32)>,
+    },
+    /// Acceptance + resume ranges in one frame.
+    FileAccept {
+        file_id: [u8; 32],
+        ranges: Vec<(u32, u32)>,
+    },
+    /// Receiver→sender: whole-file verify passed.
+    FileDone {
+        file_id: [u8; 32],
+        sha256: [u8; 32],
+    },
+    FileCancel {
+        file_id: [u8; 32],
+        reason: FileCancelReason,
+    },
+    FileDecline {
+        file_id: [u8; 32],
     },
 }
 
@@ -333,6 +408,74 @@ struct PendingMsg {
     msg_id: Option<String>,
 }
 
+/// Per-transfer runtime state (the durable half lives in `files` rows).
+/// Keyed by the `file:` string id.
+struct Xfer {
+    peer: PeerId,
+    /// Inbound: verified chunks. Outbound: peer-acked chunks. The persisted
+    /// `have` bitmap is a monotone floor merged in on hydration.
+    have: Vec<u8>,
+    /// Outbound resend suppression: chunks transmitted since the last
+    /// FileAccept (`sent &= have` on every accept re-queues the unacked).
+    sent: Vec<u8>,
+    /// Some while the outbound pump task is live.
+    cancel: Option<Arc<Notify>>,
+    /// Wakes a stalled pump (FileHave, presence, resume retry).
+    nudge: Arc<Notify>,
+    /// Geometry violations; the second strike cancels with `Policy`.
+    violations: u8,
+    /// Verified-but-unflushed chunk count → FileHave cadence.
+    since_have: u32,
+    /// Pump parked on MailboxFull.
+    mbox_full: bool,
+    /// file_state emit throttle: last state + stamp.
+    last_state: Option<FileState>,
+    last_emit: Option<Instant>,
+}
+
+impl Xfer {
+    fn new(peer: PeerId, chunks_total: u32) -> Self {
+        Self {
+            peer,
+            have: xfer::bitmap_new(chunks_total),
+            sent: xfer::bitmap_new(chunks_total),
+            cancel: None,
+            nudge: Arc::new(Notify::new()),
+            violations: 0,
+            since_have: 0,
+            mbox_full: false,
+            last_state: None,
+            last_emit: None,
+        }
+    }
+}
+
+/// Outcome of `deliver_xfer` — the pump's per-chunk verdict.
+enum XferSend {
+    Sent,
+    /// Receiver mailbox is full: park the pump, retry on nudge/timeout.
+    MailboxFull,
+    /// No session/link: handshake kicked, pump waits.
+    NoPath,
+}
+
+enum DepositResult {
+    Ok,
+    MailboxFull,
+    Failed,
+}
+
+enum SealOutcome {
+    Sealed {
+        ps: Arc<PeerSession>,
+        ct: Vec<u8>,
+        ctrl: Option<Vec<u8>>,
+        deposit: bool,
+    },
+    NoSession,
+    Failed,
+}
+
 struct PeerSession {
     session: Mutex<Session>,
     /// OUR wire id — stamped on every outbound Transport/deposit envelope.
@@ -380,6 +523,8 @@ struct Shared {
     invites_open: Vec<(InviteToken, String)>,
     conn: tb::ConnState,
     shutting_down: bool,
+    /// Live transfer runtime state, keyed by `file:` id.
+    xfers: HashMap<String, Xfer>,
 }
 
 /// Response waiters completed by the pump. Request ops are serialized by
@@ -570,6 +715,10 @@ pub struct Core {
     relay_host: Mutex<Option<String>>,
     peer_id_str: String,
     tasks: Mutex<Vec<tokio::task::JoinHandle<()>>>,
+    /// Data dir root — the `xfer/` staging tree hangs off it.
+    data_dir: PathBuf,
+    /// Transfer caps; test-injectable via `test_caps_mut`.
+    caps: Mutex<XferCaps>,
 }
 
 impl Core {
@@ -665,6 +814,7 @@ impl Core {
                 invites_open: Vec::new(),
                 conn: tb::ConnState::Offline,
                 shutting_down: false,
+                xfers: HashMap::new(),
             }),
             link: Arc::new(LinkHub {
                 cmd_tx,
@@ -681,6 +831,8 @@ impl Core {
             relay_host: Mutex::new(None),
             peer_id_str,
             tasks: Mutex::new(Vec::new()),
+            data_dir: data_dir.to_path_buf(),
+            caps: Mutex::new(XferCaps::default()),
         });
 
         if let Some((addr, host)) = relay {
@@ -697,6 +849,10 @@ impl Core {
         core.tasks.lock().unwrap_or_else(|e| e.into_inner()).push({
             let c = core.clone();
             tokio::spawn(async move { c.expiry_loop().await })
+        });
+        core.tasks.lock().unwrap_or_else(|e| e.into_inner()).push({
+            let c = core.clone();
+            tokio::spawn(async move { c.file_reap_loop().await })
         });
         Ok(core)
     }
@@ -830,6 +986,26 @@ impl Core {
     #[allow(dead_code)]
     pub async fn test_handle_app(self: &Arc<Self>, peer: PeerId, app: AppMsg) {
         self.handle_app(peer, app).await;
+    }
+
+    /// Test seam: mutate transfer caps (pace, staging cap, TTL, intervals).
+    #[cfg(test)]
+    #[allow(dead_code)]
+    pub fn test_caps_mut(&self) -> std::sync::MutexGuard<'_, XferCaps> {
+        self.caps.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    #[cfg(test)]
+    #[allow(dead_code)]
+    pub fn test_xfer_progress(&self, file_id: &str) -> Option<(u32, bool)> {
+        self.sh()
+            .xfers
+            .get(file_id)
+            .map(|x| (xfer::popcount(&x.have), x.cancel.is_some()))
+    }
+
+    fn caps(&self) -> XferCaps {
+        self.caps.lock().unwrap_or_else(|e| e.into_inner()).clone()
     }
 
     fn emit(&self, kind: &str, chat_id: Option<&str>, payload: Value) {
@@ -1097,18 +1273,33 @@ impl Core {
                 }
             }
             ClientEvent::PeerStatus { peer, online } => {
-                let kick = {
+                let (kick, nudges) = {
                     let mut sh = self.sh();
                     sh.presence.insert(peer, online);
-                    online
+                    let kick = online
                         && sh
                             .pending_out
                             .get(&peer)
                             .map(|q| !q.is_empty())
-                            .unwrap_or(false)
+                            .unwrap_or(false);
+                    // A peer (re)appearing un-parks every pump stalled on
+                    // MailboxFull/NoPath for that peer.
+                    let nudges: Vec<Arc<Notify>> = if online {
+                        sh.xfers
+                            .values()
+                            .filter(|x| x.peer == peer)
+                            .map(|x| x.nudge.clone())
+                            .collect()
+                    } else {
+                        Vec::new()
+                    };
+                    (kick, nudges)
                 };
                 if kick {
                     self.ensure_handshake(peer);
+                }
+                for n in nudges {
+                    n.notify_one();
                 }
             }
             ClientEvent::Error { code, detail } => self.route_error(code, detail),
@@ -1183,6 +1374,13 @@ impl Core {
             let _ = self.mailbox_drain().await;
         }
         let _ = self.presence_subscribe().await;
+
+        // File-transfer resume (§4.2): on every link-up, inbound rows
+        // re-emit FileAccept{ranges} (peer re-sends only the holes) and
+        // outbound rows re-emit their identical FileOffer. Must run even
+        // when `kicks` is empty — a clean restart has no pending queue yet
+        // still owes the peer a resume frame.
+        self.resume_xfers().await;
 
         // §11: on reconnect, re-arm outbound work — pending adds retry at
         // their backoff deadlines (or immediately if still `connecting`),
@@ -1467,10 +1665,11 @@ impl Core {
 
     fn install_session(&self, peer: PeerId, session: Session) -> Option<Arc<PeerSession>> {
         let sid = session.session_id()?;
+        let remote = session.remote_session_id();
         let ps = Arc::new(PeerSession {
             session: Mutex::new(session),
             session_id: sid,
-            remote_sid: Mutex::new(None),
+            remote_sid: Mutex::new(remote),
         });
         let mut sh = self.sh();
         if let Some(old) = sh.sessions.insert(peer, ps.clone()) {
@@ -1486,6 +1685,13 @@ impl Core {
                 sh.sid_index.remove(&rs);
                 Self::tombstone(&mut sh, rs);
             }
+        }
+        // The peer's stream id was learned inside the handshake: pre-bind it
+        // so only this generation's frames decrypt. Any older sid (dead-
+        // generation leftovers) falls through to the foreign-sid drop, never
+        // the fatal lazy-bind path.
+        if let Some(rs) = remote {
+            sh.sid_index.insert(rs, peer);
         }
         Some(ps)
     }
@@ -1709,6 +1915,10 @@ impl Core {
         }
 
         self.flush_pending(peer).await;
+        // Every fresh session owes the peer resume frames for this peer's
+        // resumable rows — a link-up FileAccept can land in a dead session
+        // generation (foreign-sid drop), so re-emit on install too.
+        self.resume_xfers().await;
 
         if outbound || became_active {
             self.emit(
@@ -1785,25 +1995,24 @@ impl Core {
 
     // ----- outbound delivery --------------------------------------------------
 
-    /// Encrypt + send on a live session. For a known-offline peer with a
-    /// mailbox grant, deposits the frame into their mailbox instead. Returns
-    /// false when no usable path exists (caller queues/retries).
-    async fn deliver_now(&self, peer: PeerId, item: &PendingMsg) -> bool {
-        let Some(ps) = self.session(&peer) else {
-            tracing::debug!(%peer, "deliver_now: no live session");
-            return false;
+    /// Serialize + encrypt `app` on the live session. Shared by the chat
+    /// lane (`deliver_now`) and the chunk lane (`deliver_xfer`), which needs
+    /// the MailboxFull verdict the bool API hides.
+    fn seal_app(&self, peer: &PeerId, app: &AppMsg) -> SealOutcome {
+        let Some(ps) = self.session(peer) else {
+            return SealOutcome::NoSession;
         };
-        let payload = match wire_serialize(&item.app) {
+        let payload = match wire_serialize(app) {
             Ok(p) => p,
             Err(e) => {
-                tracing::debug!(%e, "deliver_now: AppMsg encode failed");
-                return false;
+                tracing::debug!(%e, "seal_app: AppMsg encode failed");
+                return SealOutcome::Failed;
             }
         };
-        let offline_deposit = {
+        let deposit = {
             let sh = self.sh();
-            sh.presence.get(&peer).map(|o| !*o).unwrap_or(false)
-                && sh.meta.get(&peer).and_then(|m| m.grant.as_ref()).is_some()
+            sh.presence.get(peer).map(|o| !*o).unwrap_or(false)
+                && sh.meta.get(peer).and_then(|m| m.grant.as_ref()).is_some()
         };
         let (ct, ctrl) = {
             let mut s = ps.session.lock().unwrap_or_else(|e| e.into_inner());
@@ -1814,23 +2023,52 @@ impl Core {
                 // next live send and the batch stays self-consistent.
                 Ok(ct) => (
                     ct,
-                    if offline_deposit {
+                    if deposit {
                         None
                     } else {
                         s.maybe_rekey().ok().flatten()
                     },
                 ),
                 Err(e) => {
-                    tracing::debug!(%e, "deliver_now: encrypt failed; dropping session");
+                    tracing::debug!(%e, "seal_app: encrypt failed; dropping session");
                     drop(s);
                     drop(ps);
-                    self.drop_session(&peer);
-                    return false;
+                    self.drop_session(peer);
+                    return SealOutcome::Failed;
                 }
             }
         };
-        if offline_deposit {
-            return self.deposit(peer, ps.session_id, ct, item).await;
+        SealOutcome::Sealed {
+            ps,
+            ct,
+            ctrl,
+            deposit,
+        }
+    }
+
+    /// Encrypt + send on a live session. For a known-offline peer with a
+    /// mailbox grant, deposits the frame into their mailbox instead. Returns
+    /// false when no usable path exists (caller queues/retries).
+    async fn deliver_now(&self, peer: PeerId, item: &PendingMsg) -> bool {
+        let SealOutcome::Sealed {
+            ps,
+            ct,
+            ctrl,
+            deposit,
+        } = self.seal_app(&peer, &item.app)
+        else {
+            return false;
+        };
+        if deposit {
+            return match self.deposit_env(peer, ps.session_id, ct).await {
+                DepositResult::Ok => {
+                    if let Some(id) = &item.msg_id {
+                        self.transition(id, MsgState::Sent, None).await;
+                    }
+                    true
+                }
+                _ => false,
+            };
         }
         if self
             .link
@@ -1862,16 +2100,55 @@ impl Core {
         true
     }
 
-    /// Offline send: the peer's mailbox grant lets us deposit the
-    /// already-encrypted frame; `MailboxDeposited` means relay-accepted =
-    /// "sent".
-    async fn deposit(
-        &self,
-        peer: PeerId,
-        session_id: SessionId,
-        ct: Vec<u8>,
-        item: &PendingMsg,
-    ) -> bool {
+    /// Chunk-lane delivery: same seal/send as `deliver_now` but reports
+    /// MailboxFull so the pump parks instead of failing the transfer.
+    async fn deliver_xfer(&self, peer: PeerId, app: &AppMsg) -> XferSend {
+        let SealOutcome::Sealed {
+            ps,
+            ct,
+            ctrl,
+            deposit,
+        } = self.seal_app(&peer, app)
+        else {
+            return XferSend::NoPath;
+        };
+        if deposit {
+            return match self.deposit_env(peer, ps.session_id, ct).await {
+                DepositResult::Ok => XferSend::Sent,
+                DepositResult::MailboxFull => XferSend::MailboxFull,
+                DepositResult::Failed => XferSend::NoPath,
+            };
+        }
+        if self
+            .link
+            .cmd_tx
+            .send(ClientMsg::Transport {
+                to: peer,
+                session_id: ps.session_id,
+                body: ct,
+            })
+            .await
+            .is_err()
+        {
+            return XferSend::NoPath;
+        }
+        if let Some(ctrl) = ctrl {
+            let _ = self
+                .link
+                .cmd_tx
+                .send(ClientMsg::Transport {
+                    to: peer,
+                    session_id: ps.session_id,
+                    body: ctrl,
+                })
+                .await;
+        }
+        XferSend::Sent
+    }
+
+    /// Mailbox deposit primitive; the grant lookup + op + reply-matching
+    /// that `deposit()`/`deliver_xfer()` share.
+    async fn deposit_env(&self, peer: PeerId, session_id: SessionId, ct: Vec<u8>) -> DepositResult {
         let grant = {
             self.shared
                 .lock()
@@ -1880,7 +2157,9 @@ impl Core {
                 .get(&peer)
                 .and_then(|m| m.grant.clone())
         };
-        let Some(g) = grant else { return false };
+        let Some(g) = grant else {
+            return DepositResult::Failed;
+        };
         let ev = self
             .request(
                 ClientMsg::MailboxDeposit {
@@ -1895,13 +2174,15 @@ impl Core {
             )
             .await;
         match ev {
-            Ok(ClientEvent::MailboxDeposited { .. }) => {
-                if let Some(id) = &item.msg_id {
-                    self.transition(id, MsgState::Sent, None).await;
-                }
-                true
+            Ok(ClientEvent::MailboxDeposited { .. }) => DepositResult::Ok,
+            Err(e)
+                if e.downcast_ref::<RelayError>()
+                    .map(|r| r.0 == ErrorCode::MailboxFull)
+                    .unwrap_or(false) =>
+            {
+                DepositResult::MailboxFull
             }
-            _ => false,
+            _ => DepositResult::Failed,
         }
     }
 
@@ -1997,6 +2278,1169 @@ impl Core {
             }
             self.emit("msg_state", Some(&m.chat_id), p);
         }
+    }
+
+    // ----- file/image transfer engine (docs/plans/files-images.md) ----------
+
+    /// Create/refresh the runtime entry and union the persisted bitmap in
+    /// (it is a monotone floor — bits are only ever set, never cleared).
+    fn xfer_hydrate(&self, row: &FileRow, peer: PeerId) {
+        let mut sh = self.sh();
+        let x = sh
+            .xfers
+            .entry(row.file_id.clone())
+            .or_insert_with(|| Xfer::new(peer, row.chunks_total as u32));
+        x.peer = peer;
+        if x.have.len() < row.have.len() {
+            x.have.resize(row.have.len(), 0);
+        }
+        for (i, b) in row.have.iter().enumerate() {
+            x.have[i] |= *b;
+        }
+        if x.sent.len() != x.have.len() {
+            x.sent.resize(x.have.len(), 0);
+        }
+    }
+
+    /// `file_state` emit: every transition lands immediately; same-state
+    /// progress updates are throttled to 1 Hz per transfer (§6).
+    pub(crate) fn emit_xfer(&self, row: &FileRow, progress_have: &[u8]) {
+        let state = match FileState::parse(&row.state) {
+            Some(s) => s,
+            None => return,
+        };
+        let now = Instant::now();
+        let bytes_done = {
+            let peer = peer_of_chat(&row.chat_id).unwrap_or_else(|_| self.identity.peer_id());
+            let mut sh = self.sh();
+            let x = sh
+                .xfers
+                .entry(row.file_id.clone())
+                .or_insert_with(|| Xfer::new(peer, row.chunks_total as u32));
+            if x.last_state == Some(state)
+                && x.last_emit
+                    .map(|t| now.duration_since(t) < Duration::from_secs(1))
+                    .unwrap_or(false)
+            {
+                return;
+            }
+            x.last_state = Some(state);
+            x.last_emit = Some(now);
+            if state == FileState::Complete {
+                row.size as u64
+            } else {
+                let have = if progress_have.is_empty() {
+                    &x.have
+                } else {
+                    progress_have
+                };
+                (xfer::popcount(have) as u64)
+                    .saturating_mul(row.chunk_size.max(0) as u64)
+                    .min(row.size.max(0) as u64)
+            }
+        };
+        self.emit(
+            "file_state",
+            Some(&row.chat_id),
+            json!({
+                "file_id": row.file_id,
+                "msg_id": row.msg_id,
+                "chat_id": row.chat_id,
+                "dir": dir_str(row.dir),
+                "state": state.as_str(),
+                "bytes_done": bytes_done,
+                "bytes_total": row.size.max(0) as u64,
+                "reason": row.reason,
+            }),
+        );
+    }
+
+    /// Terminal bookkeeping for a row: notify + drop the pump + emit. The
+    /// `state`/`reason` write itself must already be committed.
+    fn xfer_finish(&self, file_id: &str) {
+        if let Some(x) = self.sh().xfers.remove(file_id) {
+            if let Some(c) = x.cancel {
+                c.notify_one();
+            }
+        }
+    }
+
+    /// Persisted state transition + emit + (terminal) pump shutdown.
+    async fn xfer_set_state(&self, row: &FileRow, state: FileState, reason: Option<&str>) {
+        let fid = row.file_id.clone();
+        let st = state.as_str();
+        let rs = reason.map(String::from);
+        let _ = self
+            .sblk(move |s| s.set_file_state(&fid, st, rs.as_deref()))
+            .await;
+        if state.is_terminal() {
+            self.xfer_finish(&row.file_id);
+        }
+        let mut fresh = row.clone();
+        fresh.state = st.to_string();
+        fresh.reason = reason.map(String::from);
+        self.emit_xfer(&fresh, &[]);
+    }
+
+    /// `.part` cleanup on terminal transitions for rows that own a staged
+    /// blob (inbound staging + materialized `data` sends — never a source
+    /// path, which only lives in `staged_path` as `xfer/…`).
+    async fn xfer_unlink(&self, row: &FileRow) {
+        let Some(rel) = row.staged_path.clone() else {
+            return;
+        };
+        if !rel.starts_with("xfer/") {
+            return;
+        }
+        let abs = xfer::stage_abs(&self.data_dir, &rel);
+        let _ = tokio::task::spawn_blocking(move || xfer::stage_unlink(&abs)).await;
+        let fid = row.file_id.clone();
+        let _ = self
+            .sblk(move |s| {
+                s.set_file_staged(&fid, "") // cleared marker keeps the row
+            })
+            .await;
+    }
+
+    /// Receiver→sender: FileAccept carrying the current verified ranges —
+    /// the accept and the resume re-accept share this exact frame.
+    async fn send_file_accept(self: &Arc<Self>, row: &FileRow) {
+        let Some(fid_raw) = file_id_raw(&row.file_id) else {
+            return;
+        };
+        let ranges = {
+            let sh = self.sh();
+            let have = sh
+                .xfers
+                .get(&row.file_id)
+                .map(|x| x.have.clone())
+                .unwrap_or_else(|| row.have.clone());
+            xfer::ranges_of(&have, row.chunks_total as u32)
+        };
+        let Some(peer) = peer_of_chat(&row.chat_id).ok() else {
+            return;
+        };
+        self.deliver_or_queue(
+            peer,
+            PendingMsg {
+                app: AppMsg::FileAccept {
+                    file_id: fid_raw,
+                    ranges,
+                },
+                msg_id: None,
+            },
+        )
+        .await;
+    }
+
+    /// Accept path shared by the auto-accept policy and `file.accept`:
+    /// cap re-check → `.part` create → state accepted → FileAccept{ranges}.
+    async fn accept_flow(
+        self: &Arc<Self>,
+        row: &FileRow,
+        peer: PeerId,
+    ) -> std::result::Result<(), &'static str> {
+        let caps = self.caps();
+        let (inf_peer, inf_all, staged_bytes) = {
+            let cid = row.chat_id.clone();
+            self.sblk(move |s| {
+                Ok::<_, StoreError>((
+                    s.file_inflight("in", Some(&cid))?,
+                    s.file_inflight("in", None)?,
+                    s.file_staging_bytes()?,
+                ))
+            })
+            .await
+            .map_err(|_| "internal")?
+        };
+        // `row` counts itself: `>` not `>=` against the post-insert total.
+        if inf_peer as usize > caps.max_inflight_peer || inf_all as usize > caps.max_inflight {
+            return Err("policy");
+        }
+        if staged_bytes.saturating_add(row.size.max(0) as u64) > caps.stage_max_bytes {
+            return Err("storage_full");
+        }
+        let (Some(fid_raw), Some(token)) = (
+            file_id_raw(&row.file_id),
+            row.fetch_token
+                .as_deref()
+                .and_then(|t| <[u8; 32]>::try_from(t).ok()),
+        ) else {
+            return Err("internal");
+        };
+        let rel = xfer::stage_rel(&fid_raw, &token);
+        let dir = self.data_dir.clone();
+        let rel2 = rel.clone();
+        let size = row.size.max(0) as u64;
+        tokio::task::spawn_blocking(move || xfer::stage_create(&dir, &rel2, size))
+            .await
+            .map_err(|_| "internal")?
+            .map_err(|_| "internal")?;
+        let fid = row.file_id.clone();
+        let _ = self.sblk(move |s| s.set_file_staged(&fid, &rel)).await;
+        self.xfer_set_state(row, FileState::Accepted, None).await;
+        self.xfer_hydrate(row, peer);
+        self.send_file_accept(row).await;
+        if row.chunks_total == 0 {
+            self.finalize_inbound(row, peer).await;
+        }
+        Ok(())
+    }
+
+    /// Inbound completion: whole-file sha256 → FileDone + complete (or
+    /// FileCancel{HashMismatch} + failed and the blob dies).
+    async fn finalize_inbound(self: &Arc<Self>, row: &FileRow, peer: PeerId) {
+        let Some(rel) = row.staged_path.clone() else {
+            self.xfer_set_state(row, FileState::Failed, Some("internal"))
+                .await;
+            return;
+        };
+        let abs = xfer::stage_abs(&self.data_dir, &rel);
+        let digest = tokio::task::spawn_blocking(move || xfer::stage_sha256(&abs))
+            .await
+            .ok()
+            .and_then(|r| r.ok());
+        let fid_raw = file_id_raw(&row.file_id);
+        match (digest, fid_raw) {
+            (Some(d), Some(fid)) if d.as_slice() == row.sha256.as_slice() => {
+                // Persist the full bitmap so chunks_done survives reopen.
+                let full = vec![0xffu8; (row.chunks_total as usize).div_ceil(8)];
+                {
+                    let mut sh = self.sh();
+                    if let Some(x) = sh.xfers.get_mut(&row.file_id) {
+                        x.have = full.clone();
+                    }
+                }
+                let fid2 = row.file_id.clone();
+                let _ = self.sblk(move |s| s.set_file_have(&fid2, &full)).await;
+                self.xfer_set_state(row, FileState::Complete, None).await;
+                let sha: [u8; 32] = d;
+                self.deliver_or_queue(
+                    peer,
+                    PendingMsg {
+                        app: AppMsg::FileDone {
+                            file_id: fid,
+                            sha256: sha,
+                        },
+                        msg_id: None,
+                    },
+                )
+                .await;
+                // The anchor message's in-band ack.
+                let mid = row.msg_id.clone();
+                self.deliver_or_queue(
+                    peer,
+                    PendingMsg {
+                        app: AppMsg::Ack { msg_ids: vec![mid] },
+                        msg_id: None,
+                    },
+                )
+                .await;
+            }
+            (Some(_), Some(fid)) => {
+                self.xfer_set_state(row, FileState::Failed, Some("hash_mismatch"))
+                    .await;
+                self.xfer_unlink(row).await;
+                self.deliver_or_queue(
+                    peer,
+                    PendingMsg {
+                        app: AppMsg::FileCancel {
+                            file_id: fid,
+                            reason: FileCancelReason::HashMismatch,
+                        },
+                        msg_id: None,
+                    },
+                )
+                .await;
+            }
+            _ => {
+                self.xfer_set_state(row, FileState::Failed, Some("internal"))
+                    .await;
+                self.xfer_unlink(row).await;
+            }
+        }
+    }
+
+    // --- inbound wire handlers -------------------------------------------
+
+    #[allow(clippy::too_many_arguments)] // wire fields map 1:1 to FileOffer
+    async fn on_file_offer(
+        self: &Arc<Self>,
+        peer: PeerId,
+        file_id: [u8; 32],
+        fetch_token: [u8; 32],
+        name: String,
+        mime: String,
+        size: u64,
+        sha256: [u8; 32],
+        chunk_size: u32,
+        chunks_total: u32,
+        kind: FileKind,
+        thumb: Option<Vec<u8>>,
+        audio: Option<AudioMeta>,
+        caption: Option<String>,
+        reply_msg: String,
+    ) {
+        let chat_id = chat_str(&peer);
+        let caps = self.caps();
+        // Hygiene bounds BEFORE any allocation/store write (§5.3).
+        let sane = name.len() <= 255
+            && mime.len() <= 64
+            && caption.as_ref().map(|c| c.len()).unwrap_or(0) <= 1024
+            && thumb.as_ref().map(|t| t.len()).unwrap_or(0) <= caps.thumb_max_bytes
+            && size <= caps.max_bytes
+            && (512..=caps.chunk_bytes).contains(&chunk_size)
+            && chunks_total <= caps.max_chunks
+            && chunks_total as u64 == size.div_ceil(chunk_size as u64)
+            && reply_msg.len() <= 128
+            && reply_msg.starts_with("msg:");
+        if !sane {
+            self.sh().dropped_inbound += 1;
+            tracing::debug!(%peer, "malformed FileOffer; dropped");
+            return;
+        }
+        // An Audio offer without metadata degrades to a plain file.
+        let kind = if kind == FileKind::Audio && audio.is_none() {
+            FileKind::File
+        } else {
+            kind
+        };
+        let file_id_s = file_id_str(&file_id);
+        // Resume/tombstone check: a known file_id only continues when the
+        // presented fetch_token binds to the row (constant-time compare).
+        let existing = self
+            .sblk({
+                let f = file_id_s.clone();
+                move |s| s.get_file(&f)
+            })
+            .await;
+        if let Ok(Some(row)) = existing {
+            let tok_ok = row
+                .fetch_token
+                .as_deref()
+                .and_then(|t| <[u8; 32]>::try_from(t).ok())
+                .map(|t| xfer::ct_eq32(&t, &fetch_token))
+                .unwrap_or(false);
+            if !tok_ok {
+                self.sh().dropped_inbound += 1;
+                return;
+            }
+            let active = FileState::parse(&row.state)
+                .map(|s| s.active())
+                .unwrap_or(false);
+            if active && row.dir == Dir::In {
+                // Re-offer while live → re-accept with current ranges.
+                self.send_file_accept(&row).await;
+            }
+            return;
+        }
+        if self.meta_state(&peer) != Some(MetaState::Active) {
+            self.sh().dropped_inbound += 1;
+            return;
+        }
+        let verified = self.contact_verified(&peer).await;
+        let _ = self
+            .sblk({
+                let cid = chat_id.clone();
+                move |s| s.upsert_chat(&cid, peer.as_bytes(), None, verified)
+            })
+            .await;
+        let audio_json = audio.as_ref().and_then(|a| serde_json::to_string(a).ok());
+        let tag = kind.tag();
+        let body = if kind == FileKind::Audio {
+            let dur = audio.as_ref().map(|a| xfer::fmt_duration(a.duration_ms));
+            format!(
+                "[voice {}] {} · {}",
+                dur.unwrap_or_else(|| "0:00".into()),
+                name,
+                xfer::fmt_size(size)
+            )
+        } else {
+            format!("[{tag}] {name} · {}", xfer::fmt_size(size))
+        };
+        let (mid, deduped) = self
+            .sblk({
+                let cid = chat_id.clone();
+                move |s| {
+                    s.insert_message(&NewMessage {
+                        msg_id: reply_msg,
+                        chat_id: cid,
+                        dir: Dir::In,
+                        kind: MsgKind::File,
+                        body,
+                        state: Some(MsgState::Delivered),
+                        client_msg_id: None,
+                        ts: now_ms(),
+                        expires_at: None,
+                    })
+                }
+            })
+            .await
+            .unwrap_or_else(|_| (String::new(), true));
+        if mid.is_empty() {
+            return;
+        }
+        let new_file = NewFile {
+            file_id: file_id_s.clone(),
+            msg_id: mid.clone(),
+            chat_id: chat_id.clone(),
+            dir: Dir::In,
+            name: name.clone(),
+            mime: mime.clone(),
+            size: size as i64,
+            sha256: sha256.to_vec(),
+            chunk_size: chunk_size as i64,
+            chunks_total: chunks_total as i64,
+            state: FileState::Offered.as_str().into(),
+            kind: kind.as_str().into(),
+            thumb: thumb.clone(),
+            audio_meta: audio_json,
+            fetch_token: Some(fetch_token.to_vec()),
+            caption: caption.clone(),
+            staged_path: None,
+            client_xfer_id: None,
+        };
+        let inserted = self.sblk(move |s| s.insert_file(&new_file)).await;
+        let Ok((_, _)) = inserted else {
+            return;
+        };
+        let row = match self
+            .sblk({
+                let f = file_id_s.clone();
+                move |s| s.get_file(&f)
+            })
+            .await
+        {
+            Ok(Some(r)) => r,
+            _ => return,
+        };
+        self.xfer_hydrate(&row, peer);
+        if !deduped {
+            if let Ok(Some(m)) = self.sblk(move |s| s.get_message(&mid)).await {
+                self.emit(
+                    "message.received",
+                    Some(&chat_id),
+                    json!({
+                        "chat_id": chat_id,
+                        "message": message_json(&m, &peer, &self.peer_id_str, Some(&row)),
+                    }),
+                );
+            }
+        }
+        self.emit_xfer(&row, &[]);
+        // Auto-accept policy (files.auto_accept meta): contacts|verified|manual.
+        let policy = self
+            .sblk(|s| s.meta("files.auto_accept"))
+            .await
+            .ok()
+            .flatten()
+            .unwrap_or_else(|| "contacts".into());
+        let auto = match policy.as_str() {
+            "manual" => false,
+            "verified" => verified,
+            _ => true,
+        };
+        if auto {
+            match self.accept_flow(&row, peer).await {
+                Ok(()) => {}
+                Err("storage_full") => self.decline_offer(&row, peer, "storage_full").await,
+                Err("policy") => self.decline_offer(&row, peer, "policy").await,
+                Err(_) => {
+                    self.xfer_set_state(&row, FileState::Failed, Some("internal"))
+                        .await;
+                }
+            }
+        }
+    }
+
+    /// Decline on behalf of policy/caps: wire FileDecline + terminal row.
+    async fn decline_offer(self: &Arc<Self>, row: &FileRow, peer: PeerId, reason: &'static str) {
+        self.xfer_set_state(row, FileState::Declined, Some(reason))
+            .await;
+        if let Some(fid) = file_id_raw(&row.file_id) {
+            self.deliver_or_queue(
+                peer,
+                PendingMsg {
+                    app: AppMsg::FileDecline { file_id: fid },
+                    msg_id: None,
+                },
+            )
+            .await;
+        }
+    }
+
+    async fn on_file_chunk(
+        self: &Arc<Self>,
+        peer: PeerId,
+        file_id: [u8; 32],
+        index: u32,
+        data: Vec<u8>,
+    ) {
+        let file_id_s = file_id_str(&file_id);
+        let chat_id = chat_str(&peer);
+        let row = match self
+            .sblk({
+                let f = file_id_s.clone();
+                move |s| s.get_file(&f)
+            })
+            .await
+        {
+            Ok(Some(r)) => r,
+            _ => return,
+        };
+        if row.chat_id != chat_id || row.dir != Dir::In {
+            return;
+        }
+        let state = FileState::parse(&row.state);
+        if !matches!(
+            state,
+            Some(FileState::Accepted) | Some(FileState::Transferring)
+        ) {
+            // Terminal, offered-but-not-accepted, or tombstoned: drop.
+            return;
+        }
+        let total = row.chunks_total as u32;
+        let cs = row.chunk_size as u64;
+        let size = row.size as u64;
+        // Geometry: index in-range + exact expected length (last is partial).
+        let expected = if index == total.saturating_sub(1) {
+            size.saturating_sub(cs * total.saturating_sub(1) as u64)
+        } else {
+            cs
+        };
+        if index >= total || data.len() as u64 != expected || cs == 0 {
+            let strikes = {
+                self.xfer_hydrate(&row, peer);
+                let mut sh = self.sh();
+                let x = sh.xfers.get_mut(&file_id_s);
+                x.map(|x| {
+                    x.violations = x.violations.saturating_add(1);
+                    x.violations
+                })
+                .unwrap_or(0)
+            };
+            if strikes >= 2 {
+                self.xfer_set_state(&row, FileState::Failed, Some("policy"))
+                    .await;
+                self.xfer_unlink(&row).await;
+                self.deliver_or_queue(
+                    peer,
+                    PendingMsg {
+                        app: AppMsg::FileCancel {
+                            file_id,
+                            reason: FileCancelReason::Policy,
+                        },
+                        msg_id: None,
+                    },
+                )
+                .await;
+            }
+            return;
+        }
+        let Some(rel) = row.staged_path.clone() else {
+            self.xfer_set_state(&row, FileState::Failed, Some("internal"))
+                .await;
+            return;
+        };
+        let abs = xfer::stage_abs(&self.data_dir, &rel);
+        let offset = index as u64 * cs;
+        let wrote = tokio::task::spawn_blocking(move || xfer::stage_write_at(&abs, offset, &data))
+            .await
+            .map(|r| r.is_ok())
+            .unwrap_or(false);
+        if !wrote {
+            self.xfer_set_state(&row, FileState::Failed, Some("storage_full"))
+                .await;
+            self.xfer_unlink(&row).await;
+            return;
+        }
+        self.xfer_hydrate(&row, peer);
+        let caps = self.caps();
+        let (done, flush_have) = {
+            let mut sh = self.sh();
+            let Some(x) = sh.xfers.get_mut(&file_id_s) else {
+                return;
+            };
+            xfer::bit_set(&mut x.have, index);
+            x.since_have = x.since_have.saturating_add(1);
+            let done = xfer::all_set(&x.have, total);
+            let flush = x.since_have >= caps.have_interval || done;
+            if flush {
+                x.since_have = 0;
+            }
+            (done, flush)
+        };
+        if flush_have {
+            let fid = file_id_s.clone();
+            let have = {
+                let sh = self.sh();
+                sh.xfers
+                    .get(&file_id_s)
+                    .map(|x| x.have.clone())
+                    .unwrap_or_default()
+            };
+            let _ = self.sblk(move |s| s.set_file_have(&fid, &have)).await;
+            if !done {
+                if let Some(fid_raw) = file_id_raw(&file_id_s) {
+                    let ranges = {
+                        let sh = self.sh();
+                        sh.xfers
+                            .get(&file_id_s)
+                            .map(|x| xfer::ranges_of(&x.have, total))
+                            .unwrap_or_default()
+                    };
+                    self.deliver_or_queue(
+                        peer,
+                        PendingMsg {
+                            app: AppMsg::FileHave {
+                                file_id: fid_raw,
+                                ranges,
+                            },
+                            msg_id: None,
+                        },
+                    )
+                    .await;
+                }
+            }
+        }
+        if state == Some(FileState::Accepted) {
+            self.xfer_set_state(&row, FileState::Transferring, None)
+                .await;
+        } else {
+            let mut fresh = row.clone();
+            fresh.state = FileState::Transferring.as_str().into();
+            self.emit_xfer(&fresh, &[]);
+        }
+        if done {
+            let mut fresh = row.clone();
+            fresh.state = FileState::Verifying.as_str().into();
+            self.xfer_set_state(&fresh, FileState::Verifying, None)
+                .await;
+            self.finalize_inbound(&fresh, peer).await;
+        }
+    }
+
+    /// FileAccept + FileHave share the merge path; FileAccept additionally
+    /// drives the offered→transferring transition and re-queues unacked
+    /// `sent` bits.
+    async fn on_file_ranges(
+        self: &Arc<Self>,
+        peer: PeerId,
+        file_id: [u8; 32],
+        ranges: Vec<(u32, u32)>,
+        is_accept: bool,
+    ) {
+        let file_id_s = file_id_str(&file_id);
+        let row = match self
+            .sblk({
+                let f = file_id_s.clone();
+                move |s| s.get_file(&f)
+            })
+            .await
+        {
+            Ok(Some(r)) => r,
+            _ => return,
+        };
+        if row.chat_id != chat_str(&peer) || row.dir != Dir::Out {
+            return;
+        }
+        let state = FileState::parse(&row.state);
+        if !matches!(
+            state,
+            Some(FileState::Offered) | Some(FileState::Accepted) | Some(FileState::Transferring)
+        ) {
+            return;
+        }
+        self.xfer_hydrate(&row, peer);
+        let total = row.chunks_total as u32;
+        {
+            let mut sh = self.sh();
+            let Some(x) = sh.xfers.get_mut(&file_id_s) else {
+                return;
+            };
+            if xfer::merge_ranges(&mut x.have, total, &ranges).is_err() {
+                tracing::debug!(%peer, "malformed ranges; dropped");
+                return;
+            }
+            if is_accept {
+                // Re-queue chunks the receiver still lacks (spec: resent
+                // count ≤ missing count).
+                for i in 0..x.have.len() {
+                    x.sent[i] &= x.have[i];
+                }
+                x.mbox_full = false;
+            }
+        }
+        let fid = file_id_s.clone();
+        let have = {
+            let sh = self.sh();
+            sh.xfers
+                .get(&file_id_s)
+                .map(|x| x.have.clone())
+                .unwrap_or_default()
+        };
+        let _ = self.sblk(move |s| s.set_file_have(&fid, &have)).await;
+        if is_accept && state == Some(FileState::Offered) {
+            self.xfer_set_state(&row, FileState::Transferring, None)
+                .await;
+        } else {
+            self.emit_xfer(&row, &[]);
+        }
+        let nudge = {
+            let sh = self.sh();
+            sh.xfers.get(&file_id_s).map(|x| x.nudge.clone())
+        };
+        self.xfer_pump_start(&file_id_s, peer);
+        if let Some(n) = nudge {
+            n.notify_one();
+        }
+    }
+
+    async fn on_file_done(self: &Arc<Self>, peer: PeerId, file_id: [u8; 32], sha256: [u8; 32]) {
+        let file_id_s = file_id_str(&file_id);
+        let row = match self
+            .sblk({
+                let f = file_id_s.clone();
+                move |s| s.get_file(&f)
+            })
+            .await
+        {
+            Ok(Some(r)) => r,
+            _ => return,
+        };
+        if row.chat_id != chat_str(&peer) || row.dir != Dir::Out {
+            return;
+        }
+        let state = FileState::parse(&row.state);
+        if !matches!(
+            state,
+            Some(FileState::Accepted) | Some(FileState::Transferring) | Some(FileState::Verifying)
+        ) {
+            return;
+        }
+        // Completion is bound by the offered digest — a peer-sent FileDone
+        // claiming a different hash is dropped, never trusted.
+        if !xfer::ct_eq32(
+            &sha256,
+            &<[u8; 32]>::try_from(row.sha256.as_slice()).unwrap_or([0u8; 32]),
+        ) {
+            self.sh().dropped_inbound += 1;
+            return;
+        }
+        self.xfer_set_state(&row, FileState::Complete, None).await;
+        self.transition(&row.msg_id, MsgState::Delivered, None)
+            .await;
+        self.xfer_unlink(&row).await;
+        let mid = row.msg_id.clone();
+        self.deliver_or_queue(
+            peer,
+            PendingMsg {
+                app: AppMsg::Ack { msg_ids: vec![mid] },
+                msg_id: None,
+            },
+        )
+        .await;
+    }
+
+    async fn on_file_decline(&self, peer: PeerId, file_id: [u8; 32]) {
+        let file_id_s = file_id_str(&file_id);
+        let Some(row) = self
+            .sblk({
+                let f = file_id_s.clone();
+                move |s| s.get_file(&f)
+            })
+            .await
+            .ok()
+            .flatten()
+        else {
+            return;
+        };
+        if row.chat_id != chat_str(&peer) || row.dir != Dir::Out {
+            return;
+        }
+        if FileState::parse(&row.state)
+            .map(|s| s.is_terminal())
+            .unwrap_or(true)
+        {
+            return;
+        }
+        self.xfer_set_state(&row, FileState::Declined, Some("peer"))
+            .await;
+        self.xfer_unlink(&row).await;
+    }
+
+    async fn on_file_cancel_wire(&self, peer: PeerId, file_id: [u8; 32], reason: FileCancelReason) {
+        let file_id_s = file_id_str(&file_id);
+        let Some(row) = self
+            .sblk({
+                let f = file_id_s.clone();
+                move |s| s.get_file(&f)
+            })
+            .await
+            .ok()
+            .flatten()
+        else {
+            return;
+        };
+        if row.chat_id != chat_str(&peer) {
+            return;
+        }
+        if FileState::parse(&row.state)
+            .map(|s| s.is_terminal())
+            .unwrap_or(true)
+        {
+            return;
+        }
+        self.xfer_set_state(&row, FileState::Cancelled, Some(reason.as_str()))
+            .await;
+        self.xfer_unlink(&row).await;
+    }
+
+    // --- outbound pump -----------------------------------------------------
+
+    /// Start the sender pump once per transfer; later calls no-op.
+    fn xfer_pump_start(self: &Arc<Self>, file_id: &str, peer: PeerId) {
+        let (cancel, nudge) = {
+            let mut sh = self.sh();
+            let Some(x) = sh.xfers.get_mut(file_id) else {
+                return;
+            };
+            if x.cancel.is_some() {
+                return;
+            }
+            let c = Arc::new(Notify::new());
+            x.cancel = Some(c.clone());
+            x.peer = peer;
+            (c, x.nudge.clone())
+        };
+        let me = self.clone();
+        let fid = file_id.to_string();
+        self.tasks
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .push(tokio::spawn(async move {
+                me.xfer_pump(fid, peer, cancel, nudge).await;
+            }));
+    }
+
+    /// Sender pump: sends every chunk the receiver hasn't acked (resend set
+    /// = `!have`), paced, parked on MailboxFull/NoPath until nudged.
+    async fn xfer_pump(
+        self: &Arc<Self>,
+        file_id: String,
+        peer: PeerId,
+        cancel: Arc<Notify>,
+        nudge: Arc<Notify>,
+    ) {
+        loop {
+            let row = match self
+                .sblk({
+                    let f = file_id.clone();
+                    move |s| s.get_file(&f)
+                })
+                .await
+            {
+                Ok(Some(r)) => r,
+                _ => break,
+            };
+            if !matches!(
+                FileState::parse(&row.state),
+                Some(FileState::Accepted) | Some(FileState::Transferring)
+            ) {
+                break;
+            }
+            let total = row.chunks_total.max(0) as u32;
+            let (all_acked, missing) = {
+                let mut sh = self.sh();
+                let Some(x) = sh.xfers.get_mut(&file_id) else {
+                    break;
+                };
+                // Union the persisted floor into the live map (resume).
+                if x.have.len() < row.have.len() {
+                    x.have.resize(row.have.len(), 0);
+                }
+                for (i, b) in row.have.iter().enumerate() {
+                    x.have[i] |= *b;
+                }
+                (
+                    xfer::all_set(&x.have, total),
+                    (0..total)
+                        .filter(|i| !xfer::bit_get(&x.have, *i) && !xfer::bit_get(&x.sent, *i))
+                        .collect::<Vec<u32>>(),
+                )
+            };
+            if all_acked {
+                break; // FileDone lands via handle_app.
+            }
+            let caps = self.caps();
+            if missing.is_empty() {
+                // Everything in flight is awaiting an ack; a FileAccept or
+                // the resume tick re-queues real gaps.
+                tokio::select! {
+                    _ = cancel.notified() => break,
+                    _ = nudge.notified() => continue,
+                    _ = tokio::time::sleep(caps.resume_retry) => {
+                        let mut sh = self.sh();
+                        if let Some(x) = sh.xfers.get_mut(&file_id) {
+                            for i in 0..x.sent.len() {
+                                x.sent[i] &= x.have[i];
+                            }
+                        }
+                    }
+                }
+                continue;
+            }
+            let Some(rel) = row.staged_path.clone() else {
+                break;
+            };
+            let src = xfer::stage_abs(&self.data_dir, &rel);
+            let size = row.size.max(0) as u64;
+            let cs = row.chunk_size.max(0) as u64;
+            let mut stalled = false;
+            for idx in missing {
+                let expected = if idx == total.saturating_sub(1) {
+                    size.saturating_sub(cs * total.saturating_sub(1) as u64)
+                } else {
+                    cs
+                };
+                let offset = idx as u64 * cs;
+                let (src2, exp) = (src.clone(), expected as usize);
+                let buf = tokio::task::spawn_blocking(move || read_chunk_at(&src2, offset, exp))
+                    .await
+                    .ok()
+                    .and_then(|r| r.ok());
+                let Some(data) = buf else {
+                    self.xfer_set_state(&row, FileState::Failed, Some("internal"))
+                        .await;
+                    break;
+                };
+                let Some(fid_raw) = file_id_raw(&file_id) else {
+                    break;
+                };
+                let verdict = self
+                    .deliver_xfer(
+                        peer,
+                        &AppMsg::FileChunk {
+                            file_id: fid_raw,
+                            index: idx,
+                            data,
+                        },
+                    )
+                    .await;
+                match verdict {
+                    XferSend::Sent => {
+                        {
+                            let mut sh = self.sh();
+                            if let Some(x) = sh.xfers.get_mut(&file_id) {
+                                xfer::bit_set(&mut x.sent, idx);
+                            }
+                        }
+                        tokio::time::sleep(caps.send_pace).await;
+                    }
+                    XferSend::MailboxFull => {
+                        {
+                            let mut sh = self.sh();
+                            if let Some(x) = sh.xfers.get_mut(&file_id) {
+                                x.mbox_full = true;
+                            }
+                        }
+                        stalled = true;
+                        break;
+                    }
+                    XferSend::NoPath => {
+                        self.ensure_handshake(peer);
+                        stalled = true;
+                        break;
+                    }
+                }
+                // Cancel check between chunks (the notify fires on finish).
+                if self
+                    .sh()
+                    .xfers
+                    .get(&file_id)
+                    .map(|x| x.cancel.is_none())
+                    .unwrap_or(true)
+                {
+                    return;
+                }
+            }
+            if stalled {
+                tokio::select! {
+                    _ = cancel.notified() => break,
+                    _ = nudge.notified() => {}
+                    _ = tokio::time::sleep(caps.resume_retry) => {}
+                }
+            }
+        }
+        let mut sh = self.sh();
+        if let Some(x) = sh.xfers.get_mut(&file_id) {
+            if x.cancel
+                .as_ref()
+                .map(|c| Arc::ptr_eq(c, &cancel))
+                .unwrap_or(false)
+            {
+                x.cancel = None;
+            }
+        }
+    }
+
+    /// Link-up resume: inbound rows re-emit FileAccept{ranges}; outbound
+    /// rows re-emit their FileOffer (byte-identical — receiver dedups it).
+    async fn resume_xfers(self: &Arc<Self>) {
+        let rows = self.sblk(|s| s.files_resumable()).await.unwrap_or_default();
+        for row in rows {
+            let Ok(peer) = peer_of_chat(&row.chat_id) else {
+                continue;
+            };
+            if self.meta_state(&peer) != Some(MetaState::Active) {
+                continue;
+            }
+            self.xfer_hydrate(&row, peer);
+            match (row.dir, FileState::parse(&row.state)) {
+                (Dir::In, Some(FileState::Accepted))
+                | (Dir::In, Some(FileState::Transferring))
+                | (Dir::In, Some(FileState::Verifying)) => {
+                    self.send_file_accept(&row).await;
+                }
+                (Dir::Out, Some(FileState::Offered))
+                | (Dir::Out, Some(FileState::Accepted))
+                | (Dir::Out, Some(FileState::Transferring)) => {
+                    let offer = self.offer_app(&row);
+                    if let Some(app) = offer {
+                        self.deliver_or_queue(peer, PendingMsg { app, msg_id: None })
+                            .await;
+                    }
+                    self.xfer_pump_start(&row.file_id, peer);
+                }
+                _ => {}
+            }
+        }
+    }
+
+    /// Rebuild the wire FileOffer from a stored outbound row (resume path).
+    fn offer_app(&self, row: &FileRow) -> Option<AppMsg> {
+        let file_id = file_id_raw(&row.file_id)?;
+        let fetch_token = <[u8; 32]>::try_from(row.fetch_token.as_deref()?).ok()?;
+        let sha256 = <[u8; 32]>::try_from(row.sha256.as_slice()).ok()?;
+        let audio = row
+            .audio_meta
+            .as_deref()
+            .and_then(|a| serde_json::from_str::<AudioMeta>(a).ok());
+        Some(AppMsg::FileOffer {
+            file_id,
+            fetch_token,
+            name: row.name.clone(),
+            mime: row.mime.clone(),
+            size: row.size.max(0) as u64,
+            sha256,
+            chunk_size: row.chunk_size.max(0) as u32,
+            chunks_total: row.chunks_total.max(0) as u32,
+            kind: FileKind::parse(&row.kind),
+            thumb: row.thumb.clone(),
+            audio,
+            caption: row.caption.clone(),
+            reply_msg: row.msg_id.clone(),
+        })
+    }
+
+    /// Stale staging reaper (§9): non-terminal rows past FILE_STAGE_TTL go
+    /// `expired`; completed rows are never touched. Orphan `.part` blobs
+    /// (no matching row) are unlinked — the row set is the index of truth.
+    async fn file_reap_loop(self: Arc<Self>) {
+        let mut tick = tokio::time::interval(Duration::from_secs(1));
+        let mut last = Instant::now() - Duration::from_secs(3600 * 24 * 365);
+        loop {
+            tick.tick().await;
+            if self.shutdown_requested() {
+                break;
+            }
+            let caps = self.caps();
+            if last.elapsed() < caps.reap_every {
+                continue;
+            }
+            last = Instant::now();
+            let cutoff = now_ms() - caps.stage_ttl.as_millis() as i64;
+            let stale = self
+                .sblk(move |s| s.files_stale(cutoff))
+                .await
+                .unwrap_or_default();
+            for row in stale {
+                // Tombstoned sends also fail their anchor message so the UI
+                // doesn't show it as forever-queued.
+                self.xfer_set_state(&row, FileState::Expired, Some("timeout"))
+                    .await;
+                self.xfer_unlink(&row).await;
+                if row.dir == Dir::Out {
+                    let _ = self
+                        .sblk({
+                            let mid = row.msg_id.clone();
+                            move |s| s.update_state(&mid, MsgState::Expired)
+                        })
+                        .await;
+                }
+            }
+            // Orphan .part sweep: any blob not referenced by a row.
+            let keep: HashSet<String> = self
+                .sblk(|s| s.file_staged_paths())
+                .await
+                .unwrap_or_default()
+                .into_iter()
+                .collect();
+            let dir = xfer::stage_dir(&self.data_dir);
+            let _ = tokio::task::spawn_blocking(move || {
+                if let Ok(rd) = std::fs::read_dir(&dir) {
+                    for e in rd.flatten() {
+                        let name = e.file_name().to_string_lossy().to_string();
+                        let rel = format!("xfer/{name}");
+                        if name.ends_with(".part") && !keep.contains(&rel) {
+                            xfer::stage_unlink(&e.path());
+                        }
+                    }
+                }
+            })
+            .await;
+        }
+    }
+
+    /// Row → RPC JSON. `chunks_done` reads the live bitmap when present.
+    fn file_json(&self, row: &FileRow) -> Value {
+        let have = self
+            .sh()
+            .xfers
+            .get(&row.file_id)
+            .map(|x| x.have.clone())
+            .unwrap_or_else(|| row.have.clone());
+        let audio: Value = row
+            .audio_meta
+            .as_deref()
+            .and_then(|a| serde_json::from_str(a).ok())
+            .unwrap_or(Value::Null);
+        json!({
+            "file_id": row.file_id,
+            "msg_id": row.msg_id,
+            "chat_id": row.chat_id,
+            "dir": dir_str(row.dir),
+            "name": row.name,
+            "mime": row.mime,
+            "size": row.size,
+            "sha256": data_encoding::BASE64.encode(&row.sha256),
+            "kind": row.kind,
+            "state": row.state,
+            "reason": row.reason,
+            "chunk_size": row.chunk_size,
+            "chunks_total": row.chunks_total,
+            "chunks_done": if row.state == "complete" {
+                json!(row.chunks_total)
+            } else {
+                json!(xfer::popcount(&have))
+            },
+            "has_thumb": row.thumb.is_some(),
+            "audio": audio,
+            "caption": row.caption,
+            "saved_path": row.saved_path,
+            "created_at": rfc3339(row.created_at),
+            "updated_at": rfc3339(row.updated_at),
+        })
     }
 
     // ----- handshake drivers ---------------------------------------------------
@@ -2435,7 +3879,7 @@ impl Core {
                                 Some(&m.chat_id),
                                 json!({
                                     "chat_id": m.chat_id,
-                                    "message": message_json(&m, &peer, &self.peer_id_str),
+                                    "message": message_json(&m, &peer, &self.peer_id_str, None),
                                 }),
                             );
                         }
@@ -2520,7 +3964,7 @@ impl Core {
                             Some(&m.chat_id),
                             json!({
                                 "chat_id": m.chat_id,
-                                "message": message_json(&m, &peer, &self.peer_id_str),
+                                "message": message_json(&m, &peer, &self.peer_id_str, None),
                             }),
                         );
                     }
@@ -2541,7 +3985,7 @@ impl Core {
                             Some(&m.chat_id),
                             json!({
                                 "chat_id": m.chat_id,
-                                "message": message_json(&m, &peer, &self.peer_id_str),
+                                "message": message_json(&m, &peer, &self.peer_id_str, None),
                             }),
                         );
                     }
@@ -2576,10 +4020,65 @@ impl Core {
                         Some(&m.chat_id),
                         json!({
                             "chat_id": m.chat_id,
-                            "message": message_json(&m, &peer, &self.peer_id_str),
+                            "message": message_json(&m, &peer, &self.peer_id_str, None),
                         }),
                     );
                 }
+            }
+            AppMsg::FileOffer {
+                file_id,
+                fetch_token,
+                name,
+                mime,
+                size,
+                sha256,
+                chunk_size,
+                chunks_total,
+                kind,
+                thumb,
+                audio,
+                caption,
+                reply_msg,
+            } => {
+                self.on_file_offer(
+                    peer,
+                    file_id,
+                    fetch_token,
+                    name,
+                    mime,
+                    size,
+                    sha256,
+                    chunk_size,
+                    chunks_total,
+                    kind,
+                    thumb,
+                    audio,
+                    caption,
+                    reply_msg,
+                )
+                .await;
+            }
+            AppMsg::FileChunk {
+                file_id,
+                index,
+                data,
+            } => {
+                self.on_file_chunk(peer, file_id, index, data).await;
+            }
+            AppMsg::FileHave { file_id, ranges } => {
+                self.on_file_ranges(peer, file_id, ranges, false).await;
+            }
+            AppMsg::FileAccept { file_id, ranges } => {
+                self.on_file_ranges(peer, file_id, ranges, true).await;
+            }
+            AppMsg::FileDone { file_id, sha256 } => {
+                self.on_file_done(peer, file_id, sha256).await;
+            }
+            AppMsg::FileCancel { file_id, reason } => {
+                self.on_file_cancel_wire(peer, file_id, reason).await;
+            }
+            AppMsg::FileDecline { file_id } => {
+                self.on_file_decline(peer, file_id).await;
             }
         }
     }
@@ -2867,6 +4366,7 @@ fn kind_str(k: MsgKind) -> &'static str {
         MsgKind::Edit => "edit",
         MsgKind::Delete => "delete",
         MsgKind::Reaction => "reaction",
+        MsgKind::File => "file",
     }
 }
 
@@ -2878,18 +4378,42 @@ fn trust_str(t: Option<&TrustState>) -> &'static str {
     }
 }
 
-fn message_json(m: &crate::store::Message, sender: &PeerId, own_peer_str: &str) -> Value {
+fn message_json(
+    m: &crate::store::Message,
+    sender: &PeerId,
+    own_peer_str: &str,
+    file: Option<&FileRow>,
+) -> Value {
     let from = match m.dir {
         Dir::In => peer_str(sender),
         Dir::Out => own_peer_str.to_string(),
     };
+    // body.file (files-images §6): every field is peer-claimed until the
+    // transfer completes — `trusted:false` covers them all.
+    let file_meta = file.map(|f| {
+        let audio: Value = f
+            .audio_meta
+            .as_deref()
+            .and_then(|a| serde_json::from_str(a).ok())
+            .unwrap_or(Value::Null);
+        json!({
+            "file_id": f.file_id,
+            "name": f.name,
+            "mime": f.mime,
+            "size": f.size,
+            "kind": f.kind,
+            "has_thumb": f.thumb.is_some(),
+            "audio": audio,
+            "caption": f.caption,
+        })
+    });
     json!({
         "msg_id": m.msg_id,
         "chat_id": m.chat_id,
         "dir": dir_str(m.dir),
         "from": from,
         "kind": kind_str(m.kind),
-        "body": {"text": m.body, "trusted": m.dir == Dir::Out},
+        "body": {"text": m.body, "trusted": m.dir == Dir::Out, "file": file_meta},
         "state": m.state.map(state_str),
         "ts": rfc3339(m.ts),
         "ts_ms": m.ts,
@@ -2929,6 +4453,7 @@ fn chat_json(
     meta: Option<&ContactMeta>,
     name: Option<&str>,
     trust: Option<&TrustState>,
+    last_file: Option<&FileRow>,
 ) -> Value {
     let peer = PeerId::from_bytes(chat.peer_id);
     json!({
@@ -2941,7 +4466,7 @@ fn chat_json(
         "unread": chat.unread.max(0) as u32,
         "disappearing_ttl_ms": chat.disappear_ttl_ms,
         "last_activity": rfc3339(chat.last_activity),
-        "last_message": chat.last_message.as_ref().map(|m| message_json(m, &peer, "")),
+        "last_message": chat.last_message.as_ref().map(|m| message_json(m, &peer, "", last_file)),
     })
 }
 
@@ -2973,8 +4498,18 @@ fn ui_event(kind: &str, p: &Value) -> Option<tb::Event> {
                 state: tb::MsgState::Delivered,
                 ts: m["ts_ms"].as_i64().unwrap_or(0) / 1000,
                 expires_at: m["expires_at_ms"].as_i64(),
+                file: tb_file_meta(&m["body"]["file"]),
             }))
         }
+        "file_state" => Some(tb::Event::FileState {
+            file_id: p["file_id"].as_str()?.to_string(),
+            msg_id: p["msg_id"].as_str().unwrap_or("").to_string(),
+            chat_id: p["chat_id"].as_str()?.to_string(),
+            state: p["state"].as_str()?.to_string(),
+            bytes_done: p["bytes_done"].as_u64().unwrap_or(0),
+            bytes_total: p["bytes_total"].as_u64().unwrap_or(0),
+            reason: p["reason"].as_str().map(String::from),
+        }),
         "msg.expired" => Some(tb::Event::MsgExpired {
             chat_id: p["chat_id"].as_str()?.to_string(),
             msg_id: p["msg_id"].as_str()?.to_string(),
@@ -3018,6 +4553,21 @@ fn ui_event(kind: &str, p: &Value) -> Option<tb::Event> {
         }),
         _ => None,
     }
+}
+
+/// `body.file` JSON → TUI metadata. The offered name carries no trust — the
+/// renderer sanitizes before drawing.
+fn tb_file_meta(f: &Value) -> Option<tb::FileMeta> {
+    if f.is_null() {
+        return None;
+    }
+    Some(tb::FileMeta {
+        file_id: f["file_id"].as_str()?.to_string(),
+        kind: f["kind"].as_str().unwrap_or("file").to_string(),
+        name: f["name"].as_str().unwrap_or("file.bin").to_string(),
+        size: f["size"].as_u64().unwrap_or(0),
+        duration_ms: f["audio"]["duration_ms"].as_u64().map(|d| d as u32),
+    })
 }
 
 // ---------- CinderCore (RPC seam) ----------------------------------------------
@@ -3262,6 +4812,15 @@ impl CinderCore for Core {
             .await
             .map_err(store_rpc)?;
         let (metas, trusts, names) = self.snapshot_contacts(&chats).await;
+        // Attach body.file to last_message previews (one batch lookup).
+        let last_ids: Vec<String> = chats
+            .iter()
+            .filter_map(|c| c.last_message.as_ref().map(|m| m.msg_id.clone()))
+            .collect();
+        let files_by_msg = self
+            .sblk(move |s| s.files_by_msgs(&last_ids))
+            .await
+            .unwrap_or_default();
         let mut out = Vec::new();
         for (i, chat) in chats.iter().enumerate() {
             if i < offset {
@@ -3271,11 +4830,16 @@ impl CinderCore for Core {
                 break;
             }
             let peer = PeerId::from_bytes(chat.peer_id);
+            let last_file = chat
+                .last_message
+                .as_ref()
+                .and_then(|m| files_by_msg.get(&m.msg_id));
             out.push(chat_json(
                 chat,
                 metas.get(&peer),
                 names.get(&peer).map(String::as_str),
                 trusts.get(&peer),
+                last_file,
             ));
         }
         let next_cursor =
@@ -3301,7 +4865,15 @@ impl CinderCore for Core {
             let _ = self.sblk(move |s| s.mark_read_upto(&cid, ts)).await;
         }
         let own = self.peer_id_str.clone();
-        let items: Vec<Value> = msgs.iter().map(|m| message_json(m, &peer, &own)).collect();
+        let msg_ids: Vec<String> = msgs.iter().map(|m| m.msg_id.clone()).collect();
+        let files_by_msg = self
+            .sblk(move |s| s.files_by_msgs(&msg_ids))
+            .await
+            .unwrap_or_default();
+        let items: Vec<Value> = msgs
+            .iter()
+            .map(|m| message_json(m, &peer, &own, files_by_msg.get(&m.msg_id)))
+            .collect();
         Ok(json!({
             "chat_id": p.chat_id,
             "messages": items,
@@ -3467,7 +5039,8 @@ impl CinderCore for Core {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .invites_open
-            .last()
+            .iter()
+            .next_back()
             .map(|(_, id)| id.clone())
             .unwrap_or_default();
         // `label` is a local bookkeeping tag (never sent to the invitee):
@@ -3531,6 +5104,676 @@ impl CinderCore for Core {
         }))
     }
 
+    /// `file.send` — stage, hash, row, offer. `path` streams once into a
+    /// `xfer/*.part` blob while hashing (outbound shares the staging layout
+    /// so resume/re-offer/save stay uniform); `data` decodes under the
+    /// 1 MiB inline cap.
+    async fn file_send(&self, p: FileSendParams) -> Result<Value, RpcError> {
+        let peer = self.resolve_to(&p.to)?;
+        self.check_send_allowed(&peer).await?;
+        match (&p.path, &p.data) {
+            (Some(_), None) | (None, Some(_)) => {}
+            _ => {
+                return Err(RpcError::new(
+                    ErrorKind::InvalidParams,
+                    "exactly one of `path` or `data` is required",
+                ));
+            }
+        }
+        if p.name.as_ref().map(|n| n.len()).unwrap_or(0) > 255
+            || p.mime.as_ref().map(|m| m.len()).unwrap_or(0) > 64
+            || p.caption.as_ref().map(|c| c.len()).unwrap_or(0) > 1024
+            || p.client_xfer_id.is_empty()
+            || p.client_xfer_id.len() > 128
+        {
+            return Err(RpcError::new(
+                ErrorKind::InvalidParams,
+                "name/mime/caption/client_xfer_id field bound exceeded",
+            ));
+        }
+        let kind = match p.kind.as_deref() {
+            None | Some("file") => {
+                if p.mime
+                    .as_deref()
+                    .map(|m| m.starts_with("image/"))
+                    .unwrap_or(false)
+                {
+                    FileKind::Image
+                } else {
+                    FileKind::File
+                }
+            }
+            Some("image") => FileKind::Image,
+            Some("voice") => FileKind::Audio,
+            Some(_) => {
+                return Err(RpcError::new(
+                    ErrorKind::InvalidParams,
+                    "kind must be file|image|voice",
+                ));
+            }
+        };
+        if kind == FileKind::Audio && p.audio.is_none() {
+            return Err(RpcError::new(
+                ErrorKind::InvalidParams,
+                "kind \"voice\" requires `audio` metadata",
+            ));
+        }
+        let audio = p.audio.as_ref().map(|a| AudioMeta {
+            duration_ms: a.duration_ms,
+            codec: a.codec.clone(),
+            sample_rate_hz: a.sample_rate_hz,
+            channels: a.channels,
+        });
+        let caps = self.caps();
+        if let Some(a) = &audio {
+            if a.duration_ms > caps.voice_max_ms {
+                return Err(RpcError::new(
+                    ErrorKind::InvalidParams,
+                    "voice note exceeds the 300 s advisory cap",
+                ));
+            }
+        }
+        // Same offline gate as send_text: known-offline + no mailbox grant
+        // and no live session ⇒ unreachable.
+        {
+            let sh = self.sh();
+            let known_offline = sh.presence.get(&peer).map(|o| !*o).unwrap_or(false);
+            let has_grant = sh.meta.get(&peer).and_then(|m| m.grant.as_ref()).is_some();
+            let live = sh
+                .sessions
+                .get(&peer)
+                .map(|ps| {
+                    !ps.session
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .is_closed()
+                })
+                .unwrap_or(false);
+            if !live && known_offline && !has_grant {
+                return Err(RpcError::new(
+                    ErrorKind::PeerOffline,
+                    "peer offline and no mailbox path",
+                ));
+            }
+        }
+        // Outbound inflight caps (§2): counted across active out rows; the
+        // pending send itself joins on insert, so reject at the cap.
+        {
+            let cid = chat_str(&peer);
+            let (peer_n, all_n) = self
+                .sblk(move |s| {
+                    Ok::<_, StoreError>((
+                        s.file_inflight("out", Some(&cid))?,
+                        s.file_inflight("out", None)?,
+                    ))
+                })
+                .await
+                .map_err(store_rpc)?;
+            if peer_n as usize >= caps.max_inflight_peer || all_n as usize >= caps.max_inflight {
+                return Err(RpcError::new(
+                    ErrorKind::RateLimited,
+                    "outbound transfer inflight cap reached; retry after a transfer completes",
+                ));
+            }
+        }
+        let (file_id_raw_v, file_id) = new_file_id();
+        let fetch_token = *Token::random().as_bytes();
+        let rel = xfer::stage_rel(&file_id_raw_v, &fetch_token);
+
+        // Stage + hash in one blocking pass. For `path` sources the file is
+        // verified regular + ≤ cap BEFORE the stream begins (size enforced
+        // before allocation, §11).
+        let data_dir = self.data_dir.clone();
+        let src_path = p.path.as_deref().map(xfer::expand_tilde);
+        let inline_data: Option<Vec<u8>> = match &p.data {
+            Some(b64) => {
+                let raw = data_encoding::BASE64.decode(b64.as_bytes()).map_err(|_| {
+                    RpcError::new(ErrorKind::InvalidParams, "`data` is not valid base64")
+                })?;
+                if raw.len() > caps.inline_data_max {
+                    return Err(RpcError::new(
+                        ErrorKind::InvalidParams,
+                        "`data` exceeds the 1 MiB inline cap",
+                    ));
+                }
+                Some(raw)
+            }
+            None => None,
+        };
+        let (size, sha256) = {
+            let dir = data_dir.clone();
+            let rel2 = rel.clone();
+            let src = src_path.clone();
+            let inline = inline_data.clone();
+            let max = caps.max_bytes;
+            tokio::task::spawn_blocking(move || -> Result<(u64, [u8; 32]), String> {
+                match (&src, &inline) {
+                    (Some(path), None) => {
+                        let meta =
+                            std::fs::metadata(path).map_err(|e| format!("path unreadable: {e}"))?;
+                        if !meta.is_file() {
+                            return Err("path is not a regular file".into());
+                        }
+                        if meta.len() > max {
+                            return Err("file exceeds the 64 MiB cap".into());
+                        }
+                        let abs = xfer::stage_create(&dir, &rel2, 0)
+                            .map_err(|e| format!("staging: {e}"))?;
+                        let mut r = std::fs::File::open(path)
+                            .map_err(|e| format!("path unreadable: {e}"))?;
+                        let mut w = std::fs::OpenOptions::new()
+                            .write(true)
+                            .open(&abs)
+                            .map_err(|e| format!("staging: {e}"))?;
+                        let n = std::io::copy(&mut r, &mut w)
+                            .map_err(|e| format!("staging copy: {e}"))?;
+                        let digest =
+                            xfer::stage_sha256(&abs).map_err(|e| format!("staging hash: {e}"))?;
+                        Ok((n, digest))
+                    }
+                    (None, Some(bytes)) => {
+                        if bytes.len() as u64 > max {
+                            return Err("file exceeds the 64 MiB cap".into());
+                        }
+                        let abs = xfer::stage_create(&dir, &rel2, 0)
+                            .map_err(|e| format!("staging: {e}"))?;
+                        std::fs::write(&abs, bytes).map_err(|e| format!("staging write: {e}"))?;
+                        let digest =
+                            xfer::stage_sha256(&abs).map_err(|e| format!("staging hash: {e}"))?;
+                        Ok((bytes.len() as u64, digest))
+                    }
+                    _ => Err("bad source".into()),
+                }
+            })
+            .await
+            .map_err(|_| RpcError::internal("staging task panicked"))?
+            .map_err(|e: String| {
+                if e.contains("cap") || e.contains("regular") || e.contains("unreadable") {
+                    RpcError::new(ErrorKind::InvalidParams, e)
+                } else {
+                    RpcError::internal(format!("staging: {e}"))
+                }
+            })?
+        };
+        let chunk_size = caps.chunk_bytes;
+        let chunks_total = size.div_ceil(chunk_size as u64) as u32;
+        // Name resolution: explicit override, else source basename, else
+        // fallback — sanitized before it touches the wire OR the store.
+        let name = p.name.clone().unwrap_or_else(|| {
+            src_path
+                .as_ref()
+                .and_then(|sp| sp.file_name().map(|n| n.to_string_lossy().to_string()))
+                .unwrap_or_else(|| "file.bin".into())
+        });
+        let name = xfer::sanitize_name(&name);
+        let mime = p
+            .mime
+            .clone()
+            .or_else(|| mime_guess::from_path(&name).first_raw().map(String::from))
+            .unwrap_or_else(|| "application/octet-stream".into());
+        // Client-generated thumbnail ≤ caps (image sends only).
+        let thumb = if kind == FileKind::Image {
+            let abs = xfer::stage_abs(&data_dir, &rel);
+            let caps2 = caps.clone();
+            tokio::task::spawn_blocking(move || xfer::make_thumb(&abs, &caps2))
+                .await
+                .ok()
+                .flatten()
+        } else {
+            None
+        };
+        let chat_id = chat_str(&peer);
+        let mid = new_msg_id();
+        let tag = kind.tag();
+        let body = if kind == FileKind::Audio {
+            let dur = audio.as_ref().map(|a| xfer::fmt_duration(a.duration_ms));
+            format!(
+                "[voice {}] {} · {}",
+                dur.unwrap_or_else(|| "0:00".into()),
+                name,
+                xfer::fmt_size(size)
+            )
+        } else {
+            format!("[{tag}] {name} · {}", xfer::fmt_size(size))
+        };
+        let (mid, msg_deduped) = self
+            .sblk({
+                let cid = chat_id.clone();
+                let cxid = p.client_xfer_id.clone();
+                let mid2 = mid.clone();
+                move |s| {
+                    s.insert_message(&NewMessage {
+                        msg_id: mid2,
+                        chat_id: cid,
+                        dir: Dir::Out,
+                        kind: MsgKind::File,
+                        body,
+                        state: Some(MsgState::Queued),
+                        client_msg_id: Some(cxid),
+                        ts: now_ms(),
+                        expires_at: None,
+                    })
+                }
+            })
+            .await
+            .map_err(store_rpc)?;
+        let offer = AppMsg::FileOffer {
+            file_id: file_id_raw_v,
+            fetch_token,
+            name: name.clone(),
+            mime: mime.clone(),
+            size,
+            sha256,
+            chunk_size,
+            chunks_total,
+            kind,
+            thumb: thumb.clone(),
+            audio: audio.clone(),
+            caption: p.caption.clone(),
+            reply_msg: mid.clone(),
+        };
+        // Wire budget: the whole offer must fit the 8192 B plaintext bucket.
+        // Oversize ⇒ the thumbnail goes first; still-over ⇒ invalid params.
+        let mut offer = offer;
+        if let Ok(b) = wire_serialize(&offer) {
+            if b.len() > caps.offer_budget {
+                if let AppMsg::FileOffer { thumb: t, .. } = &mut offer {
+                    *t = None;
+                }
+            }
+        }
+        match wire_serialize(&offer) {
+            Ok(b) if b.len() <= caps.offer_budget => {}
+            Ok(_) => {
+                return Err(RpcError::new(
+                    ErrorKind::InvalidParams,
+                    "offer metadata exceeds the wire budget",
+                ));
+            }
+            Err(_) => return Err(RpcError::internal("offer encode failed")),
+        }
+        // The wire-budget pass may have trimmed the thumbnail — keep the row
+        // consistent with what actually went out.
+        let wire_thumb = match &offer {
+            AppMsg::FileOffer { thumb, .. } => thumb.clone(),
+            _ => None,
+        };
+        let (fid, file_deduped) = self
+            .sblk({
+                let cid = chat_id.clone();
+                let cxid = p.client_xfer_id.clone();
+                let mid3 = mid.clone();
+                let audio_json = audio.as_ref().and_then(|a| serde_json::to_string(a).ok());
+                let ft = fetch_token.to_vec();
+                let cap = p.caption.clone();
+                let nm = name.clone();
+                let mm = mime.clone();
+                move |s| {
+                    s.insert_file(&NewFile {
+                        file_id,
+                        msg_id: mid3,
+                        chat_id: cid,
+                        dir: Dir::Out,
+                        name: nm,
+                        mime: mm,
+                        size: size as i64,
+                        sha256: sha256.to_vec(),
+                        chunk_size: chunk_size as i64,
+                        chunks_total: chunks_total as i64,
+                        state: FileState::Offered.as_str().into(),
+                        kind: kind.as_str().into(),
+                        thumb: wire_thumb,
+                        audio_meta: audio_json,
+                        fetch_token: Some(ft),
+                        caption: cap,
+                        staged_path: Some(rel),
+                        client_xfer_id: Some(cxid),
+                    })
+                }
+            })
+            .await
+            .map_err(|e| match e {
+                StoreError::Conflict => RpcError::new(
+                    ErrorKind::Conflict,
+                    "client_xfer_id replayed with a different payload",
+                ),
+                other => store_rpc(other),
+            })?;
+        if file_deduped {
+            // Replay: the original row carries the authoritative ids.
+            let row = self
+                .sblk({
+                    let f = fid.clone();
+                    move |s| s.get_file(&f)
+                })
+                .await
+                .map_err(store_rpc)?
+                .ok_or_else(|| RpcError::internal("file row vanished"))?;
+            return Ok(json!({
+                "file_id": row.file_id,
+                "msg_id": row.msg_id,
+                "chat_id": row.chat_id,
+                "state": row.state,
+                "chunks_total": row.chunks_total,
+                "deduped": true,
+            }));
+        }
+        self.emit(
+            "msg_state",
+            Some(&chat_id),
+            json!({
+                "chat_id": chat_id,
+                "msg_id": mid,
+                "client_msg_id": p.client_xfer_id,
+                "state": "queued",
+            }),
+        );
+        if let Ok(Some(row)) = self
+            .sblk({
+                let f = fid.clone();
+                move |s| s.get_file(&f)
+            })
+            .await
+        {
+            self.xfer_hydrate(&row, peer);
+            self.emit_xfer(&row, &[]);
+        }
+        if msg_deduped {
+            // Anchor already existed (cross-crash replay): still deduped.
+            return Ok(json!({
+                "file_id": fid,
+                "msg_id": mid,
+                "chat_id": chat_id,
+                "state": "offered",
+                "chunks": chunks_total,
+                "bytes": size,
+                "deduped": true,
+            }));
+        }
+        let me = self.arc();
+        let mid2 = mid.clone();
+        tokio::spawn(async move {
+            me.deliver_or_queue(
+                peer,
+                PendingMsg {
+                    app: offer,
+                    msg_id: Some(mid2),
+                },
+            )
+            .await;
+        });
+        Ok(json!({
+            "file_id": fid,
+            "msg_id": mid,
+            "chat_id": chat_id,
+            "state": "offered",
+            "chunks": chunks_total,
+            "bytes": size,
+            "deduped": false,
+        }))
+    }
+
+    async fn file_accept(&self, p: FileIdParams) -> Result<Value, RpcError> {
+        let row = self.file_row(&p.file_id).await?;
+        if row.dir != Dir::In {
+            return Err(RpcError::new(
+                ErrorKind::Conflict,
+                "only inbound offers can be accepted",
+            ));
+        }
+        if FileState::parse(&row.state) != Some(FileState::Offered) {
+            return Err(RpcError::new(
+                ErrorKind::Conflict,
+                format!("cannot accept a transfer in state {}", row.state),
+            ));
+        }
+        let peer = peer_of_chat(&row.chat_id)?;
+        match self.arc().accept_flow(&row, peer).await {
+            Ok(()) => Ok(json!({"file_id": row.file_id, "state": "transferring"})),
+            Err("storage_full") => {
+                self.arc().decline_offer(&row, peer, "storage_full").await;
+                Err(RpcError::new(ErrorKind::RateLimited, "staging cap reached"))
+            }
+            Err("policy") => {
+                self.arc().decline_offer(&row, peer, "policy").await;
+                Err(RpcError::new(
+                    ErrorKind::RateLimited,
+                    "in-flight transfer cap reached",
+                ))
+            }
+            Err(_) => Err(RpcError::internal("accept staging failed")),
+        }
+    }
+
+    async fn file_decline(&self, p: FileIdParams) -> Result<Value, RpcError> {
+        let row = self.file_row(&p.file_id).await?;
+        if row.dir != Dir::In {
+            return Err(RpcError::new(
+                ErrorKind::Conflict,
+                "only inbound offers can be declined",
+            ));
+        }
+        if FileState::parse(&row.state) != Some(FileState::Offered) {
+            return Err(RpcError::new(
+                ErrorKind::Conflict,
+                format!("cannot decline a transfer in state {}", row.state),
+            ));
+        }
+        let peer = peer_of_chat(&row.chat_id)?;
+        self.arc().decline_offer(&row, peer, "user").await;
+        Ok(json!({"file_id": row.file_id, "state": "declined"}))
+    }
+
+    async fn file_cancel(&self, p: FileIdParams) -> Result<Value, RpcError> {
+        let row = self.file_row(&p.file_id).await?;
+        if FileState::parse(&row.state)
+            .map(|s| s.is_terminal())
+            .unwrap_or(true)
+        {
+            return Err(RpcError::new(
+                ErrorKind::Conflict,
+                format!("transfer already {}", row.state),
+            ));
+        }
+        let peer = peer_of_chat(&row.chat_id)?;
+        self.xfer_set_state(&row, FileState::Cancelled, Some("user"))
+            .await;
+        self.xfer_unlink(&row).await;
+        if let Some(fid) = file_id_raw(&row.file_id) {
+            self.arc()
+                .deliver_or_queue(
+                    peer,
+                    PendingMsg {
+                        app: AppMsg::FileCancel {
+                            file_id: fid,
+                            reason: FileCancelReason::User,
+                        },
+                        msg_id: None,
+                    },
+                )
+                .await;
+        }
+        Ok(json!({"file_id": row.file_id, "state": "cancelled"}))
+    }
+
+    async fn file_info(&self, p: FileIdParams) -> Result<Value, RpcError> {
+        let row = self.file_row(&p.file_id).await?;
+        Ok(self.file_json(&row))
+    }
+
+    async fn file_thumb(&self, p: FileIdParams) -> Result<Value, RpcError> {
+        let row = self.file_row(&p.file_id).await?;
+        match row.thumb {
+            Some(t) => Ok(json!({
+                "file_id": row.file_id,
+                "thumb_b64": data_encoding::BASE64.encode(&t),
+                "mime": "image/jpeg",
+            })),
+            None => Ok(json!({
+                "file_id": row.file_id,
+                "thumb_b64": Value::Null,
+                "mime": Value::Null,
+            })),
+        }
+    }
+
+    async fn file_list(&self, p: FileListParams) -> Result<Value, RpcError> {
+        let limit = p.limit.unwrap_or(50).min(200);
+        let offset = match &p.cursor {
+            None => 0u64,
+            Some(c) => c
+                .strip_prefix("cur:off:")
+                .and_then(|n| n.parse::<u64>().ok())
+                .ok_or_else(|| RpcError::new(ErrorKind::InvalidParams, "invalid cursor"))?,
+        };
+        let state = p.state.clone();
+        if let Some(s) = &state {
+            if FileState::parse(s).is_none() {
+                return Err(RpcError::new(
+                    ErrorKind::InvalidParams,
+                    "unknown state filter",
+                ));
+            }
+        }
+        let cid = p.chat_id.clone();
+        let rows = self
+            .sblk(move |s| s.list_files(cid.as_deref(), state.as_deref(), limit + 1, offset))
+            .await
+            .map_err(store_rpc)?;
+        let has_more = rows.len() > limit as usize;
+        let items: Vec<Value> = rows
+            .iter()
+            .take(limit as usize)
+            .map(|r| self.file_json(r))
+            .collect();
+        let next_cursor = has_more.then(|| format!("cur:off:{}", offset + limit as u64));
+        Ok(json!({"files": items, "next_cursor": next_cursor}))
+    }
+
+    /// `file.save` — the untrusted-name gauntlet (§5.4): sanitize, symlink
+    /// containment, collision suffixes ≤64, 0600, re-hash before rename.
+    async fn file_save(&self, p: FileSaveParams) -> Result<Value, RpcError> {
+        let row = self.file_row(&p.file_id).await?;
+        if FileState::parse(&row.state) != Some(FileState::Complete) {
+            return Err(RpcError::new(ErrorKind::Conflict, "transfer not finished"));
+        }
+        if row.dir != Dir::In {
+            return Err(RpcError::new(
+                ErrorKind::Conflict,
+                "only inbound transfers can be saved",
+            ));
+        }
+        let rel = row
+            .staged_path
+            .clone()
+            .filter(|r| !r.is_empty())
+            .ok_or_else(|| RpcError::internal("staged blob missing"))?;
+        if p.name.as_ref().map(|n| n.len()).unwrap_or(0) > 255 {
+            return Err(RpcError::new(ErrorKind::InvalidParams, "name too long"));
+        }
+        let explicit_dir = p.dir.is_some();
+        let save_dir = match &p.dir {
+            Some(d) => xfer::expand_tilde(d),
+            None => dirs::download_dir()
+                .or_else(|| dirs::home_dir().map(|h| h.join("Downloads")))
+                .unwrap_or_else(|| self.data_dir.join("saved")),
+        };
+        let data_dir = self.data_dir.clone();
+        let result = tokio::task::spawn_blocking(
+            move || -> std::result::Result<(PathBuf, u64), RpcError> {
+                if !save_dir.exists() {
+                    if explicit_dir {
+                        return Err(RpcError::new(
+                            ErrorKind::InvalidParams,
+                            "save directory does not exist",
+                        ));
+                    }
+                    std::fs::create_dir_all(&save_dir).map_err(|e| {
+                        RpcError::new(ErrorKind::InvalidParams, format!("save dir: {e}"))
+                    })?;
+                }
+                if !save_dir.is_dir() {
+                    return Err(RpcError::new(
+                        ErrorKind::InvalidParams,
+                        "save path is not a directory",
+                    ));
+                }
+                // The dir ITSELF may not be a symlink (a symlinked ancestor
+                // is fine — /var → /private/var on macOS is everywhere); the
+                // canonical base + separator-free names gives containment.
+                let meta = std::fs::symlink_metadata(&save_dir).map_err(|e| {
+                    RpcError::new(ErrorKind::InvalidParams, format!("save dir: {e}"))
+                })?;
+                if meta.file_type().is_symlink() {
+                    return Err(RpcError::new(
+                        ErrorKind::Conflict,
+                        "save dir is a symlink; use a canonical path",
+                    ));
+                }
+                let canon = std::fs::canonicalize(&save_dir).map_err(|e| {
+                    RpcError::new(ErrorKind::InvalidParams, format!("save dir: {e}"))
+                })?;
+                let src = xfer::stage_abs(&data_dir, &rel);
+                // Re-hash before write: a corrupted/tampered blob never lands
+                // in the user's directory under the offered name.
+                let digest = xfer::stage_sha256(&src)
+                    .map_err(|e| RpcError::internal(format!("re-hash: {e}")))?;
+                if digest.as_slice() != row.sha256.as_slice() {
+                    return Err(RpcError::internal("staged blob failed re-hash"));
+                }
+                let base = xfer::sanitize_name(p.name.as_deref().unwrap_or(&row.name));
+                for n in 0..64u32 {
+                    let cand = xfer::collision_name(&base, n);
+                    let dest = canon.join(&cand);
+                    // Containment: canonical parent + separator-free name.
+                    debug_assert!(dest.starts_with(&canon));
+                    let mut opts = std::fs::OpenOptions::new();
+                    opts.write(true).create_new(true);
+                    #[cfg(unix)]
+                    {
+                        use std::os::unix::fs::OpenOptionsExt;
+                        opts.mode(0o600);
+                    }
+                    match opts.open(&dest) {
+                        Ok(mut w) => {
+                            let mut r = std::fs::File::open(&src)
+                                .map_err(|e| RpcError::internal(format!("staged blob: {e}")))?;
+                            let bytes = std::io::copy(&mut r, &mut w)
+                                .map_err(|e| RpcError::internal(format!("save write: {e}")))?;
+                            return Ok((dest, bytes));
+                        }
+                        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                        Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => {
+                            return Err(RpcError::new(
+                                ErrorKind::InvalidParams,
+                                "save directory is not writable",
+                            ));
+                        }
+                        Err(e) => {
+                            return Err(RpcError::internal(format!("save: {e}")));
+                        }
+                    }
+                }
+                Err(RpcError::new(
+                    ErrorKind::Conflict,
+                    "no free collision-safe name within 64 attempts",
+                ))
+            },
+        )
+        .await
+        .map_err(|_| RpcError::internal("save task panicked"))??;
+        let (dest, bytes) = result;
+        let path_str = dest.to_string_lossy().to_string();
+        let fid = row.file_id.clone();
+        let p2 = path_str.clone();
+        let _ = self.sblk(move |s| s.set_file_saved(&fid, &p2)).await;
+        Ok(json!({
+            "file_id": row.file_id,
+            "path": path_str,
+            "bytes": bytes,
+        }))
+    }
+
     async fn backlog_summary(&self) -> Result<Value, RpcError> {
         let unread = self
             .sblk(|s| {
@@ -3561,6 +5804,15 @@ impl CinderCore for Core {
 }
 
 impl Core {
+    /// `file:` id → row or NotFound — shared by the file.* RPC methods.
+    async fn file_row(&self, file_id: &str) -> Result<FileRow, RpcError> {
+        let fid = file_id.to_string();
+        self.sblk(move |s| s.get_file(&fid))
+            .await
+            .map_err(store_rpc)?
+            .ok_or_else(|| RpcError::new(ErrorKind::NotFound, "file_id not found"))
+    }
+
     async fn snapshot_contacts(
         &self,
         chats: &[crate::store::Chat],
@@ -3700,11 +5952,32 @@ impl tb::Backend for TuiBackend {
             let cid = chat_id.to_string();
             let _ = core.sblk(move |s| s.mark_read_upto(&cid, ts)).await;
         }
+        let msg_ids: Vec<String> = msgs.iter().map(|m| m.msg_id.clone()).collect();
+        let files_by_msg = core
+            .sblk(move |s| s.files_by_msgs(&msg_ids))
+            .await
+            .unwrap_or_default();
         let own = self.peer_id.clone();
         Ok(tb::HistoryPage {
             messages: msgs
                 .into_iter()
                 .map(|m| tb::Message {
+                    file: files_by_msg.get(&m.msg_id).map(|f| {
+                        let audio: Option<serde_json::Value> = f
+                            .audio_meta
+                            .as_deref()
+                            .and_then(|a| serde_json::from_str(a).ok());
+                        tb::FileMeta {
+                            file_id: f.file_id.clone(),
+                            kind: f.kind.clone(),
+                            name: f.name.clone(),
+                            size: f.size.max(0) as u64,
+                            duration_ms: audio
+                                .as_ref()
+                                .and_then(|a| a["duration_ms"].as_u64())
+                                .map(|d| d as u32),
+                        }
+                    }),
                     msg_id: m.msg_id,
                     chat_id: m.chat_id,
                     dir: match m.dir {
@@ -3751,6 +6024,111 @@ impl tb::Backend for TuiBackend {
             client_msg_id: cmid,
             expires_at,
         })
+    }
+
+    async fn send_file(&mut self, chat_id: &str, path: &str) -> Result<tb::SendAck> {
+        let cxid = format!("tui:{}", b32(HsId::random().as_bytes()));
+        let v = CinderCore::file_send(
+            self.core.as_ref(),
+            FileSendParams {
+                to: chat_id.to_string(),
+                path: Some(path.to_string()),
+                data: None,
+                name: None,
+                mime: None,
+                kind: None,
+                audio: None,
+                caption: None,
+                client_xfer_id: cxid.clone(),
+            },
+        )
+        .await
+        .map_err(|e| {
+            anyhow!(
+                "{}: {}",
+                e.kind.as_str(),
+                e.hint.as_deref().unwrap_or(&e.message)
+            )
+        })?;
+        Ok(tb::SendAck {
+            msg_id: v["msg_id"].as_str().unwrap_or("").to_string(),
+            client_msg_id: cxid,
+            expires_at: None,
+        })
+    }
+
+    async fn file_save(&mut self, file_id: &str, dir: Option<String>) -> Result<String> {
+        let v = CinderCore::file_save(
+            self.core.as_ref(),
+            FileSaveParams {
+                file_id: file_id.to_string(),
+                dir,
+                name: None,
+            },
+        )
+        .await
+        .map_err(|e| {
+            anyhow!(
+                "{}: {}",
+                e.kind.as_str(),
+                e.hint.as_deref().unwrap_or(&e.message)
+            )
+        })?;
+        Ok(v["path"].as_str().unwrap_or("").to_string())
+    }
+
+    async fn file_cancel(&mut self, file_id: &str) -> Result<()> {
+        CinderCore::file_cancel(
+            self.core.as_ref(),
+            FileIdParams {
+                file_id: file_id.to_string(),
+            },
+        )
+        .await
+        .map_err(|e| {
+            anyhow!(
+                "{}: {}",
+                e.kind.as_str(),
+                e.hint.as_deref().unwrap_or(&e.message)
+            )
+        })?;
+        Ok(())
+    }
+
+    async fn file_accept(&mut self, file_id: &str) -> Result<()> {
+        CinderCore::file_accept(
+            self.core.as_ref(),
+            FileIdParams {
+                file_id: file_id.to_string(),
+            },
+        )
+        .await
+        .map_err(|e| {
+            anyhow!(
+                "{}: {}",
+                e.kind.as_str(),
+                e.hint.as_deref().unwrap_or(&e.message)
+            )
+        })?;
+        Ok(())
+    }
+
+    async fn file_decline(&mut self, file_id: &str) -> Result<()> {
+        CinderCore::file_decline(
+            self.core.as_ref(),
+            FileIdParams {
+                file_id: file_id.to_string(),
+            },
+        )
+        .await
+        .map_err(|e| {
+            anyhow!(
+                "{}: {}",
+                e.kind.as_str(),
+                e.hint.as_deref().unwrap_or(&e.message)
+            )
+        })?;
+        Ok(())
     }
 
     async fn set_disappearing(&mut self, chat_id: &str, ttl_ms: u64) -> Result<()> {

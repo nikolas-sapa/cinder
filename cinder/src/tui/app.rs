@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use ratatui_textarea::TextArea;
 
 use super::backend::{
-    now_ts, ChatSummary, ConnState, Dir, Event, HistoryPage, Message, MsgState, Trust,
+    now_ts, ChatSummary, ConnState, Dir, Event, FileMeta, HistoryPage, Message, MsgState, Trust,
 };
 
 #[derive(Debug, Clone)]
@@ -37,9 +37,27 @@ impl ChatBuffer {
 
 #[derive(Debug, Clone)]
 pub enum Overlay {
-    Fuzzy { query: String, sel: usize },
+    Fuzzy {
+        query: String,
+        sel: usize,
+    },
     Help,
-    Finger { lines: Vec<String> },
+    Finger {
+        lines: Vec<String>,
+    },
+    /// `/files` panel: one line per transfer in the focused chat.
+    Files {
+        lines: Vec<String>,
+    },
+}
+
+/// Live transfer progress for one anchor message — keyed by msg_id.
+#[derive(Debug, Clone)]
+pub struct FileProg {
+    pub state: String,
+    pub done: u64,
+    pub total: u64,
+    pub reason: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -54,6 +72,17 @@ pub enum Command {
     Next,
     /// `/ttl <seconds>` sets the local disappearing default; `0`/`off` clears.
     Ttl(u64),
+    /// `/send <path>` — file.send on the focused chat.
+    SendFile(String),
+    /// `/save [file_id]` — newest inbound file in the chat when omitted.
+    Save(Option<String>),
+    /// `/cancel <file_id>`.
+    Cancel(String),
+    /// `/accept [file_id]` / `/decline [file_id]` for inbound offers.
+    Accept(Option<String>),
+    Decline(Option<String>),
+    /// `/files` — transfer list panel for the focused chat.
+    Files,
     Unknown(String),
 }
 
@@ -83,6 +112,18 @@ pub fn parse_command(line: &str) -> Command {
             },
             None => Command::Unknown("usage: /ttl <seconds|off>".to_string()),
         },
+        "/send" => match arg.filter(|a| !a.is_empty()) {
+            Some(a) => Command::SendFile(a.to_string()),
+            None => Command::Unknown("usage: /send <path>".to_string()),
+        },
+        "/save" => Command::Save(arg.filter(|a| !a.is_empty()).map(str::to_string)),
+        "/cancel" => match arg.filter(|a| !a.is_empty()) {
+            Some(a) => Command::Cancel(a.to_string()),
+            None => Command::Unknown("usage: /cancel <file:…>".to_string()),
+        },
+        "/accept" => Command::Accept(arg.filter(|a| !a.is_empty()).map(str::to_string)),
+        "/decline" => Command::Decline(arg.filter(|a| !a.is_empty()).map(str::to_string)),
+        "/files" => Command::Files,
         other => Command::Unknown(format!("unknown command {other} (/help)")),
     }
 }
@@ -149,6 +190,8 @@ pub struct App {
     pub quit: bool,
     pub status_line: Option<String>,
     pub pending: HashMap<String, String>,
+    /// msg_id → live transfer progress, fed by `file_state` events.
+    pub file_progress: HashMap<String, FileProg>,
     pub chat_view_height: u16,
 }
 
@@ -166,6 +209,7 @@ impl App {
             quit: false,
             status_line: None,
             pending: HashMap::new(),
+            file_progress: HashMap::new(),
             chat_view_height: 1,
         }
     }
@@ -350,6 +394,39 @@ impl App {
                     format!("{contact_id} unverified — sas: {sas} — /finger to inspect")
                 });
             }
+            Event::FileState {
+                file_id,
+                msg_id,
+                chat_id,
+                state,
+                bytes_done,
+                bytes_total,
+                reason,
+                ..
+            } => {
+                let terminal = matches!(
+                    state.as_str(),
+                    "complete" | "failed" | "cancelled" | "declined" | "expired"
+                );
+                if !msg_id.is_empty() {
+                    self.file_progress.insert(
+                        msg_id,
+                        FileProg {
+                            state: state.clone(),
+                            done: bytes_done,
+                            total: bytes_total,
+                            reason: reason.clone(),
+                        },
+                    );
+                }
+                if terminal {
+                    self.status_line = Some(match reason {
+                        Some(r) => format!("file {file_id}: {state} ({r})"),
+                        None => format!("file {file_id}: {state}"),
+                    });
+                }
+                let _ = chat_id;
+            }
             Event::ConnChanged(s) => {
                 self.conn = s;
             }
@@ -412,12 +489,130 @@ impl App {
             state: MsgState::Queued,
             ts: now_ts(),
             expires_at,
+            file: None,
         };
         self.pending
             .insert(client_msg_id.to_string(), msg_id.to_string());
         self.buffer_mut(chat_id).messages.push(msg);
         let ts = now_ts();
         self.touch_chat(chat_id, ts, body);
+    }
+
+    /// `/send <path>` — optimistic outbound file anchor; the offered name is
+    /// local (trusted) so it needs no sanitize for display.
+    pub fn push_outgoing_file(
+        &mut self,
+        chat_id: &str,
+        msg_id: &str,
+        client_xfer_id: &str,
+        path: &str,
+    ) {
+        let name = std::path::Path::new(path)
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "file.bin".to_string());
+        let size = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
+        let kind = if mime_guess::from_path(path)
+            .first()
+            .map(|m| m.type_() == mime_guess::mime::IMAGE)
+            .unwrap_or(false)
+        {
+            "image"
+        } else {
+            "file"
+        };
+        let msg = Message {
+            msg_id: msg_id.to_string(),
+            chat_id: chat_id.to_string(),
+            dir: Dir::Out,
+            from: self.peer_id.clone(),
+            text: format!("[{kind}] {name}"),
+            state: MsgState::Queued,
+            ts: now_ts(),
+            expires_at: None,
+            file: Some(FileMeta {
+                file_id: String::new(),
+                kind: kind.to_string(),
+                name,
+                size,
+                duration_ms: None,
+            }),
+        };
+        self.pending
+            .insert(client_xfer_id.to_string(), msg_id.to_string());
+        self.buffer_mut(chat_id).messages.push(msg);
+        let ts = now_ts();
+        self.touch_chat(chat_id, ts, "[file]");
+    }
+
+    /// `/save` default target: newest inbound file anchor in the chat.
+    pub fn latest_inbound_file(&self, chat_id: &str) -> Option<String> {
+        self.buffers
+            .get(chat_id)?
+            .messages
+            .iter()
+            .rev()
+            .find_map(|m| {
+                (m.dir == Dir::In)
+                    .then(|| m.file.as_ref().map(|f| f.file_id.clone()))
+                    .flatten()
+            })
+    }
+
+    /// `/accept`/`/decline` default target: newest inbound offer still
+    /// pending (no terminal progress recorded yet).
+    pub fn pending_offer(&self, chat_id: &str) -> Option<String> {
+        self.buffers
+            .get(chat_id)?
+            .messages
+            .iter()
+            .rev()
+            .find_map(|m| {
+                if m.dir != Dir::In {
+                    return None;
+                }
+                let f = m.file.as_ref()?;
+                match self.file_progress.get(&m.msg_id) {
+                    Some(p)
+                        if !matches!(
+                            p.state.as_str(),
+                            "offered" | "accepted" | "transferring" | "verifying"
+                        ) =>
+                    {
+                        None
+                    }
+                    _ => Some(f.file_id.clone()),
+                }
+            })
+    }
+
+    /// `/files` panel lines — one per file anchor in the focused chat.
+    pub fn files_panel(&self, chat_id: &str) -> Vec<String> {
+        let Some(buf) = self.buffers.get(chat_id) else {
+            return vec!["no transfers".to_string()];
+        };
+        let mut lines = Vec::new();
+        for m in buf.messages.iter().filter(|m| m.file.is_some()) {
+            let f = m.file.as_ref().unwrap();
+            let prog = self
+                .file_progress
+                .get(&m.msg_id)
+                .map(|p| {
+                    let pct = p
+                        .done
+                        .saturating_mul(100)
+                        .checked_div(p.total)
+                        .map(|p| format!(" {p}%"))
+                        .unwrap_or_default();
+                    format!(" — {}{}", p.state, pct)
+                })
+                .unwrap_or_default();
+            lines.push(format!("{} · {} · {}{}", f.file_id, f.name, f.kind, prog));
+        }
+        if lines.is_empty() {
+            lines.push("no transfers".to_string());
+        }
+        lines
     }
 
     pub fn input_text(&self) -> String {
@@ -531,6 +726,7 @@ mod tests {
             state: MsgState::Delivered,
             ts: n as i64,
             expires_at: None,
+            file: None,
         }
     }
 

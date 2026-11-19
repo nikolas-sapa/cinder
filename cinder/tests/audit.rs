@@ -12,6 +12,8 @@ mod rpc;
 mod store;
 #[path = "../src/tui/mod.rs"]
 mod tui;
+#[path = "../src/xfer.rs"]
+mod xfer;
 
 use std::net::SocketAddr;
 use std::sync::Arc;

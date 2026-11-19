@@ -126,6 +126,7 @@ guaranteed within a major protocol version; agents MUST treat them as opaque.
 | `contact:` | contact record | `contact:9f3b...` |
 | `chat:` | 1:1 conversation | `chat:77aa...` |
 | `msg:` | message | `msg:e01d...` |
+| `file:` | file transfer (also the `body.file.file_id` anchor) | `file:3k9x...` |
 | `inv:` | pending invite | `inv:2c44...` |
 | `sub:` | event subscription | `sub:1` |
 | `cur:` | opaque pagination cursor | `cur:gbv4...` |
@@ -912,6 +913,73 @@ stops, all clients get the handshake). Requires `admin` scope.
 
 ---
 
+### 4.20 File transfer methods (`file.*`)
+
+Encrypted file/image/voice-note transfer. File content travels as chunked
+application messages **inside the existing Noise session** — the relay stays
+byte-blind and no relay or `ClientMsg` changes exist. Small offers may
+mailbox offline; chunks are live-session traffic only.
+
+`file.send` returns at **acceptance** (offer stored + anchor `msg:` created),
+not delivery — `file_state` events carry the lifecycle. Inbound transfers
+auto-accept per the `files.auto_accept` account meta (`contacts` default;
+`verified` restricts to verified contacts, `manual` requires `file.accept`).
+
+#### `file.send` — scope `send`
+
+| Field | Type | Req | Description |
+|---|---|---|---|
+| `to` | string | yes | `contact:`/`chat:`/`peer:` id |
+| `path` | string | one of path/data | Local file; must resolve to a regular file ≤ `file_max_bytes` |
+| `data` | string | one of path/data | Base64 inline bytes, decoded ≤ `file_inline_max_bytes` (1 MiB) |
+| `name` | string | no | 1–255 bytes; sanitized before display/save |
+| `mime` | string | no | ≤ 64 bytes |
+| `kind` | string | no | `file` (default) \| `image` \| `voice`; `voice` requires `audio` |
+| `audio` | object | with `kind:voice` | `{duration_ms (≤ file_voice_max_ms), codec, sample_rate_hz, channels}` |
+| `caption` | string | no | ≤ 1024 bytes |
+| `client_xfer_id` | string | yes | Idempotency key: replays return `deduped:true`; conflicting reuse → `-32018`/`conflict` |
+
+**Result:** `{file_id, msg_id, chat_id, state:"offered", chunks, bytes, deduped}`
+
+**Errors:** `-32602` invalid params; `-32015` rate_limited (per-peer/account
+inflight caps); `-32018` conflict.
+
+#### `file.accept` / `file.decline` / `file.cancel` — scope `send`
+
+**Params:** `{file_id}`.
+
+- `file.accept` → `{file_id, state:"transferring"}`
+- `file.decline` → `{file_id, state:"declined"}`
+- `file.cancel` → `{file_id, state:"cancelled"}` (either direction; frees the
+  receiver's `.part` staging)
+
+#### `file.info` / `file.list` — scope `read`
+
+`file.info {file_id}` → one row:
+
+```json
+{"file_id":"file:…","msg_id":"msg:…","chat_id":"chat:…","dir":"in","name":"report.pdf","mime":"application/pdf","size":28672,"sha256":"<base64>","kind":"file","state":"complete","reason":null,"chunk_size":7168,"chunks_total":4,"chunks_done":4,"has_thumb":false,"audio":null,"caption":null,"saved_path":"/…/report.pdf","created_at":"…","updated_at":"…"}
+```
+
+`fetch_token` (resume secret) is never exposed. `file.list
+{chat_id?, state?, limit?, cursor?}` → `{files:[…], next_cursor}` newest-first.
+
+#### `file.save` — scope `read`
+
+**Params:** `{file_id, dir?, name?}`. Only `state:"complete"` inbound rows;
+rehashes the staged bytes before writing. The untrusted `name` is
+basename-sanitized; `dir` must be an existing non-symlink directory;
+collisions get a `-N` suffix. → `{file_id, path, bytes}`.
+
+#### `file.thumb` — scope `read`
+
+**Params:** `{file_id}` → `{file_id, thumb_b64|null, mime|null}`.
+Thumbnail bytes are **UNTRUSTED peer-controlled data** (≤ 16 KiB JPEG,
+dimension/allocation-guarded at generation) — decode only with guarded
+decoders; never pass to unguarded image libraries.
+
+---
+
 ## 5. Event catalog
 
 All events are JSON-RPC **notifications** on subscribed connections. Envelope:
@@ -1163,6 +1231,26 @@ Replay-expiry marker — **the only legal representation of lost events.**
 Emitted BEFORE the first replayed event; its own `seq` is the oldest retained
 position. Agents seeing `event.gap` MUST assume missed state (re-fetch
 `chat.list`/`chat.history`/`contact.list`) — NEVER silently dropped.
+
+### 5.10 `file_state`
+
+Transfer lifecycle + progress for `file:*` ids.
+
+**Payload:** `{file_id, msg_id, chat_id, dir, state, bytes_done,
+bytes_total, reason?}`
+
+- `state`: `offered` · `accepted` · `transferring` · `verifying` · `complete`
+  · `failed` · `cancelled` · `declined` · `expired`.
+- `reason` (terminal only): `peer_offline` · `mailbox_full` ·
+  `hash_mismatch` · `storage_full` · `policy` · `user` · `timeout` ·
+  `key_changed` · `internal`.
+- Every state transition emits immediately; progress inside `transferring`
+  coalesces to **≤ 1 event/s per transfer** (`bytes_done` from the
+  verified-chunk bitmap; `complete` always reports `bytes_total`).
+
+```json
+{"jsonrpc":"2.0","method":"file_state","params":{"subscription_id":"sub:1","seq":417,"ts":"2026-11-18T16:06:40Z","file_id":"file:3k9x…","msg_id":"msg:e01d…","chat_id":"chat:77aa…","dir":"in","state":"transferring","bytes_done":14336,"bytes_total":28672}}
+```
 
 ---
 

@@ -28,12 +28,14 @@ pub fn handle_key(app: &App, key: KeyEvent) -> Action {
                 (KeyCode::Char('c'), m) if m.contains(KeyModifiers::CONTROL) => Action::Quit,
                 _ => Action::FuzzyKey(key),
             },
-            Overlay::Help | Overlay::Finger { .. } => match (key.code, key.modifiers) {
-                (KeyCode::Esc, _) => Action::CloseOverlay,
-                (KeyCode::Char('q'), _) => Action::CloseOverlay,
-                (KeyCode::Char('c'), m) if m.contains(KeyModifiers::CONTROL) => Action::Quit,
-                _ => Action::Noop,
-            },
+            Overlay::Help | Overlay::Finger { .. } | Overlay::Files { .. } => {
+                match (key.code, key.modifiers) {
+                    (KeyCode::Esc, _) => Action::CloseOverlay,
+                    (KeyCode::Char('q'), _) => Action::CloseOverlay,
+                    (KeyCode::Char('c'), m) if m.contains(KeyModifiers::CONTROL) => Action::Quit,
+                    _ => Action::Noop,
+                }
+            }
         };
     }
     match (key.code, key.modifiers) {

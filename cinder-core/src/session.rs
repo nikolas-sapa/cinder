@@ -67,6 +67,13 @@ pub struct Session {
     remote_static: Option<[u8; 32]>,
     remote_peer: Option<PeerId>,
     session_id: Option<SessionId>,
+    /// Local stream id chosen at construction and carried inside the
+    /// handshake payloads so the peer can pre-bind its sid index — stale-
+    /// generation frames then hit the foreign-sid tombstone path instead of
+    /// fatally binding against the fresh session.
+    local_sid: SessionId,
+    /// Peer's stream id learned from its handshake payload.
+    remote_sid: Option<SessionId>,
     handshake_hash: Option<[u8; 32]>,
     sas: Option<Sas>,
     sent: u64,
@@ -104,6 +111,8 @@ impl Session {
             remote_static: None,
             remote_peer: None,
             session_id: None,
+            local_sid: SessionId::random(),
+            remote_sid: None,
             handshake_hash: None,
             sas: None,
             sent: 0,
@@ -146,7 +155,7 @@ impl Session {
                 .hs
                 .as_mut()
                 .ok_or_else(|| Error::Protocol("no handshake in progress".into()))?;
-            hs.write_message(&[], &mut buf)
+            hs.write_message(self.local_sid.as_bytes(), &mut buf)
         };
         let n = match res {
             Ok(n) => n,
@@ -196,7 +205,15 @@ impl Session {
             hs.read_message(payload, &mut out)
         };
         match res {
-            Ok(_) => {
+            Ok(n) => {
+                // Peer's transport stream id rides every handshake payload —
+                // pre-bind it so the first data frame can be verified rather
+                // than trusted blindly (old-generation sids drop by index).
+                if n == caps::SESSION_ID_LEN {
+                    let mut sid = [0u8; caps::SESSION_ID_LEN];
+                    sid.copy_from_slice(&out[..n]);
+                    self.remote_sid = Some(SessionId::from_bytes(sid));
+                }
                 self.hs_step += 1;
                 self.capture_remote();
                 Ok(())
@@ -273,7 +290,7 @@ impl Session {
             }
         };
         self.transport = Some(transport);
-        self.session_id = Some(SessionId::random());
+        self.session_id = Some(self.local_sid);
         self.handshake_hash = Some(hh);
         self.sas = Some(Sas::derive(&hh, &self.our_static, &remote));
         self.state = SessionState::Trusted(self.remote_peer.expect("set with remote_static"));
@@ -492,6 +509,12 @@ impl Session {
 
     pub fn session_id(&self) -> Option<SessionId> {
         self.session_id
+    }
+
+    /// Peer's stream id learned inside the handshake; `None` only for
+    /// pre-sid-exchange peers (lazy bind still supported).
+    pub fn remote_session_id(&self) -> Option<SessionId> {
+        self.remote_sid
     }
 
     pub fn sas(&self) -> Option<&Sas> {

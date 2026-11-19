@@ -254,7 +254,7 @@ pub fn ranges_of(map: &[u8], chunks_total: u32) -> Vec<(u32, u32)> {
 /// `chunks_total` — a malformed vector is rejected wholesale (no partial
 /// merge). Returns the count of newly-set bits.
 pub fn merge_ranges(
-    map: &mut Vec<u8>,
+    map: &mut [u8],
     chunks_total: u32,
     ranges: &[(u32, u32)],
 ) -> std::result::Result<u32, ()> {
@@ -373,8 +373,7 @@ pub fn stage_unlink(abs: &Path) {
 pub fn sanitize_name(raw: &str) -> String {
     let last = raw
         .split(['/', '\\'])
-        .filter(|c| !c.is_empty() && *c != "." && *c != "..")
-        .next_back()
+        .rfind(|c| !c.is_empty() && *c != "." && *c != "..")
         .unwrap_or("");
     let mut name: String = last
         .chars()
@@ -442,11 +441,11 @@ pub fn make_thumb(src: &Path, caps: &XferCaps) -> Option<Vec<u8>> {
         .ok()?
         .with_guessed_format()
         .ok()?;
-    reader.limits(image::Limits {
-        max_image_width: Some(8192),
-        max_image_height: Some(8192),
-        max_alloc: Some(64 * 1024 * 1024),
-    });
+    let mut lim = image::Limits::default();
+    lim.max_image_width = Some(8192);
+    lim.max_image_height = Some(8192);
+    lim.max_alloc = Some(64 * 1024 * 1024);
+    reader.limits(lim);
     let img = reader.decode().ok()?;
     let thumb = img.thumbnail(caps.thumb_max_dim, caps.thumb_max_dim);
     let mut buf = std::io::Cursor::new(Vec::new());

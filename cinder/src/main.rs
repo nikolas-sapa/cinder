@@ -9,6 +9,7 @@ mod presence;
 mod rpc;
 mod store;
 mod tui;
+mod xfer;
 
 use clap::{Parser, Subcommand};
 use std::net::SocketAddr;

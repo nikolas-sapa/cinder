@@ -21,6 +21,14 @@ const ALL_METHODS: &[&str] = &[
     "invite.create",
     "invite.accept",
     "ident.verify",
+    "file.send",
+    "file.accept",
+    "file.decline",
+    "file.cancel",
+    "file.info",
+    "file.list",
+    "file.save",
+    "file.thumb",
     "events.subscribe",
     "events.unsubscribe",
     "shutdown.request",
@@ -259,8 +267,8 @@ async fn dispatch_covers_describe_table() {
     hello(&mut h).await;
     let d = call(&mut h, 2, "rpc.describe", json!({})).await;
     let described: Vec<String> = d["methods"].as_object().unwrap().keys().cloned().collect();
-    assert_eq!(described.len(), 19, "rpc.describe must describe 19 methods");
-    assert_eq!(METHODS.len(), 19);
+    assert_eq!(described.len(), 27, "rpc.describe must describe 27 methods");
+    assert_eq!(METHODS.len(), 27);
     for m in METHODS.iter() {
         assert!(
             described.contains(&m.name.to_string()),
@@ -274,7 +282,7 @@ async fn dispatch_covers_describe_table() {
             "METHODS table missing {name}"
         );
     }
-    assert_eq!(EVENTS.len(), 9);
+    assert_eq!(EVENTS.len(), 10);
 }
 
 // P2 — rpc.describe answers pre-auth and covers the whole surface.
@@ -303,6 +311,7 @@ async fn p2_describe_preauth() {
         "security.identity_changed",
         "security.verification_needed",
         "session.backlog",
+        "file_state",
         "event.gap",
     ] {
         assert!(events.contains_key(name), "describe missing event {name}");

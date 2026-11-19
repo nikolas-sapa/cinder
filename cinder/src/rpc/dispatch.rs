@@ -57,6 +57,14 @@ impl EngineConfig {
             "history_limit_max": self.history_limit_max,
             "send_queue_frames": self.send_queue_frames,
             "replay_log_max_events": self.replay_log_max_events,
+            // Mirror of xfer::XferCaps::default() — kept literal so the rpc
+            // tree still compiles standalone in #[path] test includes.
+            "file_max_bytes": 64 * 1024 * 1024,
+            "file_chunk_bytes": 7168,
+            "file_max_inflight_peer": 4,
+            "file_max_inflight": 16,
+            "file_inline_max_bytes": 1024 * 1024,
+            "file_voice_max_ms": 300_000,
         })
     }
 }

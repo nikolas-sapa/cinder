@@ -64,8 +64,27 @@ Typed at the start of the input bar (`cinder/src/tui/app.rs:parse_command`).
 | `/clear` | Clear the input draft (not the history) | verified |
 | `/status` | Connection state + peer-id + chat/unread counts in the status line | verified |
 | `/next` | Same as `M-a` — next unread chat | verified |
+| `/send <path>` | Send a file/image/voice note (≤ 64 MiB) to the active chat; encrypts inside the Noise session and queues an offer | verified |
+| `/accept [file:…]` | Accept an inbound file offer (defaults to the most recent offered transfer in the chat) | verified |
+| `/decline [file:…]` | Decline an inbound file offer | verified |
+| `/cancel <file:…>` | Cancel an active or offered transfer, either direction | verified |
+| `/save [dir]` | Save the selected/completed received file to `dir` (default: downloads dir); untrusted names are sanitized to a basename | verified |
+| `/files` | List transfers in the active chat with state and progress | verified |
 | `/quit`, `/q` | Exit cinder | verified |
 | _(anything else)_ | `unknown command <x> (/help)` on the status line | verified |
+
+## File messages
+
+Transfers render as placeholders in the chat pane, never inline bytes:
+
+- `[file] name · 1.2 MiB` — generic attachment
+- `[image] name · 340 KiB` — `kind:image` (thumbnail shown where supported)
+- `[voice 0:12]` — `kind:audio` with duration from `audio.duration_ms`
+
+Progress replaces the placeholder tail while `transferring`
+(`· 42%`), and terminal states append the reason (`· failed: hash_mismatch`,
+`· declined`, `· expired`). Inbound filenames are untrusted peer data and are
+basename-sanitized before rendering — the wire can never inject a path.
 
 ## Known gap — no inbound-request affordance
 

@@ -16,7 +16,7 @@ use serde_json::Value;
 use sha2::Sha256;
 
 const STORE_HKDF_INFO: &[u8] = b"cinder-store-v1";
-const SCHEMA_VERSION: i64 = 2;
+const SCHEMA_VERSION: i64 = 3;
 const EVENT_LOG_KEEP: i64 = 16384;
 const DEDUP_TTL_MS: i64 = 7 * 24 * 60 * 60 * 1000;
 const MAX_WINDOW: u32 = 500;
@@ -73,6 +73,10 @@ pub enum MsgKind {
     Edit,
     Delete,
     Reaction,
+    /// Anchor message for a file/image/voice transfer; its body is a
+    /// renderable fallback (`[file] name · size`) and transfer metadata
+    /// lives in the `files` row sharing the same `msg_id`.
+    File,
 }
 
 impl MsgKind {
@@ -82,6 +86,7 @@ impl MsgKind {
             MsgKind::Edit => "edit",
             MsgKind::Delete => "delete",
             MsgKind::Reaction => "reaction",
+            MsgKind::File => "file",
         }
     }
 
@@ -91,6 +96,7 @@ impl MsgKind {
             "edit" => Ok(MsgKind::Edit),
             "delete" => Ok(MsgKind::Delete),
             "reaction" => Ok(MsgKind::Reaction),
+            "file" => Ok(MsgKind::File),
             _ => Err(StoreError::Internal("bad kind")),
         }
     }
@@ -168,6 +174,66 @@ pub struct NewMessage {
     /// Absolute expiry deadline (unix ms) for disappearing messages; `None`
     /// means the message never expires.
     pub expires_at: Option<i64>,
+}
+
+/// A transfer row in `files` (schema v3). `state`, `kind`, and `audio_meta`
+/// stay as their column strings here — the typed enums live in `xfer.rs`,
+/// which this module must not depend on (tests include `store.rs` alone).
+#[derive(Debug, Clone)]
+pub struct FileRow {
+    pub file_id: String,
+    pub msg_id: String,
+    pub chat_id: String,
+    pub dir: Dir,
+    pub name: String,
+    pub mime: String,
+    pub size: i64,
+    /// 32-byte whole-file digest — the integrity root.
+    pub sha256: Vec<u8>,
+    pub chunk_size: i64,
+    pub chunks_total: i64,
+    /// Chunk bitmap: inbound = verified chunks, outbound = acked chunks.
+    pub have: Vec<u8>,
+    pub state: String,
+    pub reason: Option<String>,
+    pub kind: String,
+    pub thumb: Option<Vec<u8>>,
+    /// JSON `AudioMeta` when `kind == "audio"`.
+    pub audio_meta: Option<String>,
+    /// Present while the peer could resume/re-offer this transfer.
+    pub fetch_token: Option<Vec<u8>>,
+    pub caption: Option<String>,
+    /// `xfer/<hash>.part` relative to the data dir (inbound staging, or
+    /// materialized outbound `data` sends).
+    pub staged_path: Option<String>,
+    pub saved_path: Option<String>,
+    /// Outbound idempotency key — held for store-side replay, not surfaced.
+    #[allow(dead_code)]
+    pub client_xfer_id: Option<String>,
+    pub created_at: i64,
+    pub updated_at: i64,
+}
+
+#[derive(Debug, Clone)]
+pub struct NewFile {
+    pub file_id: String,
+    pub msg_id: String,
+    pub chat_id: String,
+    pub dir: Dir,
+    pub name: String,
+    pub mime: String,
+    pub size: i64,
+    pub sha256: Vec<u8>,
+    pub chunk_size: i64,
+    pub chunks_total: i64,
+    pub state: String,
+    pub kind: String,
+    pub thumb: Option<Vec<u8>>,
+    pub audio_meta: Option<String>,
+    pub fetch_token: Option<Vec<u8>>,
+    pub caption: Option<String>,
+    pub staged_path: Option<String>,
+    pub client_xfer_id: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -466,6 +532,49 @@ impl Store {
             tx.execute(
                 "INSERT INTO schema_migrations(version, applied_at) VALUES(?1, ?2)",
                 params![2, now_ms()],
+            )?;
+        }
+        if version < 3 {
+            // v3 — file/image/voice transfers. `have` is the chunk bitmap;
+            // `fetch_token` binds resume offers; `staged_path` points at a
+            // hash-named `xfer/*.part` blob. The partial dedup index makes
+            // `client_xfer_id` idempotent exactly like `client_msg_id`.
+            tx.execute_batch(
+                "CREATE TABLE files(
+                    file_id TEXT PRIMARY KEY,
+                    msg_id TEXT NOT NULL,
+                    chat_id TEXT NOT NULL,
+                    dir TEXT NOT NULL CHECK(dir IN('in','out')),
+                    name TEXT NOT NULL,
+                    mime TEXT NOT NULL DEFAULT 'application/octet-stream',
+                    size INTEGER NOT NULL,
+                    sha256 BLOB NOT NULL,
+                    chunk_size INTEGER NOT NULL,
+                    chunks_total INTEGER NOT NULL,
+                    have BLOB NOT NULL DEFAULT X'',
+                    state TEXT NOT NULL,
+                    reason TEXT,
+                    kind TEXT NOT NULL DEFAULT 'file',
+                    thumb BLOB,
+                    audio_meta TEXT,
+                    fetch_token BLOB,
+                    caption TEXT,
+                    staged_path TEXT,
+                    saved_path TEXT,
+                    client_xfer_id TEXT,
+                    created_at INTEGER NOT NULL,
+                    updated_at INTEGER NOT NULL
+                );
+                CREATE UNIQUE INDEX files_out_dedup
+                    ON files(client_xfer_id)
+                    WHERE dir = 'out' AND client_xfer_id IS NOT NULL;
+                CREATE INDEX files_chat ON files(chat_id, created_at DESC);
+                CREATE INDEX files_active ON files(state)
+                    WHERE state IN('offered','accepted','transferring','verifying');",
+            )?;
+            tx.execute(
+                "INSERT INTO schema_migrations(version, applied_at) VALUES(?1, ?2)",
+                params![3, now_ms()],
             )?;
         }
         tx.commit()?;
@@ -1309,5 +1418,320 @@ impl Store {
             .into_iter()
             .map(|(cid, t)| self.tuple_to_message(&conn, &cid, t))
             .collect()
+    }
+
+    // ---------- files (schema v3) ---------------------------------------
+
+    const FILE_COLS: &'static str = "file_id, msg_id, chat_id, dir, name, mime,
+        size, sha256, chunk_size, chunks_total, have, state, reason, kind,
+        thumb, audio_meta, fetch_token, caption, staged_path, saved_path,
+        client_xfer_id, created_at, updated_at";
+
+    fn file_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<FileRow> {
+        Ok(FileRow {
+            file_id: r.get(0)?,
+            msg_id: r.get(1)?,
+            chat_id: r.get(2)?,
+            dir: Dir::parse(&r.get::<_, String>(3)?).map_err(|_| rusqlite::Error::InvalidQuery)?,
+            name: r.get(4)?,
+            mime: r.get(5)?,
+            size: r.get(6)?,
+            sha256: r.get(7)?,
+            chunk_size: r.get(8)?,
+            chunks_total: r.get(9)?,
+            have: r.get(10)?,
+            state: r.get(11)?,
+            reason: r.get(12)?,
+            kind: r.get(13)?,
+            thumb: r.get(14)?,
+            audio_meta: r.get(15)?,
+            fetch_token: r.get(16)?,
+            caption: r.get(17)?,
+            staged_path: r.get(18)?,
+            saved_path: r.get(19)?,
+            client_xfer_id: r.get(20)?,
+            created_at: r.get(21)?,
+            updated_at: r.get(22)?,
+        })
+    }
+
+    /// Inserts a transfer row. Outbound rows carrying `client_xfer_id` are
+    /// idempotent exactly like `insert_message`: replay of the same
+    /// (chat_id, name, size, sha256) fingerprint returns the original
+    /// `file_id` with `deduped = true`; a mismatched fingerprint is
+    /// `Err(Conflict)`.
+    pub fn insert_file(&self, f: &NewFile) -> Result<(String, bool)> {
+        let conn = self.conn()?;
+        if let (Dir::Out, Some(cxid)) = (f.dir, &f.client_xfer_id) {
+            let existing: Option<(String, String, String, i64, Vec<u8>)> = conn
+                .query_row(
+                    "SELECT file_id, chat_id, name, size, sha256 FROM files
+                     WHERE dir = 'out' AND client_xfer_id = ?1",
+                    [cxid],
+                    |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
+                )
+                .optional()?;
+            if let Some((file_id, chat_id, name, size, sha256)) = existing {
+                if (chat_id.as_str(), name.as_str(), size, sha256.as_slice())
+                    != (
+                        f.chat_id.as_str(),
+                        f.name.as_str(),
+                        f.size,
+                        f.sha256.as_slice(),
+                    )
+                {
+                    return Err(StoreError::Conflict);
+                }
+                return Ok((file_id, true));
+            }
+        }
+        let now = now_ms();
+        let res = conn.execute(
+            "INSERT INTO files
+                (file_id, msg_id, chat_id, dir, name, mime, size, sha256,
+                 chunk_size, chunks_total, have, state, kind, thumb,
+                 audio_meta, fetch_token, caption, staged_path,
+                 client_xfer_id, created_at, updated_at)
+             VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,X'',?11,?12,?13,?14,?15,
+                    ?16,?17,?18,?19,?19)",
+            params![
+                f.file_id,
+                f.msg_id,
+                f.chat_id,
+                f.dir.as_str(),
+                f.name,
+                f.mime,
+                f.size,
+                f.sha256,
+                f.chunk_size,
+                f.chunks_total,
+                f.state,
+                f.kind,
+                f.thumb,
+                f.audio_meta,
+                f.fetch_token.as_deref(),
+                f.caption,
+                f.staged_path,
+                f.client_xfer_id,
+                now
+            ],
+        );
+        match res {
+            Ok(_) => Ok((f.file_id.clone(), false)),
+            Err(rusqlite::Error::SqliteFailure(e, _))
+                if e.code == rusqlite::ErrorCode::ConstraintViolation =>
+            {
+                // Unique-index race or PK collision: recover via dedup path.
+                if let (Dir::Out, Some(cxid)) = (f.dir, &f.client_xfer_id) {
+                    let existing: Option<(String, String, String, i64, Vec<u8>)> = conn
+                        .query_row(
+                            "SELECT file_id, chat_id, name, size, sha256 FROM files
+                             WHERE dir = 'out' AND client_xfer_id = ?1",
+                            [cxid],
+                            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
+                        )
+                        .optional()?;
+                    if let Some((file_id, chat_id, name, size, sha256)) = existing {
+                        if (chat_id.as_str(), name.as_str(), size, sha256.as_slice())
+                            != (
+                                f.chat_id.as_str(),
+                                f.name.as_str(),
+                                f.size,
+                                f.sha256.as_slice(),
+                            )
+                        {
+                            return Err(StoreError::Conflict);
+                        }
+                        return Ok((file_id, true));
+                    }
+                }
+                Err(StoreError::Conflict)
+            }
+            Err(e) => Err(e.into()),
+        }
+    }
+
+    pub fn get_file(&self, file_id: &str) -> Result<Option<FileRow>> {
+        let conn = self.conn()?;
+        conn.query_row(
+            &format!("SELECT {} FROM files WHERE file_id = ?1", Self::FILE_COLS),
+            [file_id],
+            Self::file_row,
+        )
+        .optional()
+        .map_err(Into::into)
+    }
+
+    /// Batch lookup keyed by anchor `msg_id` — used to attach `body.file`
+    /// to history/last_message rendering without N+1 queries.
+    pub fn files_by_msgs(
+        &self,
+        msg_ids: &[String],
+    ) -> Result<std::collections::HashMap<String, FileRow>> {
+        let mut out = std::collections::HashMap::new();
+        if msg_ids.is_empty() {
+            return Ok(out);
+        }
+        let conn = self.conn()?;
+        let marks = msg_ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+        let sql = format!(
+            "SELECT {} FROM files WHERE msg_id IN ({})",
+            Self::FILE_COLS,
+            marks
+        );
+        let mut stmt = conn.prepare(&sql)?;
+        let rows = stmt
+            .query_map(rusqlite::params_from_iter(msg_ids.iter()), Self::file_row)?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        drop(stmt);
+        for row in rows {
+            out.insert(row.msg_id.clone(), row);
+        }
+        Ok(out)
+    }
+
+    pub fn set_file_state(&self, file_id: &str, state: &str, reason: Option<&str>) -> Result<()> {
+        self.conn()?.execute(
+            "UPDATE files SET state = ?2, reason = ?3, updated_at = ?4
+             WHERE file_id = ?1",
+            params![file_id, state, reason, now_ms()],
+        )?;
+        Ok(())
+    }
+
+    /// Persist the chunk bitmap after a verified write/ack batch.
+    pub fn set_file_have(&self, file_id: &str, have: &[u8]) -> Result<()> {
+        self.conn()?.execute(
+            "UPDATE files SET have = ?2, updated_at = ?3 WHERE file_id = ?1",
+            params![file_id, have, now_ms()],
+        )?;
+        Ok(())
+    }
+
+    pub fn set_file_staged(&self, file_id: &str, staged_path: &str) -> Result<()> {
+        self.conn()?.execute(
+            "UPDATE files SET staged_path = ?2, updated_at = ?3 WHERE file_id = ?1",
+            params![file_id, staged_path, now_ms()],
+        )?;
+        Ok(())
+    }
+
+    pub fn set_file_saved(&self, file_id: &str, saved_path: &str) -> Result<()> {
+        self.conn()?.execute(
+            "UPDATE files SET saved_path = ?2, updated_at = ?3 WHERE file_id = ?1",
+            params![file_id, saved_path, now_ms()],
+        )?;
+        Ok(())
+    }
+
+    /// Active transfers in one direction, optionally scoped to one chat —
+    /// feeds the per-peer and per-account inflight caps.
+    pub fn file_inflight(&self, dir: &str, chat_id: Option<&str>) -> Result<u32> {
+        let conn = self.conn()?;
+        let n = match chat_id {
+            Some(c) => conn.query_row(
+                "SELECT COUNT(*) FROM files
+                 WHERE dir = ?1 AND chat_id = ?2
+                   AND state IN('offered','accepted','transferring','verifying')",
+                params![dir, c],
+                |r| r.get::<_, i64>(0),
+            )?,
+            None => conn.query_row(
+                "SELECT COUNT(*) FROM files
+                 WHERE dir = ?1
+                   AND state IN('offered','accepted','transferring','verifying')",
+                [dir],
+                |r| r.get::<_, i64>(0),
+            )?,
+        };
+        Ok(n.max(0) as u32)
+    }
+
+    /// Aggregate declared bytes still staged: inbound rows whose `.part`
+    /// reservation exists (accepted or beyond). `offered` rows are excluded —
+    /// the accepting path adds the candidate's size itself.
+    pub fn file_staging_bytes(&self) -> Result<u64> {
+        let conn = self.conn()?;
+        let n: i64 = conn.query_row(
+            "SELECT COALESCE(SUM(size),0) FROM files
+             WHERE dir = 'in'
+               AND state IN('accepted','transferring','verifying')",
+            [],
+            |r| r.get(0),
+        )?;
+        Ok(n.max(0) as u64)
+    }
+
+    /// Non-terminal rows whose `updated_at` predates `cutoff_ms` — reaper
+    /// candidates; completed rows are never returned.
+    pub fn files_stale(&self, cutoff_ms: i64) -> Result<Vec<FileRow>> {
+        let conn = self.conn()?;
+        let mut stmt = conn.prepare(&format!(
+            "SELECT {} FROM files
+             WHERE state IN('offered','accepted','transferring','verifying')
+               AND updated_at < ?1",
+            Self::FILE_COLS
+        ))?;
+        let rows = stmt
+            .query_map([cutoff_ms], Self::file_row)?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
+    /// All non-terminal rows — resume scan on (re)connect.
+    pub fn files_resumable(&self) -> Result<Vec<FileRow>> {
+        let conn = self.conn()?;
+        let mut stmt = conn.prepare(&format!(
+            "SELECT {} FROM files
+             WHERE state IN('offered','accepted','transferring','verifying')",
+            Self::FILE_COLS
+        ))?;
+        let rows = stmt
+            .query_map([], Self::file_row)?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
+    /// Staged `.part` paths across every row — the orphan reaper subtracts
+    /// these from the `xfer/` directory listing.
+    pub fn file_staged_paths(&self) -> Result<Vec<String>> {
+        let conn = self.conn()?;
+        let mut stmt =
+            conn.prepare("SELECT staged_path FROM files WHERE staged_path IS NOT NULL")?;
+        let rows = stmt
+            .query_map([], |r| r.get::<_, String>(0))?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
+    /// Newest-first listing with offset pagination; `state`/`chat_id`
+    /// filters are optional.
+    pub fn list_files(
+        &self,
+        chat_id: Option<&str>,
+        state: Option<&str>,
+        limit: u32,
+        offset: u64,
+    ) -> Result<Vec<FileRow>> {
+        let conn = self.conn()?;
+        let mut stmt = conn.prepare(&format!(
+            "SELECT {} FROM files
+             WHERE (?1 IS NULL OR chat_id = ?1)
+               AND (?2 IS NULL OR state = ?2)
+             ORDER BY created_at DESC, file_id DESC LIMIT ?3 OFFSET ?4",
+            Self::FILE_COLS
+        ))?;
+        let rows = stmt
+            .query_map(
+                params![
+                    chat_id,
+                    state,
+                    limit.clamp(1, MAX_WINDOW) as i64,
+                    offset as i64
+                ],
+                Self::file_row,
+            )?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(rows)
     }
 }

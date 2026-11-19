@@ -44,6 +44,8 @@ pub struct MockCore {
     pub deletes: Mutex<Vec<Value>>,
     pub reactions_calls: Mutex<Vec<Value>>,
     pub msg_counter: Mutex<u64>,
+    pub file_counter: Mutex<u64>,
+    pub file_calls: Mutex<Vec<Value>>,
     pub messages: Mutex<Vec<Value>>,
     pub shutdowns: Mutex<Vec<u64>>,
     pub summary: Mutex<Value>,
@@ -71,6 +73,8 @@ impl MockCore {
             deletes: Mutex::new(Vec::new()),
             reactions_calls: Mutex::new(Vec::new()),
             msg_counter: Mutex::new(0),
+            file_counter: Mutex::new(0),
+            file_calls: Mutex::new(Vec::new()),
             messages: Mutex::new(msgs),
             shutdowns: Mutex::new(Vec::new()),
             summary: Mutex::new(
@@ -297,6 +301,103 @@ impl CinderCore for MockCore {
         Ok(
             json!({"contact_id": p.contact_id, "trust": "verified", "verified_at": "2026-11-18T16:06:11Z"}),
         )
+    }
+
+    async fn file_send(&self, p: FileSendParams) -> Result<Value, RpcError> {
+        self.check("file.send")?;
+        let n = {
+            let mut c = self.file_counter.lock().unwrap();
+            *c += 1;
+            *c
+        };
+        self.file_calls.lock().unwrap().push(json!({
+            "to": p.to,
+            "path": p.path,
+            "data_len": p.data.as_ref().map(|d| d.len()),
+            "name": p.name,
+            "mime": p.mime,
+            "kind": p.kind,
+            "caption": p.caption,
+            "client_xfer_id": p.client_xfer_id,
+        }));
+        Ok(json!({
+            "file_id": format!("file:svc{n:04}"),
+            "msg_id": self.next_msg_id(),
+            "chat_id": Self::resolve_chat(&p.to),
+            "state": "offered",
+            "chunks": 4,
+            "bytes": 28672,
+            "deduped": false,
+        }))
+    }
+
+    async fn file_accept(&self, p: FileIdParams) -> Result<Value, RpcError> {
+        self.check("file.accept")?;
+        Ok(json!({"file_id": p.file_id, "state": "transferring"}))
+    }
+
+    async fn file_decline(&self, p: FileIdParams) -> Result<Value, RpcError> {
+        self.check("file.decline")?;
+        Ok(json!({"file_id": p.file_id, "state": "declined"}))
+    }
+
+    async fn file_cancel(&self, p: FileIdParams) -> Result<Value, RpcError> {
+        self.check("file.cancel")?;
+        Ok(json!({"file_id": p.file_id, "state": "cancelled"}))
+    }
+
+    async fn file_info(&self, p: FileIdParams) -> Result<Value, RpcError> {
+        self.check("file.info")?;
+        Ok(json!({
+            "file_id": p.file_id,
+            "msg_id": "msg:m01",
+            "chat_id": CHAT,
+            "dir": "in",
+            "name": "report.pdf",
+            "mime": "application/pdf",
+            "size": 28672,
+            "sha256": "AAECAwQFBgcICQoLDA0ODw==",
+            "kind": "file",
+            "state": "complete",
+            "reason": null,
+            "chunk_size": 7168,
+            "chunks_total": 4,
+            "chunks_done": 4,
+            "has_thumb": false,
+            "audio": null,
+            "caption": null,
+            "saved_path": null,
+            "created_at": "2026-11-18T16:00:00Z",
+            "updated_at": "2026-11-18T16:00:05Z",
+        }))
+    }
+
+    async fn file_list(&self, p: FileListParams) -> Result<Value, RpcError> {
+        self.check("file.list")?;
+        let row = json!({
+            "file_id": "file:svc0001", "msg_id": "msg:m01", "chat_id": CHAT,
+            "dir": "in", "name": "report.pdf", "mime": "application/pdf",
+            "size": 28672, "sha256": "AAECAwQFBgcICQoLDA0ODw==", "kind": "file",
+            "state": "complete", "reason": null, "chunk_size": 7168,
+            "chunks_total": 4, "chunks_done": 4, "has_thumb": false,
+            "audio": null, "caption": null, "saved_path": null,
+            "created_at": "2026-11-18T16:00:00Z", "updated_at": "2026-11-18T16:00:05Z",
+        });
+        let files = match &p.chat_id {
+            Some(c) if c != CHAT => vec![],
+            _ => vec![row],
+        };
+        Ok(json!({"files": files, "next_cursor": null}))
+    }
+
+    async fn file_save(&self, p: FileSaveParams) -> Result<Value, RpcError> {
+        self.check("file.save")?;
+        Ok(json!({"file_id": p.file_id, "path": "/tmp/report.pdf", "bytes": 28672}))
+    }
+
+    async fn file_thumb(&self, p: FileIdParams) -> Result<Value, RpcError> {
+        self.check("file.thumb")?;
+        Ok(json!({"file_id": p.file_id, "thumb_b64": null, "mime": null}))
     }
 
     async fn backlog_summary(&self) -> Result<Value, RpcError> {

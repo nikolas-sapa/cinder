@@ -764,6 +764,183 @@ pub async fn post_hello_backlog(eng: &Arc<Engine>, conn_id: u64) {
     eng.events.push_conn_frame(conn_id, notice.to_string());
 }
 
+const FILE_NAME_MAX_BYTES: usize = 255;
+const FILE_MIME_MAX_BYTES: usize = 64;
+const FILE_CAPTION_MAX_BYTES: usize = 1024;
+const FILE_DIR_MAX_BYTES: usize = 4096;
+/// Decoded `data` cap is 1 MiB; the base64 wire form is ~4/3 that.
+const FILE_DATA_B64_MAX_BYTES: usize = (1024 * 1024 * 4 / 3) + 8;
+
+async fn file_send(eng: &Engine, params: Option<Value>) -> Result<Value, RpcError> {
+    let p: FileSendParams = parse_params(params)?;
+    check_prefix(&p.to, &["contact:", "chat:", "peer:"], "to")?;
+    match (p.path.is_some(), p.data.is_some()) {
+        (true, true) => {
+            return Err(RpcError::invalid_params(
+                "exactly one of 'path' or 'data' may be set, not both",
+            ))
+        }
+        (false, false) => {
+            return Err(RpcError::invalid_params(
+                "one of 'path' or 'data' is required",
+            ))
+        }
+        _ => {}
+    }
+    if let Some(d) = &p.data {
+        if d.len() > FILE_DATA_B64_MAX_BYTES {
+            return Err(RpcError::invalid_params(
+                "data exceeds limits.file_inline_max_bytes (1 MiB decoded)",
+            ));
+        }
+    }
+    if let Some(n) = &p.name {
+        if n.is_empty() || n.len() > FILE_NAME_MAX_BYTES {
+            return Err(RpcError::invalid_params("name must be 1..=255 bytes"));
+        }
+    }
+    if let Some(m) = &p.mime {
+        if m.is_empty() || m.len() > FILE_MIME_MAX_BYTES {
+            return Err(RpcError::invalid_params("mime must be 1..=127 bytes"));
+        }
+    }
+    if let Some(c) = &p.caption {
+        if c.len() > FILE_CAPTION_MAX_BYTES {
+            return Err(RpcError::invalid_params(
+                "caption exceeds limits.max_body_bytes",
+            ));
+        }
+    }
+    let kind = p.kind.clone().unwrap_or_else(|| "file".into());
+    if !["file", "image", "voice"].contains(&kind.as_str()) {
+        return Err(RpcError::invalid_params("kind must be file|image|voice"));
+    }
+    if kind == "voice" && p.audio.is_none() {
+        return Err(RpcError::invalid_params(
+            "kind:voice requires audio metadata",
+        ));
+    }
+    if let Some(a) = &p.audio {
+        if a.codec.is_empty() || a.codec.len() > 32 {
+            return Err(RpcError::invalid_params("audio.codec must be 1..=32 bytes"));
+        }
+    }
+    if p.client_xfer_id.is_empty() {
+        return Err(RpcError::invalid_params("client_xfer_id must be non-empty"));
+    }
+    // Fingerprint hashes `data` so the dedup record stays small.
+    let data_fp = p.data.as_ref().map(|d| {
+        use sha2::Digest;
+        let mut h = sha2::Sha256::new();
+        h.update(d.as_bytes());
+        data_encoding::HEXLOWER.encode(&h.finalize())
+    });
+    let fingerprint = json!({
+        "m": "file.send", "to": p.to, "path": p.path, "data_sha256": data_fp,
+        "name": p.name, "mime": p.mime, "kind": p.kind, "caption": p.caption,
+    })
+    .to_string();
+    match eng.dedup_lookup(&p.client_xfer_id, &fingerprint) {
+        DedupHit::Replay(mut result) => {
+            result
+                .as_object_mut()
+                .map(|o| o.insert("deduped".into(), json!(true)));
+            return Ok(result);
+        }
+        DedupHit::Conflict => {
+            return Err(RpcError::new(
+                ErrorKind::Conflict,
+                "client_xfer_id reused with a different payload; use a new key per logical send",
+            ));
+        }
+        DedupHit::Miss => {}
+    }
+    let xfer_key = p.client_xfer_id.clone();
+    let core_res = eng.core().file_send(p).await?;
+    let file_id = core_res
+        .get("file_id")
+        .and_then(Value::as_str)
+        .ok_or_else(|| RpcError::internal("core returned no file_id"))?
+        .to_string();
+    let mut result = json!({
+        "file_id": file_id,
+        "msg_id": core_res.get("msg_id").cloned().unwrap_or(Value::Null),
+        "chat_id": core_res.get("chat_id").cloned().unwrap_or(Value::Null),
+        "state": core_res.get("state").cloned().unwrap_or_else(|| json!("offered")),
+        "chunks": core_res.get("chunks").cloned().unwrap_or(Value::Null),
+        "bytes": core_res.get("bytes").cloned().unwrap_or(Value::Null),
+        "deduped": false,
+    });
+    if core_res.get("deduped").and_then(Value::as_bool) == Some(true) {
+        result
+            .as_object_mut()
+            .map(|o| o.insert("deduped".into(), json!(true)));
+        return Ok(result);
+    }
+    eng.dedup_insert(xfer_key, fingerprint, result.clone());
+    Ok(result)
+}
+
+async fn file_accept(eng: &Engine, params: Option<Value>) -> Result<Value, RpcError> {
+    let p: FileIdParams = parse_params(params)?;
+    check_prefix(&p.file_id, &["file:"], "file_id")?;
+    eng.core().file_accept(p).await
+}
+
+async fn file_decline(eng: &Engine, params: Option<Value>) -> Result<Value, RpcError> {
+    let p: FileIdParams = parse_params(params)?;
+    check_prefix(&p.file_id, &["file:"], "file_id")?;
+    eng.core().file_decline(p).await
+}
+
+async fn file_cancel(eng: &Engine, params: Option<Value>) -> Result<Value, RpcError> {
+    let p: FileIdParams = parse_params(params)?;
+    check_prefix(&p.file_id, &["file:"], "file_id")?;
+    eng.core().file_cancel(p).await
+}
+
+async fn file_info(eng: &Engine, params: Option<Value>) -> Result<Value, RpcError> {
+    let p: FileIdParams = parse_params(params)?;
+    check_prefix(&p.file_id, &["file:"], "file_id")?;
+    eng.core().file_info(p).await
+}
+
+async fn file_list(eng: &Engine, params: Option<Value>) -> Result<Value, RpcError> {
+    let p: FileListParams = parse_params(params)?;
+    if let Some(c) = &p.chat_id {
+        check_prefix(c, &["chat:"], "chat_id")?;
+    }
+    if let Some(l) = p.limit {
+        check_limit(eng, l, "limit")?;
+    }
+    if let Some(cur) = &p.cursor {
+        check_prefix(cur, &["cur:"], "cursor")?;
+    }
+    eng.core().file_list(p).await
+}
+
+async fn file_save(eng: &Engine, params: Option<Value>) -> Result<Value, RpcError> {
+    let p: FileSaveParams = parse_params(params)?;
+    check_prefix(&p.file_id, &["file:"], "file_id")?;
+    if let Some(n) = &p.name {
+        if n.is_empty() || n.len() > FILE_NAME_MAX_BYTES {
+            return Err(RpcError::invalid_params("name must be 1..=255 bytes"));
+        }
+    }
+    if let Some(d) = &p.dir {
+        if d.is_empty() || d.len() > FILE_DIR_MAX_BYTES {
+            return Err(RpcError::invalid_params("dir must be 1..=4096 bytes"));
+        }
+    }
+    eng.core().file_save(p).await
+}
+
+async fn file_thumb(eng: &Engine, params: Option<Value>) -> Result<Value, RpcError> {
+    let p: FileIdParams = parse_params(params)?;
+    check_prefix(&p.file_id, &["file:"], "file_id")?;
+    eng.core().file_thumb(p).await
+}
+
 pub async fn dispatch_method(
     eng: &Arc<Engine>,
     sess: &mut Session,
@@ -787,6 +964,14 @@ pub async fn dispatch_method(
         "invite.create" => invite_create(eng, params).await,
         "invite.accept" => invite_accept(eng, params).await,
         "ident.verify" => ident_verify(eng, params).await,
+        "file.send" => file_send(eng, params).await,
+        "file.accept" => file_accept(eng, params).await,
+        "file.decline" => file_decline(eng, params).await,
+        "file.cancel" => file_cancel(eng, params).await,
+        "file.info" => file_info(eng, params).await,
+        "file.list" => file_list(eng, params).await,
+        "file.save" => file_save(eng, params).await,
+        "file.thumb" => file_thumb(eng, params).await,
         "events.subscribe" => events_subscribe(eng, sess, params).await,
         "events.unsubscribe" => events_unsubscribe(eng, sess, params),
         "shutdown.request" => shutdown_request(eng, sess, params).await,

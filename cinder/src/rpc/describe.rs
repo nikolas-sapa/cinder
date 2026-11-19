@@ -56,13 +56,14 @@ fn message_schema() -> Value {
             "chat_id": id_prop("chat:", "conversation id"),
             "dir": {"enum": ["in", "out"], "description": "direction relative to this account"},
             "from": id_prop("peer:", "sender peer-id"),
-            "kind": {"enum": ["text", "edit", "delete", "reaction"], "description": "content kind"},
+            "kind": {"enum": ["text", "edit", "delete", "reaction", "file"], "description": "content kind"},
             "body": {
                 "type": "object",
                 "required": ["text", "trusted"],
                 "properties": {
-                    "text": {"type": "string", "description": "message text; UNTRUSTED when dir is in"},
+                    "text": {"type": "string", "description": "message text; UNTRUSTED when dir is in. kind:file rows carry a renderable fallback like \"[file] report.pdf · 2.1 MiB\""},
                     "trusted": {"type": "boolean", "description": TRUSTED_DESC},
+                    "file": file_body_schema(),
                 },
             },
             "state": {"enum": ["queued", "sent", "delivered", "read", "failed"], "description": "outbound lifecycle; read is reserved and never emitted in v1"},
@@ -70,6 +71,63 @@ fn message_schema() -> Value {
             "expires_at_ms": {"type": ["integer", "null"], "description": "unix-ms deadline for disappearing messages; row is tombstoned + removed from history when it passes (msg.expired fires). null = never expires"},
             "revision": {"type": "integer", "minimum": 0, "description": "0 = original; >0 = edited"},
             "reactions": {"type": "array", "items": {"type": "object", "required": ["emoji", "from", "mine"], "properties": {"emoji": {"type": "string"}, "from": id_prop("peer:", "reactor peer-id"), "mine": {"type": "boolean"}}}},
+        }),
+    )
+}
+
+/// `body.file` on kind:file messages — every field peer-claimed until the
+/// transfer reaches state:complete (files-images §5.5, §9).
+fn file_body_schema() -> Value {
+    json!({"type": ["object", "null"], "description": "transfer metadata anchor; null for non-file kinds. UNTRUSTED: name/mime/size are peer-claimed until the transfer completes", "properties": {
+        "file_id": id_prop("file:", "transfer id for file.* calls"),
+        "name": {"type": "string", "description": "peer-claimed display name"},
+        "mime": {"type": "string"},
+        "size": {"type": "integer", "minimum": 0, "description": "peer-claimed size — never size allocations off it"},
+        "kind": {"enum": ["file", "image", "audio"]},
+        "has_thumb": {"type": "boolean"},
+        "audio": {"type": ["object", "null"], "description": "voice-note metadata {duration_ms, codec, sample_rate_hz, channels}"},
+        "caption": {"type": ["string", "null"], "description": "peer-claimed chat-visible caption"},
+    }})
+}
+
+/// `file.info`/`file.list` row (spec §5.3).
+fn file_schema() -> Value {
+    obj(
+        &[
+            "file_id",
+            "msg_id",
+            "chat_id",
+            "dir",
+            "name",
+            "mime",
+            "size",
+            "sha256",
+            "kind",
+            "state",
+            "chunks_total",
+            "chunks_done",
+        ],
+        json!({
+            "file_id": id_prop("file:", ""),
+            "msg_id": id_prop("msg:", "anchor message; kind:file in chat.history"),
+            "chat_id": id_prop("chat:", ""),
+            "dir": {"enum": ["in", "out"]},
+            "name": {"type": "string", "description": "UNTRUSTED peer-claimed name until state:complete"},
+            "mime": {"type": ["string", "null"]},
+            "size": {"type": "integer", "minimum": 0, "description": "peer-claimed until complete; <= file_max_bytes"},
+            "sha256": {"type": "string", "description": "base64 SHA-256 of the whole file; verified before state:complete"},
+            "kind": {"enum": ["file", "image", "audio"]},
+            "state": {"enum": ["offered", "accepted", "transferring", "verifying", "complete", "failed", "cancelled", "declined", "expired"]},
+            "reason": {"type": ["string", "null"], "description": "terminal detail: peer_offline|mailbox_full|hash_mismatch|storage_full|policy|user|timeout|key_changed|internal"},
+            "chunk_size": {"type": "integer"},
+            "chunks_total": {"type": "integer"},
+            "chunks_done": {"type": "integer", "description": "verified-received (in) or peer-acked (out) chunk count"},
+            "has_thumb": {"type": "boolean"},
+            "audio": {"type": ["object", "null"], "description": "voice-note metadata when kind:audio"},
+            "caption": {"type": ["string", "null"]},
+            "saved_path": {"type": ["string", "null"], "description": "set by file.save"},
+            "created_at": ts_prop(),
+            "updated_at": ts_prop(),
         }),
     )
 }
@@ -486,6 +544,121 @@ fn r_shutdown() -> Value {
     )
 }
 
+fn p_file_send() -> Value {
+    obj(
+        &["to", "client_xfer_id"],
+        json!({
+            "to": {"type": "string", "description": "contact:, chat:, or peer: id; resolved to the 1:1 chat"},
+            "path": {"type": "string", "description": "absolute or ~/-relative path to a regular file; exactly one of path/data required"},
+            "data": {"type": "string", "description": "base64 inline bytes, decoded <= file_inline_max_bytes (1 MiB); exactly one of path/data required"},
+            "name": {"type": "string", "maxLength": 255, "description": "display-name override; defaults to path basename or 'blob'"},
+            "mime": {"type": "string", "maxLength": 64, "description": "claimed MIME; default mime_guess from name else application/octet-stream"},
+            "kind": {"enum": ["file", "image", "voice"], "default": "file", "description": "image attempts a thumbnail; voice requires audio"},
+            "audio": {"type": "object", "required": ["duration_ms", "codec"], "properties": {"duration_ms": {"type": "integer", "maximum": 300000}, "codec": {"type": "string", "maxLength": 32}, "sample_rate_hz": {"type": "integer"}, "channels": {"type": "integer"}}, "description": "required when kind:voice; duration_ms <= file_voice_max_ms"},
+            "caption": {"type": "string", "maxLength": 1024, "description": "chat-visible caption, <=1024 B"},
+            "client_xfer_id": {"type": "string", "minLength": 1, "description": "idempotency key, same semantics as client_msg_id: replay returns the same file_id with deduped:true"},
+        }),
+    )
+}
+
+fn r_file_send() -> Value {
+    obj(
+        &[
+            "file_id", "msg_id", "chat_id", "state", "deduped", "chunks", "bytes",
+        ],
+        json!({
+            "file_id": id_prop("file:", "transfer id for all file.* calls"),
+            "msg_id": id_prop("msg:", "anchor message in chat.history, kind:file"),
+            "chat_id": id_prop("chat:", ""),
+            "state": {"enum": ["offered"], "description": "always offered at return; progress arrives via file_state events"},
+            "deduped": {"type": "boolean", "description": "true iff this call replayed a prior client_xfer_id"},
+            "chunks": {"type": "integer", "minimum": 0, "description": "chunks_total at the negotiated chunk size"},
+            "bytes": {"type": "integer", "minimum": 0},
+        }),
+    )
+}
+
+fn p_file_id() -> Value {
+    obj(&["file_id"], json!({"file_id": id_prop("file:", "")}))
+}
+
+fn r_file_accept() -> Value {
+    obj(
+        &["file_id", "state"],
+        json!({"file_id": id_prop("file:", ""), "state": {"enum": ["transferring"]}}),
+    )
+}
+
+fn r_file_decline() -> Value {
+    obj(
+        &["file_id", "state"],
+        json!({"file_id": id_prop("file:", ""), "state": {"enum": ["declined"]}}),
+    )
+}
+
+fn r_file_cancel() -> Value {
+    obj(
+        &["file_id", "state"],
+        json!({"file_id": id_prop("file:", ""), "state": {"enum": ["cancelled"]}}),
+    )
+}
+
+fn r_file_info() -> Value {
+    file_schema()
+}
+
+fn p_file_list() -> Value {
+    obj(
+        &[],
+        json!({
+            "chat_id": id_prop("chat:", "optional chat filter"),
+            "state": {"enum": ["offered", "accepted", "transferring", "verifying", "complete", "failed", "cancelled", "declined", "expired"], "description": "optional state filter"},
+            "limit": {"type": "integer", "minimum": 1, "maximum": 500, "default": 50},
+            "cursor": id_prop("cur:", "continue a prior page"),
+        }),
+    )
+}
+
+fn r_file_list() -> Value {
+    obj(
+        &["files", "next_cursor"],
+        json!({"files": {"type": "array", "items": file_schema(), "description": "newest-first"}, "next_cursor": {"type": ["string", "null"], "description": "cur: pass as cursor for the next page"}}),
+    )
+}
+
+fn p_file_save() -> Value {
+    obj(
+        &["file_id"],
+        json!({
+            "file_id": id_prop("file:", "a state:complete inbound transfer"),
+            "dir": {"type": "string", "maxLength": 4096, "description": "destination directory; default dirs::download_dir() else ~/Downloads else $CINDER_DATA_DIR/saved"},
+            "name": {"type": "string", "maxLength": 255, "description": "save-name override, sanitized like the offer name"},
+        }),
+    )
+}
+
+fn r_file_save() -> Value {
+    obj(
+        &["file_id", "path", "bytes"],
+        json!({
+            "file_id": id_prop("file:", ""),
+            "path": {"type": "string", "description": "canonicalized final location; collision-suffixed when needed"},
+            "bytes": {"type": "integer", "minimum": 0},
+        }),
+    )
+}
+
+fn r_file_thumb() -> Value {
+    obj(
+        &["file_id", "thumb_b64", "mime"],
+        json!({
+            "file_id": id_prop("file:", ""),
+            "thumb_b64": {"type": ["string", "null"], "description": "base64 JPEG thumbnail; UNTRUSTED peer-controlled bytes — decode under the documented dimension/allocation guards"},
+            "mime": {"type": ["string", "null"]},
+        }),
+    )
+}
+
 pub const METHODS: &[MethodDef] = &[
     MethodDef { name: "session.hello", scope: "", description: "Handshake + version negotiation + capability discovery. First call a client SHOULD make; works pre-auth.", params: p_hello, result: r_hello },
     MethodDef { name: "rpc.describe", scope: "", description: "Full machine-readable schema: every method's params/result schema, every event's payload schema, the error-kind table, and server limits. Works pre-auth.", params: empty_schema, result: r_describe },
@@ -503,6 +676,14 @@ pub const METHODS: &[MethodDef] = &[
     MethodDef { name: "invite.create", scope: "contacts", description: "Mint a one-time rendezvous link to share out-of-band; single redemption.", params: p_invite_create, result: r_invite_create },
     MethodDef { name: "invite.accept", scope: "contacts", description: "Consume a one-time ?rendezvous= invite link; proceeds to handshake immediately.", params: p_invite_accept, result: r_invite_accept },
     MethodDef { name: "ident.verify", scope: "verify", description: "Sensitive write. Record that the SAS was confirmed out-of-band; flips trust to verified and is the only path that clears key_changed.", params: p_ident_verify, result: r_ident_verify },
+    MethodDef { name: "file.send", scope: "send", description: "Queue an E2E-encrypted file/image/voice transfer <= file_max_bytes. Returns at ACCEPTANCE (offer stored + anchor msg created), not at delivery — file_state events carry the lifecycle. client_xfer_id is the idempotency key.", params: p_file_send, result: r_file_send },
+    MethodDef { name: "file.accept", scope: "send", description: "Accept an inbound offered transfer; staging is reserved and chunks begin flowing.", params: p_file_id, result: r_file_accept },
+    MethodDef { name: "file.decline", scope: "send", description: "Decline an inbound offered transfer; the peer is notified.", params: p_file_id, result: r_file_decline },
+    MethodDef { name: "file.cancel", scope: "send", description: "Cancel any non-terminal transfer in either direction; peer is notified when reachable, local tombstone otherwise.", params: p_file_id, result: r_file_cancel },
+    MethodDef { name: "file.info", scope: "read", description: "The files row for one transfer: identity, claimed metadata, bitmap progress, state, saved_path.", params: p_file_id, result: r_file_info },
+    MethodDef { name: "file.list", scope: "read", description: "List file transfers newest-first; chat/state filters, opaque-cursor paginated like chat.list.", params: p_file_list, result: r_file_list },
+    MethodDef { name: "file.save", scope: "read", description: "Materialize a complete inbound blob to disk: sanitized name, collision suffix, 0600, hash re-verified before rename. Filesystem materialization, not a confidentiality boundary.", params: p_file_save, result: r_file_save },
+    MethodDef { name: "file.thumb", scope: "read", description: "Fetch a transfer's thumbnail as base64. UNTRUSTED peer-controlled bytes — consumers MUST decode with the documented dimension/allocation guards.", params: p_file_id, result: r_file_thumb },
     MethodDef { name: "events.subscribe", scope: "read", description: "Open a resumable event stream over this connection. since= resumes at seq+1; a gap is only ever signalled by an event.gap marker.", params: p_events_subscribe, result: r_events_subscribe },
     MethodDef { name: "events.unsubscribe", scope: "read", description: "Close a subscription; the seq cursor remains resumable inside the replay window.", params: p_events_unsubscribe, result: r_events_unsubscribe },
     MethodDef { name: "shutdown.request", scope: "admin", description: "Ask the server to shut down gracefully; drains within grace_ms then closes.", params: p_shutdown, result: r_shutdown },
@@ -594,6 +775,30 @@ fn e_verification_needed() -> Value {
     )
 }
 
+fn e_file_state() -> Value {
+    event_envelope(
+        &[
+            "file_id",
+            "msg_id",
+            "chat_id",
+            "dir",
+            "state",
+            "bytes_done",
+            "bytes_total",
+        ],
+        json!({
+            "file_id": id_prop("file:", ""),
+            "msg_id": id_prop("msg:", "anchor message, kind:file"),
+            "chat_id": id_prop("chat:", ""),
+            "dir": {"enum": ["in", "out"]},
+            "state": {"enum": ["offered", "accepted", "transferring", "verifying", "complete", "failed", "cancelled", "declined", "expired"], "description": "every transition emits; progress within transferring is throttled to <=1/s per transfer"},
+            "bytes_done": {"type": "integer", "minimum": 0},
+            "bytes_total": {"type": "integer", "minimum": 0},
+            "reason": {"enum": ["peer_offline", "mailbox_full", "hash_mismatch", "storage_full", "policy", "user", "timeout", "key_changed", "internal", null], "description": "set on terminal failure states"},
+        }),
+    )
+}
+
 fn e_session_backlog() -> Value {
     event_envelope(
         &["replayed", "gap", "latest_seq", "summary"],
@@ -626,6 +831,7 @@ pub const EVENTS: &[EventDef] = &[
     EventDef { name: "contact.connected", description: "A contact reached active: Noise XX completed and pinned peer-id verified.", params: e_contact_connected },
     EventDef { name: "security.identity_changed", description: "Pinned remote static key changed at handshake; trust becomes key_changed and sending blocks until re-verified. Never silently rebound.", params: e_identity_changed },
     EventDef { name: "security.verification_needed", description: "Contact is connected-but-unverified; sas_hint lets agents surface the SAS without an extra call.", params: e_verification_needed },
+    EventDef { name: "file_state", description: "Transfer lifecycle + progress. Every state transition emits; progress within transferring coalesces to <=1 event/s per transfer. Terminal failures carry reason.", params: e_file_state },
     EventDef { name: "session.backlog", description: "Catch-up summary emitted exactly once per subscription after replay; also the shutdown notice shape.", params: e_session_backlog },
     EventDef { name: "event.gap", description: "Replay-expiry marker — the only legal representation of lost events. Emitted before the first replayed event when since < oldest_seq-1.", params: e_event_gap },
 ];

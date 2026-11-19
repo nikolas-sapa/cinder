@@ -292,9 +292,94 @@ async fn run_command<B: Backend>(backend: &mut B, app: &mut App, line: &str) -> 
                 Err(e) => app.status_line = Some(format!("ttl: {e}")),
             }
         }
+        Command::SendFile(path) => {
+            let Some(chat) = app.active_chat() else {
+                app.status_line = Some("no chat selected".to_string());
+                return Ok(());
+            };
+            if chat.trust == Trust::KeyChanged {
+                app.status_line = Some("key changed — /verify before sending".to_string());
+                return Ok(());
+            }
+            let chat_id = chat.chat_id.clone();
+            match backend.send_file(&chat_id, &path).await {
+                Ok(ack) => {
+                    app.push_outgoing_file(&chat_id, &ack.msg_id, &ack.client_msg_id, &path);
+                    app.status_line = Some("file offer queued".to_string());
+                }
+                Err(e) => app.status_line = Some(format!("send: {e}")),
+            }
+        }
+        Command::Save(id) => {
+            let Some(chat) = app.active_chat() else {
+                app.status_line = Some("no chat selected".to_string());
+                return Ok(());
+            };
+            let file_id = match id.or_else(|| app.latest_inbound_file(&chat.chat_id)) {
+                Some(f) => f,
+                None => {
+                    app.status_line = Some("no file to save in this chat".to_string());
+                    return Ok(());
+                }
+            };
+            match backend.file_save(&file_id, None).await {
+                Ok(path) => app.status_line = Some(format!("saved → {path}")),
+                Err(e) => app.status_line = Some(format!("save: {e}")),
+            }
+        }
+        Command::Cancel(id) => match backend.file_cancel(&id).await {
+            Ok(()) => app.status_line = Some("transfer cancelled".to_string()),
+            Err(e) => app.status_line = Some(format!("cancel: {e}")),
+        },
+        Command::Accept(id) => file_decision(backend, app, id, true).await,
+        Command::Decline(id) => file_decision(backend, app, id, false).await,
+        Command::Files => {
+            let Some(chat) = app.active_chat() else {
+                app.status_line = Some("no chat selected".to_string());
+                return Ok(());
+            };
+            app.overlay = Some(Overlay::Files {
+                lines: app.files_panel(&chat.chat_id),
+            });
+        }
         Command::Unknown(msg) => app.status_line = Some(msg),
     }
     Ok(())
+}
+
+/// Shared `/accept` + `/decline` path — explicit id else newest pending
+/// inbound offer in the focused chat.
+async fn file_decision<B: Backend>(
+    backend: &mut B,
+    app: &mut App,
+    id: Option<String>,
+    accept: bool,
+) {
+    let Some(chat) = app.active_chat() else {
+        app.status_line = Some("no chat selected".to_string());
+        return;
+    };
+    let file_id = match id.or_else(|| app.pending_offer(&chat.chat_id)) {
+        Some(f) => f,
+        None => {
+            app.status_line = Some("no pending offer in this chat".to_string());
+            return;
+        }
+    };
+    let res = if accept {
+        backend.file_accept(&file_id).await
+    } else {
+        backend.file_decline(&file_id).await
+    };
+    match res {
+        Ok(()) => {
+            app.status_line = Some(format!(
+                "offer {}",
+                if accept { "accepted" } else { "declined" }
+            ))
+        }
+        Err(e) => app.status_line = Some(format!("file: {e}")),
+    }
 }
 
 async fn show_finger<B: Backend>(backend: &mut B, app: &mut App, contact_id: &str) {

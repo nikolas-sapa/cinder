@@ -401,63 +401,6 @@ if (transcript && input) {
   resize(); start();
 })();
 
-/* ---- hero ascii logotype: hand-set CINDER letterforms + ember shimmer ---- */
-(function(){
-  const pre = document.getElementById("heroAscii");
-  if (!pre) return;
-  const LETTERS = {
-    C: [" ▄██████▄ ","██▀    ▀▀ ","██        ","██        ","██▄    ▄▄ "," ▀██████▀ "],
-    I: ["████████"," ▀▀██▀▀ ","   ██   ","   ██   "," ▄▄██▄▄ ","████████"],
-    N: ["███    ██","████   ██","██▀██  ██","██ ▀██ ██","██  ▀████","██   ▀███"],
-    D: ["████████▄ ","██     ▀██","██      ██","██      ██","██     ▄██","████████▀ "],
-    E: ["█████████","██▀▀▀▀▀▀▀","█████▀   ","██       ","██▄▄▄▄▄▄▄","█████████"],
-    R: ["████████▄ ","██     ▀██","██     ▄██","████████▀ ","██   ▀██▄ ","██    ▀███"]
-  };
-  const GAP = "  ", order = ["C","I","N","D","E","R"], rows = [];
-  for (let r = 0; r < 6; r++) {
-    rows.push(order.map(k => {
-      const letter = LETTERS[k];
-      const w = Math.max(...letter.map(s => s.length));
-      return letter[r].padEnd(w);
-    }).join(GAP));
-  }
-  const HOT = [[1,7],[1,8],[4,8],[3,25],[2,50],[0,64],[5,62]];
-  const cells = new Map();
-  rows.forEach((row, r) => {
-    for (let c = 0; c < row.length; c++) {
-      const ch = row[c];
-      if (ch === " ") { pre.appendChild(document.createTextNode(" ")); continue; }
-      const s = document.createElement("span");
-      s.className = "cell"; s.textContent = ch;
-      pre.appendChild(s);
-      cells.set(r + "," + c, s);
-    }
-    pre.appendChild(document.createTextNode("\n"));
-  });
-  HOT.forEach(rc => {
-    const s = cells.get(rc[0] + "," + rc[1]);
-    if (s) s.classList.add("hot");
-  });
-  const mq = matchMedia("(prefers-reduced-motion: reduce)");
-  const all = Array.from(cells.values());
-  let timer = null;
-  function tick() {
-    const s = all[(Math.random() * all.length) | 0];
-    if (s && !s.classList.contains("hot") && !s.classList.contains("glow")) {
-      s.classList.add("glow");
-      setTimeout(() => s.classList.remove("glow"), 1200 + Math.random() * 800);
-    }
-    timer = setTimeout(tick, 300 + Math.random() * 800);
-  }
-  function setMotion() {
-    clearTimeout(timer);
-    if (mq.matches) all.forEach(s => s.classList.remove("glow"));
-    else timer = setTimeout(tick, 500);
-  }
-  if (mq.addEventListener) mq.addEventListener("change", setMotion);
-  setMotion();
-})();
-
 /* ---- shared ordered-dither painter (Bayer 8x8) ---- */
 const B8=[0,32,8,40,2,34,10,42,48,16,56,24,50,18,58,26,
           12,44,4,36,14,46,6,38,60,28,52,20,62,30,54,22,

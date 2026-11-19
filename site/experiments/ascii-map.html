@@ -1,0 +1,266 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark">
+<title>cinder · ascii-map</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600&family=Inter:wght@400;500&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg:#0B0C0E;
+    --panel:#15171B;
+    --card:#101216;
+    --ink:#EDEDE8;
+    --muted:#9BA0A6;
+    --faint:#3D4249;
+    --line:#23262D;
+    --ember:#FFB224;
+    --dim-ember:#5A4114;
+    --danger:#FF6B5E;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;padding:0}
+  body{
+    background:var(--bg);
+    color:var(--muted);
+    font:400 15px/1.6 "Inter",system-ui,sans-serif;
+    -webkit-font-smoothing:antialiased;
+    min-height:100vh;
+    padding:12vh 20px 96px;
+  }
+  ::selection{background:var(--dim-ember);color:var(--ink)}
+
+  .page-tag{
+    position:fixed;top:18px;left:22px;
+    font:500 11px/1 "JetBrains Mono",ui-monospace,Menlo,Consolas,monospace;
+    letter-spacing:.14em;text-transform:uppercase;
+    color:var(--dim-ember);
+  }
+
+  main{max-width:880px;margin:0 auto}
+
+  h1{
+    font-family:"Space Grotesk","Inter",sans-serif;
+    font-size:clamp(38px,5.6vw,58px);line-height:.95;
+    letter-spacing:-.02em;font-weight:600;text-transform:uppercase;
+    color:var(--ink);margin:0;
+  }
+  h1 .tick{color:var(--ember)}
+  .lede{margin-top:16px;color:var(--muted);max-width:56ch}
+  .lede code{
+    font-family:"JetBrains Mono",monospace;font-size:12px;color:var(--ink);
+    background:var(--panel);border:1px solid var(--line);
+    border-radius:3px;padding:1px 5px;
+  }
+
+  /* ---- schematic board ---- */
+  .board{
+    position:relative;
+    margin-top:42px;
+    border:1px solid var(--line);
+    border-radius:10px;
+    background:
+      repeating-linear-gradient(0deg,rgba(255,255,255,.012) 0 1px,transparent 1px 3px),
+      var(--panel);
+    box-shadow:0 30px 80px rgba(0,0,0,.55),0 0 0 1px rgba(255,255,255,.02) inset;
+    padding:30px 34px 32px;
+    overflow-x:auto;
+  }
+  .screw{
+    position:absolute;font:400 11px/1 "JetBrains Mono",monospace;
+    color:var(--faint);user-select:none;
+  }
+  .screw.tl{top:9px;left:11px}
+  .screw.tr{top:9px;right:11px}
+  .screw.bl{bottom:9px;left:11px}
+  .screw.br{bottom:9px;right:11px}
+
+  .art{position:relative;display:inline-block}
+
+  pre{
+    margin:0;
+    font:400 13px/1.5 "JetBrains Mono",ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+    letter-spacing:0;
+    white-space:pre;
+    color:var(--muted);
+    user-select:text;
+    font-variant-ligatures:none;
+    font-feature-settings:"liga" 0,"calt" 0;
+  }
+  .m-mobile{display:none}
+
+  /* ---- ink colors ---- */
+  .e{color:var(--ember)}
+  .i{color:var(--ink)}
+  .m{color:var(--muted)}
+  .f{color:var(--faint)}
+  .d{color:var(--dim-ember)}
+  .g{color:var(--danger)}
+
+  /* ---- traveling packet (JS positions it in ch units) ---- */
+  .pkt{
+    position:absolute;top:9em;left:0;
+    color:var(--ember);
+    text-shadow:0 0 9px rgba(255,178,36,.45);
+    pointer-events:none;
+    display:none;
+    font:inherit;
+  }
+  .pkt.on{display:block}
+
+  .keys{
+    margin-top:16px;
+    font:500 11px/1.5 "JetBrains Mono",ui-monospace,Menlo,Consolas,monospace;
+    letter-spacing:.08em;color:var(--dim-ember);text-align:center;
+  }
+  .keys b{color:var(--muted);font-weight:500}
+
+  .sr{
+    position:absolute;width:1px;height:1px;
+    overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap;
+  }
+
+  @media (prefers-reduced-motion:reduce){
+    .board{transition:none}
+    .pkt{display:none !important}
+  }
+  @media (max-width:44rem){
+    body{padding:14vh 14px 80px}
+    .board{padding:22px 18px 24px}
+    .m-desktop,.pkt{display:none}
+    .m-mobile{display:block;font-size:clamp(8px,2.55vw,12px)}
+  }
+</style>
+</head>
+<body>
+
+<div class="page-tag">cinder / experiments / ascii-map</div>
+
+<main>
+  <h1>ciphertext<br>path<span class="tick">.</span></h1>
+  <p class="lede">what actually crosses the wire. peers handshake with
+  <code>noise_xx</code> end-to-end; the relay in the middle is a blind courier —
+  it routes opaque frames, keeps bounded mailboxes for offline peers, and never
+  holds a key.</p>
+
+  <section class="board">
+    <span class="screw tl">+</span><span class="screw tr">+</span>
+    <span class="screw bl">+</span><span class="screw br">+</span>
+    <p class="sr">Topology diagram: YOU, peer-id 4d2e…f18c, runs a Noise_XX x25519
+    handshake to the blind relay, which routes opaque ciphertext onward to PEER,
+    peer-id 9c1f…aa07. The relay sees only timing and size, nothing else. A
+    mailbox queue mbx·7e3d hangs off the relay holding frames for offline peers.
+    Peers pin each other's static key and meet through one-time cinder:// invite
+    links.</p>
+    <div class="art">
+      <pre class="m-desktop" aria-hidden="true"><span class="f">┌── </span><span class="e">fig·02</span><span class="f"> · ciphertext path ─ transport view ─────────────────────────────────────────────┐</span>
+<span class="f">│</span>                                                                                          <span class="f">│</span>
+<span class="f">│</span>   <span class="d">●</span><span class="m"> pin: peer static key </span><span class="d">╌╌╌╌╌╌┐</span>            <span class="m">invite: </span><span class="i">cinder://9c1f…aa07</span><span class="m"> · one-time </span><span class="d">╌┐</span>     <span class="f">│</span>
+<span class="f">│</span>                               <span class="d">│</span>                                                    <span class="d">│</span>     <span class="f">│</span>
+<span class="f">│</span>                               <span class="d">│</span>   <span class="f">┌─────────────────────┐</span>                          <span class="d">│</span>     <span class="f">│</span>
+<span class="f">│</span>  <span class="f">┌─────────────┐</span>              <span class="d">│</span>   <span class="f">│</span> <span class="e">● </span><span class="i">BLIND RELAY</span>       <span class="f">│</span>                 <span class="f">┌────────</span><span class="d">┬</span><span class="f">────┐│</span>
+<span class="f">│</span>  <span class="f">│</span> <span class="e">● </span><span class="i">YOU</span>       <span class="f">│</span><span class="m">── noise_xx ──</span><span class="d">┬</span><span class="m">──▶</span><span class="f">│</span> <span class="m">routes ciphertext</span>   <span class="f">│</span><span class="m">── ciphertext ──▶</span><span class="f">│</span> <span class="e">● </span><span class="i">PEER</span>      <span class="f">││</span>
+<span class="f">│</span>  <span class="f">│</span> <span class="f">4d2e…f18c</span>   <span class="f">│◀── x25519 ───────│</span> <span class="m">sees: </span><span class="g">▒▒▒</span><span class="m"> opaque</span>    <span class="f">│◀─── replies ────│</span> <span class="f">9c1f…aa07</span>   <span class="f">││</span>
+<span class="f">│</span>  <span class="f">└─────────────┘</span>                  <span class="f">└──────────┬──────────┘</span>                 <span class="f">└─────────────┘│</span>
+<span class="f">│</span>                                              <span class="f">│</span><span class="d"> queued</span>                                    <span class="f">│</span>
+<span class="f">│</span>   <span class="g">relay sees: timing · size · nothing else ╌▶</span><span class="f">│</span>                                           <span class="f">│</span>
+<span class="f">│</span>                                   <span class="f">┌──────────┬─────────┐</span>                                 <span class="f">│</span>
+<span class="f">│</span>                                   <span class="f">│</span> <span class="e">● </span><span class="i">MAILBOX</span><span class="f"> mbx·7e3d</span> <span class="f">│</span>                                 <span class="f">│</span>
+<span class="f">│</span>                                   <span class="f">│</span> <span class="e">▓▓▓</span><span class="f">░░░░░░░░░</span><span class="m"> 3/64</span>  <span class="f">│</span>                                 <span class="f">│</span>
+<span class="f">│</span>                                   <span class="f">└────────────────────┘</span>                                 <span class="f">│</span>
+<span class="f">│</span>                                                                                          <span class="f">│</span>
+<span class="f">│</span>   <span class="m">─</span><span class="f"> wire   </span><span class="d">╌</span><span class="f"> callout   </span><span class="e">●</span><span class="f"> endpoint   </span><span class="g">▒</span><span class="f"> attacker-visible</span>             <span class="f">relay keeps no keys</span>   <span class="f">│</span>
+<span class="f">│</span>                                                                                          <span class="f">│</span>
+<span class="f">└──────────────────────────────────────────────────────────────────────────────────────────┘</span></pre>
+      <pre class="m-mobile" aria-hidden="true"><span class="f">┌── </span><span class="e">ciphertext path</span><span class="f"> ─────────────────────────┐</span>
+<span class="f">│</span> <span class="f">transport view · relay is blind</span>            <span class="f">│</span>
+<span class="f">│</span>                                            <span class="f">│</span>
+<span class="f">│</span>  <span class="f">┌───────────┐</span>                             <span class="f">│</span>
+<span class="f">│</span>  <span class="f">│</span> <span class="e">● </span><span class="i">YOU</span>     <span class="f">│</span>                             <span class="f">│</span>
+<span class="f">│</span>  <span class="f">│</span> <span class="f">4d2e…f18c</span> <span class="f">│</span>                             <span class="f">│</span>
+<span class="f">│</span>  <span class="f">└─────┬─────┘</span>                             <span class="f">│</span>
+<span class="f">│</span>        <span class="f">│</span><span class="m"> noise_xx</span>                          <span class="f">│</span>
+<span class="f">│</span>        <span class="f">▼</span>                                   <span class="f">│</span>
+<span class="f">│</span>  <span class="f">┌─────┬─────────────┐</span>                     <span class="f">│</span>
+<span class="f">│</span>  <span class="f">│</span> <span class="e">● </span><span class="i">BLIND RELAY</span>     <span class="f">│</span> <span class="g">╌▶ relay sees:</span>      <span class="f">│</span>
+<span class="f">│</span>  <span class="f">│</span> <span class="m">routes </span><span class="g">▒▒▒</span><span class="m"> only</span>   <span class="f">│</span>   <span class="g">timing · size ·</span>   <span class="f">│</span>
+<span class="f">│</span>  <span class="f">└─────┬───────────┬─┘</span>   <span class="g">nothing else</span>      <span class="f">│</span>
+<span class="f">│</span>        <span class="f">│</span><span class="m"> ciphertext</span><span class="f">│</span><span class="d"> queued</span>                <span class="f">│</span>
+<span class="f">│</span>        <span class="f">▼           │</span>                       <span class="f">│</span>
+<span class="f">│</span>  <span class="f">┌─────┬─────┐     │ ┌───────────────────┐</span> <span class="f">│</span>
+<span class="f">│</span>  <span class="f">│</span> <span class="e">● </span><span class="i">PEER</span>    <span class="f">│</span>     <span class="f">└─├</span> <span class="e">● </span><span class="i">MAILBOX</span><span class="f"> mbx·7e3d│</span> <span class="f">│</span>
+<span class="f">│</span>  <span class="f">│</span> <span class="f">9c1f…aa07</span> <span class="f">│</span>       <span class="f">│</span> <span class="e">▓▓▓</span><span class="f">░░░░</span><span class="m"> 3/64</span>      <span class="f">│</span> <span class="f">│</span>
+<span class="f">│</span>  <span class="f">└───────────┘</span>       <span class="f">└───────────────────┘</span> <span class="f">│</span>
+<span class="f">│</span>                                            <span class="f">│</span>
+<span class="f">│</span>   <span class="d">●</span><span class="m"> invite </span><span class="i">cinder://9c1f…aa07</span>              <span class="f">│</span>
+<span class="f">│</span>   <span class="f">one-time link · pin: peer static key</span>     <span class="f">│</span>
+<span class="f">│</span>   <span class="m">─</span><span class="f"> wire · </span><span class="d">╌</span><span class="f"> callout · </span><span class="g">▒</span><span class="f"> attacker</span>          <span class="f">│</span>
+<span class="f">└────────────────────────────────────────────┘</span></pre>
+      <span class="pkt" id="pkt" aria-hidden="true">▪</span>
+    </div>
+  </section>
+
+  <div class="keys">fig·02 · <b>noise_xx</b> handshake is end-to-end — the relay forwards <b>opaque frames</b>, stores no keys</div>
+</main>
+
+<script>
+(function(){
+  "use strict";
+  var pkt = document.getElementById("pkt");
+  if (!pkt) return;
+  var prm = matchMedia("(prefers-reduced-motion: reduce)");
+  var wide = matchMedia("(min-width: 44rem)");
+
+  // wire is pre row 6 (top:9em at line-height 1.5). two legs:
+  // YOU->relay cols 18..35, relay->peer cols 59..75.
+  var LEGS = [[18, 35], [59, 75]];
+  var STEP_MS = 60, HOLD_MS = 450, REST_MS = 1400;
+  var leg = 0, col = LEGS[0][0], timer = null;
+
+  function place(){
+    pkt.style.left = col + "ch";
+  }
+  function tick(){
+    var range = LEGS[leg];
+    col += 1;
+    if (col > range[1]){
+      pkt.classList.remove("on");
+      if (leg === 0){
+        leg = 1; col = LEGS[1][0];
+        timer = setTimeout(function(){ pkt.classList.add("on"); place(); arm(); }, HOLD_MS);
+      } else {
+        leg = 0; col = LEGS[0][0];
+        timer = setTimeout(function(){ pkt.classList.add("on"); place(); arm(); }, REST_MS);
+      }
+      return;
+    }
+    place();
+    arm();
+  }
+  function arm(){ timer = setTimeout(tick, STEP_MS); }
+  function start(){
+    if (timer || prm.matches || !wide.matches) return;
+    col = LEGS[0][0]; leg = 0;
+    pkt.classList.add("on");
+    place();
+    arm();
+  }
+  function stop(){
+    if (timer){ clearTimeout(timer); timer = null; }
+    pkt.classList.remove("on");
+  }
+  function gate(){ (prm.matches || !wide.matches) ? stop() : start(); }
+  prm.addEventListener("change", gate);
+  wide.addEventListener("change", gate);
+  document.addEventListener("visibilitychange", function(){
+    if (document.hidden) stop(); else gate();
+  });
+  gate();
+})();
+</script>
+
+</body>
+</html>

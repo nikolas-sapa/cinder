@@ -1,0 +1,399 @@
+<!doctype html>
+<!--
+  cinder · ascii-fsm
+  ------------------------------------------------------------------
+  Hand-set ASCII schematic of the cinder session state machine.
+
+  States      : INVITE HANDSHAKE SEALED VERIFIED UNVERIFIED WIPED DENIED
+  Happy path  : INVITE ──▶ HANDSHAKE ══▶ SEALED ──▶ VERIFIED
+  Side edges  : SEALED ──▶ UNVERIFIED (key change, sends blocked)
+                UNVERIFIED ──▶ VERIFIED (sas match)
+                VERIFIED ──▶ WIPED (chat.wipe)
+                any state ──▶ DENIED (contact.deny, terminal)
+  Self loop   : rekey on SEALED
+
+  Canvas      : main diagram 128 columns · rail variant 28 columns
+  Glyph set   : box-drawing (─│═┄┆━┃ corners+tees) + ▶▲▼●○ ·× only
+  Marker      : ● lit / ○ idle, JS steps 0..3 on the happy path,
+                skipped under prefers-reduced-motion
+  ------------------------------------------------------------------
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark">
+<title>cinder · ascii-fsm</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600&family=Inter:wght@400;500&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg:#0B0C0E;
+    --panel:#15171B;
+    --card:#101216;
+    --ink:#EDEDE8;
+    --muted:#9BA0A6;
+    --faint:#3D4249;
+    --line:#23262D;
+    --ember:#FFB224;
+    --dim-ember:#5A4114;
+    --danger:#FF6B5E;
+    --mono:"JetBrains Mono",ui-monospace,SFMono-Regular,Menlo,monospace;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;padding:0}
+  body{
+    background:var(--bg);
+    color:var(--muted);
+    font:400 15px/1.6 "Inter",system-ui,sans-serif;
+    -webkit-font-smoothing:antialiased;
+    min-height:100vh;
+  }
+
+  .page{
+    max-width:88rem;
+    margin:0 auto;
+    padding:3.5rem 1.5rem 5rem;
+  }
+
+  /* ---------- header ---------- */
+  .hd{max-width:44rem}
+  .kick{
+    font:500 11px/1 var(--mono);
+    letter-spacing:.14em;
+    text-transform:uppercase;
+    color:var(--ember);
+    margin:0 0 .9rem;
+  }
+  .kick::before{content:"// "}
+  h1{
+    font:600 2.4rem/1.15 "Space Grotesk",system-ui,sans-serif;
+    color:var(--ink);
+    margin:0 0 .8rem;
+    letter-spacing:-.02em;
+  }
+  .sub{margin:0;font-size:.95rem;color:var(--muted)}
+  .sub code{
+    font:500 .85em var(--mono);
+    color:var(--ink);
+    background:var(--card);
+    border:1px solid var(--line);
+    border-radius:4px;
+    padding:.1em .4em;
+  }
+
+  /* ---------- instrument panel ---------- */
+  .panel{
+    margin:2.5rem 0 0;
+    background:var(--panel);
+    border:1px solid var(--line);
+    border-radius:10px;
+    overflow:hidden;
+  }
+  .bar{
+    display:flex;
+    align-items:center;
+    gap:.9rem;
+    padding:.65rem 1.1rem;
+    border-bottom:1px solid var(--line);
+    font:500 10.5px/1.4 var(--mono);
+    letter-spacing:.12em;
+    text-transform:uppercase;
+    color:var(--muted);
+    background:var(--card);
+  }
+  .tag{
+    color:var(--ember);
+    border:1px solid var(--dim-ember);
+    background:rgba(255,178,36,.06);
+    border-radius:4px;
+    padding:.2em .55em;
+    letter-spacing:.14em;
+  }
+  .bar .t{color:var(--faint);letter-spacing:.1em}
+  .bar .r{
+    margin-left:auto;
+    display:flex;
+    align-items:center;
+    gap:.5em;
+    color:var(--muted);
+  }
+  .bar .r i{
+    display:inline-block;
+    width:6px;height:6px;
+    border-radius:50%;
+    background:var(--ember);
+    box-shadow:0 0 8px rgba(255,178,36,.55);
+  }
+
+  /* ---------- schematic ---------- */
+  .scroll{
+    overflow-x:auto;
+    padding:1.6rem 1.8rem 1.5rem;
+  }
+  pre.fsm, pre.rail{
+    font:500 12px/1.55 var(--mono);
+    margin:0;
+    color:var(--muted);
+    font-variant-ligatures:none;
+  }
+
+  /* token palette inside the art */
+  .bx {color:var(--ink)}            /* state boxes            */
+  .arw{color:var(--faint)}          /* wires, tees, arrowheads */
+  .lbl{color:var(--muted)}          /* edge labels, dim mono   */
+  .lp {color:var(--dim-ember)}      /* rekey loop              */
+  .wrn{color:var(--ember)}          /* flagged UNVERIFIED      */
+  .den{color:var(--danger)}         /* DENIED + deny edge      */
+  .dnn{color:var(--danger);opacity:.55}
+  .dim{color:var(--faint)}          /* legend                  */
+  .ent{color:var(--ember)}          /* entry marker            */
+  .led{color:var(--faint);font-style:normal}
+  .led.on{color:var(--ember);text-shadow:0 0 9px rgba(255,178,36,.45)}
+
+  /* ---------- rail variant (<44rem) ---------- */
+  .rail-panel{display:none}
+  pre.rail{font-size:11.5px}
+
+  @media (max-width:44rem){
+    .panel{display:none}
+    .rail-panel{display:block}
+  }
+  @media (min-width:44.01rem) and (max-width:86rem){
+    pre.fsm{font-size:11px}
+  }
+
+  /* ---------- transition register ---------- */
+  .spec{
+    margin-top:1.2rem;
+    display:grid;
+    grid-template-columns:1fr 1.6fr;
+    gap:1.2rem;
+  }
+  .spec .card{
+    background:var(--panel);
+    border:1px solid var(--line);
+    border-radius:10px;
+    overflow:hidden;
+  }
+  .spec .hd2{
+    padding:.65rem 1.1rem;
+    border-bottom:1px solid var(--line);
+    font:500 10.5px/1.4 var(--mono);
+    letter-spacing:.12em;
+    text-transform:uppercase;
+    color:var(--muted);
+    background:var(--card);
+  }
+  .spec ul{list-style:none;margin:0;padding:.4rem 0}
+  .spec li{
+    display:flex;
+    align-items:baseline;
+    gap:.9rem;
+    padding:.42rem 1.1rem;
+    font:400 12px/1.5 var(--mono);
+  }
+  .spec li + li{border-top:1px dotted var(--line)}
+  .spec .s{width:6.5rem;flex:none;color:var(--ink)}
+  .spec .s::before{content:"○ ";color:var(--faint)}
+  .spec li.hot .s::before{content:"● ";color:var(--ember)}
+  .spec li.warn .s{color:var(--ember)}
+  .spec li.term .s{color:var(--danger)}
+  .spec .d{color:var(--muted)}
+  .spec .e{color:var(--ink);white-space:nowrap}
+  .spec .lbl{margin-left:auto;color:var(--muted);text-align:right}
+  .spec .e.den{color:var(--danger)}
+  .spec .e.wrn{color:var(--ember)}
+  .spec .x{color:var(--faint);white-space:nowrap}
+  @media (max-width:44rem){.spec{grid-template-columns:1fr}}
+
+  .foot{
+    margin:1.4rem 0 0;
+    font:400 11px/1.6 var(--mono);
+    color:var(--faint);
+    letter-spacing:.04em;
+  }
+  .foot b{color:var(--muted);font-weight:500}
+
+  .sr-only{
+    position:absolute;
+    width:1px;height:1px;
+    margin:-1px;padding:0;
+    overflow:hidden;
+    clip:rect(0 0 0 0);
+    white-space:nowrap;
+    border:0;
+  }
+</style>
+</head>
+<body>
+<main class="page">
+
+  <header class="hd">
+    <p class="kick">cinder / protocol internals</p>
+    <h1>Session state machine</h1>
+    <p class="sub">
+      Every cinder session is a small automaton: an <code>invite</code> link,
+      three <code>noise_xx</code> flights, a sealed transport, a trust flag.
+      Below is the full graph, hand-set in box-drawing characters.
+      The marker steps the happy path; <code>denied</code> is absorbing.
+    </p>
+  </header>
+
+  <figure class="panel" aria-labelledby="fsm-cap">
+    <figcaption class="bar" id="fsm-cap">
+      <span class="tag">fsm-01</span>
+      <span class="t">session · transport · trust</span>
+      <span class="r"><i></i>schematic</span>
+    </figcaption>
+    <div class="scroll">
+<pre class="fsm" id="fsm" aria-label="ASCII schematic of the cinder session state machine. Entry at INVITE, transitions to HANDSHAKE, SEALED, VERIFIED. SEALED loops on rekey, drops to UNVERIFIED on key change, which returns to VERIFIED on sas match. VERIFIED drops to WIPED on chat.wipe. Every state falls to DENIED on contact.deny.">
+                                                                                <span class="lp">┌─ rekey ──┐</span>
+                                                                                <span class="lp">▲</span>          <span class="lp">▼</span>
+    <span class="bx">┌──────────────┐</span><span class="lbl"> cinder:// link </span><span class="bx">┌────────────────┐</span><span class="lbl"> noise_xx · 3 flights </span><span class="bx">┌────────────────┐</span><span class="lbl">   /sas match   </span><span class="bx">┌────────────────┐</span>
+<span class="ent">●</span><span class="arw">──▶</span><span class="bx">│ </span><span class="led" data-i="0">○</span><span class="bx"> INVITE     │</span><span class="arw">───────────────▶</span><span class="bx">│ </span><span class="led" data-i="1">○</span><span class="bx"> HANDSHAKE    │</span><span class="arw">═════════════════════▶</span><span class="bx">│ </span><span class="led" data-i="2">○</span><span class="bx"> SEALED       │</span><span class="arw">───────────────▶</span><span class="bx">│ </span><span class="led on" data-i="3">●</span><span class="bx"> VERIFIED     │</span>
+    <span class="bx">└───────┬──────┘</span>                <span class="bx">└───────┬────────┘</span>                      <span class="bx">└─┬─────────┬────┘</span>                <span class="bx">└─────────┬─────┬┘</span>
+            <span class="arw">│</span>                               <span class="arw">│</span>                                 <span class="arw">│</span>         <span class="arw">│</span> <span class="wrn">key change</span>               <span class="arw">▲</span>    <span class="arw">│</span>     <span class="arw">│</span>
+            <span class="arw">│</span>                               <span class="arw">│</span>                                 <span class="arw">│</span>         <span class="arw">│</span>           <span class="arw">┌─ </span><span class="lbl">sas match</span><span class="arw"> ──┘</span>    <span class="arw">│</span>     <span class="arw">│</span>
+            <span class="arw">│</span>                               <span class="arw">│</span>                                 <span class="arw">│</span>         <span class="arw">│</span>           <span class="arw">│</span>                   <span class="arw">│</span>     <span class="arw">│</span>
+            <span class="arw">│</span>                               <span class="arw">│</span>                                 <span class="arw">│</span>         <span class="arw">▼</span>           <span class="arw">│</span>         <span class="lbl">chat.wipe</span> <span class="arw">▼</span>     <span class="arw">│</span>
+            <span class="arw">│</span>                               <span class="arw">│</span>                                 <span class="arw">│</span> <span class="wrn">┏━━━━━━━━━━━━━━━━┓</span>  <span class="arw">│</span>             <span class="bx">┌──────────┐</span><span class="arw">│</span>
+            <span class="arw">│</span>                               <span class="arw">│</span>                                 <span class="arw">│</span> <span class="wrn">┃ ! UNVERIFIED   ┃</span><span class="arw">──┘</span>             <span class="bx">│ </span><span class="led">○</span><span class="bx"> WIPED  │</span><span class="arw">│</span>
+            <span class="arw">│</span>                               <span class="arw">│</span>                                 <span class="arw">│</span> <span class="wrn">┃  sends blocked ┃</span>                <span class="bx">└─────┬────┘</span><span class="arw">│</span>
+            <span class="arw">│</span>                               <span class="arw">│</span>                                 <span class="arw">│</span> <span class="wrn">┗━━━━━┳━━━━━━━━━━┛</span>                      <span class="arw">│</span>     <span class="arw">│</span>
+            <span class="arw">│</span>                               <span class="arw">│</span>                                 <span class="arw">│</span>       <span class="arw">│</span>                                 <span class="arw">│</span>     <span class="arw">│</span>
+            <span class="arw">└</span><span class="arw">─────────────────</span><span class="arw">┬</span><span class="arw">─────────────</span><span class="arw">┴</span><span class="arw">─</span><span class="den"> contact.deny · any state </span><span class="arw">──────</span><span class="arw">┴</span><span class="arw">───────</span><span class="arw">┴</span><span class="arw">─────────────────────────────────</span><span class="arw">┴</span><span class="arw">─────</span><span class="arw">┘</span>
+                              <span class="arw">│</span>
+                              <span class="arw">▼</span>
+                      <span class="den">┌┄┄┄┄┄┄┄┄┄┄┄┄┄┄┐</span>
+                      <span class="den">┆ × DENIED     ┆</span>
+                      <span class="den">└┄┄┄┄┄┄┄┄┄┄┄┄┄┄┘</span>
+                      <span class="dnn">terminal · no un-deny</span>
+
+    <span class="dim">○ idle    ● active    ──▶ edge    ══▶ flight    ┄┄ terminal</span>
+</pre>
+    </div>
+  </figure>
+
+  <p class="sr-only">
+    Session state machine. States: invite, handshake, sealed, verified,
+    unverified, wiped, denied. Transitions: invite to handshake via cinder
+    link; handshake to sealed after three noise_xx flights; sealed loops on
+    rekey; sealed to verified on sas match; sealed to unverified on key
+    change, which blocks sends; unverified back to verified on sas match;
+    verified to wiped via chat.wipe; any state to denied via contact.deny.
+    Denied is terminal; there is no un-deny.
+  </p>
+
+  <figure class="panel rail-panel" aria-labelledby="rail-cap">
+    <figcaption class="bar" id="rail-cap">
+      <span class="tag">fsm-01</span>
+      <span class="t">session · rail</span>
+      <span class="r"><i></i>schematic</span>
+    </figcaption>
+    <div class="scroll">
+<pre class="rail" id="rail" aria-label="Vertical list of session states: invite, handshake, sealed, unverified, verified, wiped, denied.">
+<span class="ent">●</span><span class="arw">──▶</span><span class="bx">┌─────────────┐</span>
+    <span class="bx">│ </span><span class="led" data-i="0">○</span><span class="bx"> INVITE    │</span>
+    <span class="bx">└───────┬─────┘</span>
+            <span class="arw">│</span> <span class="lbl">cinder:// link</span>
+            <span class="arw">▼</span>
+    <span class="bx">┌─────────────┐</span>
+    <span class="bx">│ </span><span class="led" data-i="1">○</span><span class="bx"> HANDSHAKE │</span>
+    <span class="bx">└───────┬─────┘</span>
+            <span class="arw">│</span> <span class="lbl">noise_xx</span>
+            <span class="arw">│</span> <span class="lbl">3 flights</span>
+            <span class="arw">▼</span>
+        <span class="lp">┌ rekey  ┐</span>
+        <span class="lp">▲</span>   <span class="arw">▼</span>    <span class="lp">▼</span>
+    <span class="bx">┌─────────────┐</span>
+    <span class="bx">│ </span><span class="led" data-i="2">○</span><span class="bx"> SEALED    │</span>
+    <span class="bx">└───────┬─────┘</span>
+            <span class="arw">│</span> <span class="wrn">key change</span>
+            <span class="arw">▼</span>
+       <span class="wrn">┏━━━━━━━━━━━━━━┓</span>
+       <span class="wrn">┃ ! UNVERIFIED ┃</span>
+       <span class="wrn">┃ sends blocked ┃</span>
+       <span class="wrn">┗━━━━━━━━┳━━━━━┛</span>
+                <span class="arw">│</span> <span class="lbl">sas match</span>
+                <span class="arw">▼</span>
+    <span class="bx">┌─────────────┐</span>
+    <span class="bx">│ </span><span class="led on" data-i="3">●</span><span class="bx"> VERIFIED  │</span>
+    <span class="bx">└───────┬─────┘</span>
+            <span class="arw">│</span> <span class="lbl">chat.wipe</span>
+            <span class="arw">▼</span>
+    <span class="bx">┌─────────────┐</span>
+    <span class="bx">│ </span><span class="led">○</span><span class="bx"> WIPED     │</span>
+    <span class="bx">└───────┬─────┘</span>
+            <span class="arw">│</span> <span class="den">contact.deny</span>
+            <span class="arw">│</span> <span class="den">· any state</span>
+            <span class="den">▼</span>
+    <span class="den">┌┄┄┄┄┄┄┄┄┄┄┄┄┄┐</span>
+    <span class="den">┆ × DENIED    ┆</span>
+    <span class="den">└┄┄┄┄┄┄┄┄┄┄┄┄┄┘</span>
+      <span class="dnn">terminal · no un-deny</span>
+
+    <span class="dim">○ idle   ● active</span>
+</pre>
+    </div>
+  </figure>
+
+  <section class="spec" aria-label="State and transition reference">
+    <div class="card">
+      <div class="hd2">states</div>
+      <ul>
+        <li><span class="s">INVITE</span><span class="d">link issued, no keys yet</span></li>
+        <li><span class="s">HANDSHAKE</span><span class="d">noise_xx in flight</span></li>
+        <li class="hot"><span class="s">SEALED</span><span class="d">transport live, trust off</span></li>
+        <li class="hot"><span class="s">VERIFIED</span><span class="d">sas matched, trusted</span></li>
+        <li class="warn"><span class="s">UNVERIFIED</span><span class="d">key changed, sends blocked</span></li>
+        <li><span class="s">WIPED</span><span class="d">history destroyed, keys kept</span></li>
+        <li class="term"><span class="s">DENIED</span><span class="d">absorbing, no un-deny</span></li>
+      </ul>
+    </div>
+    <div class="card">
+      <div class="hd2">edges</div>
+      <ul>
+        <li><span class="e">INVITE <span class="x">──▶</span> HANDSHAKE</span><span class="lbl">cinder:// link</span></li>
+        <li><span class="e">HANDSHAKE <span class="x">══▶</span> SEALED</span><span class="lbl">noise_xx · 3 flights</span></li>
+        <li><span class="e">SEALED <span class="x">──▶</span> VERIFIED</span><span class="lbl">/sas match</span></li>
+        <li><span class="e">SEALED <span class="x">◀─┐</span> SEALED</span><span class="lbl">rekey (loop)</span></li>
+        <li><span class="e wrn">SEALED <span class="x">──▶</span> UNVERIFIED</span><span class="lbl">key change · sends blocked</span></li>
+        <li><span class="e">UNVERIFIED <span class="x">──▶</span> VERIFIED</span><span class="lbl">sas match</span></li>
+        <li><span class="e">VERIFIED <span class="x">──▶</span> WIPED</span><span class="lbl">chat.wipe</span></li>
+        <li><span class="e den">any <span class="x">──▶</span> DENIED</span><span class="lbl">contact.deny · terminal</span></li>
+      </ul>
+    </div>
+  </section>
+
+  <p class="foot">
+    <b>notes</b> — hand-set schematic · every wire measured in columns ·
+    no emoji · box-drawing glyphs only · marker animation is
+    prefers-reduced-motion gated
+  </p>
+
+</main>
+
+<script>
+(() => {
+  /* marker stepping: the only animation. Skipped entirely under PRM. */
+  const leds = [...document.querySelectorAll('.led[data-i]')];
+  if (!leds.length) return;
+  const mq = matchMedia('(prefers-reduced-motion: reduce)');
+  if (mq.matches) return;               /* static marker: VERIFIED lit */
+  let cur = 0;
+  const tick = () => {
+    for (const l of leds) {
+      const on = +l.dataset.i === cur;
+      l.classList.toggle('on', on);
+      l.textContent = on ? '●' : '○';
+    }
+    cur = (cur + 1) % 4;                /* happy path: 0..3 */
+  };
+  tick();
+  setInterval(tick, 1100);
+})();
+</script>
+</body>
+</html>

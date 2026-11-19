@@ -1,0 +1,545 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>cinder — dither fingerprint experiment</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&family=Space+Grotesk:wght@500;600&family=Inter:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --ground:#0B0C0E; --panel:#15171B; --card:#101216; --ink:#EDEDE8;
+    --muted:#9BA0A6; --faint:#3D4249; --line:#23262D;
+    --ember:#FFB224; --dim-ember:#5A4114; --danger:#FF6B5E;
+    --mono:'JetBrains Mono',ui-monospace,monospace;
+    --disp:'Space Grotesk',var(--mono);
+    --body:'Inter',system-ui,sans-serif;
+  }
+  *{box-sizing:border-box;margin:0}
+  body{background:var(--ground);color:var(--ink);font-family:var(--mono);
+    font-size:14px;line-height:1.6;-webkit-font-smoothing:antialiased}
+  canvas{display:block;width:100%;height:100%;image-rendering:pixelated}
+
+  .page{min-height:100vh;display:flex;flex-direction:column}
+  header{padding:26px 32px;display:flex;justify-content:space-between;
+    align-items:baseline;border-bottom:1px solid var(--line);font-size:13px}
+  .tag{color:var(--ember);font-weight:500}
+  .hint{color:var(--muted);font-size:11px;letter-spacing:.08em}
+  main{flex:1;display:flex;flex-direction:column;justify-content:center;
+    padding:56px 28px}
+  .wrap{width:100%;max-width:980px;margin:0 auto}
+
+  .intro{margin-bottom:36px}
+  .kicker{font-size:10px;letter-spacing:.22em;color:var(--ember);margin-bottom:14px}
+  h1{font-family:var(--disp);font-weight:600;
+    font-size:clamp(22px,3.2vw,30px);letter-spacing:-.01em;margin-bottom:12px}
+  .lede{font-family:var(--body);color:var(--muted);font-size:13px;
+    max-width:68ch}
+  .lede b{color:var(--ink);font-weight:500}
+
+  /* ---- instrument panel ------------------------------------------ */
+  .panel{background:var(--panel);border:1px solid var(--line)}
+  .p-head{display:flex;align-items:center;gap:12px;padding:12px 18px;
+    border-bottom:1px solid var(--line);font-size:10px;letter-spacing:.2em}
+  .p-head .l{color:var(--ink)}
+  .p-head .r{margin-left:auto;color:var(--muted);display:flex;
+    align-items:center;gap:10px}
+  .led{width:6px;height:6px;background:var(--ember);flex:none;
+    animation:blink 1.7s steps(1) infinite}
+  @keyframes blink{0%,72%{opacity:1}72.01%,100%{opacity:.25}}
+
+  .p-body{display:grid;grid-template-columns:minmax(0,470px) minmax(0,1fr);
+    gap:26px;padding:22px}
+
+  .ilab{display:flex;justify-content:space-between;gap:12px;
+    font-size:9px;letter-spacing:.18em;color:var(--faint);margin-bottom:6px}
+  .ilab b{color:var(--muted);font-weight:400}
+  .scr{position:relative;border:1px solid var(--line);background:var(--ground)}
+  .scr .st{position:absolute;top:5px;left:8px;font-size:8px;
+    letter-spacing:.22em;color:var(--faint);pointer-events:none}
+  .scr .st2{position:absolute;top:5px;right:8px;font-size:8px;
+    letter-spacing:.22em;color:var(--dim-ember);pointer-events:none}
+  .scr .st3{position:absolute;bottom:5px;left:8px;font-size:8px;
+    letter-spacing:.22em;color:var(--faint);pointer-events:none}
+  .scr .st4{position:absolute;bottom:5px;right:8px;font-size:8px;
+    letter-spacing:.22em;color:var(--faint);pointer-events:none}
+  .fp .scr{aspect-ratio:1}
+  /* corner ticks, instrument bezel */
+  .scr::before,.scr::after{content:'';position:absolute;width:9px;height:9px;
+    border:1px solid var(--faint);pointer-events:none}
+  .scr::before{top:-1px;left:-1px;border-right:0;border-bottom:0}
+  .scr::after{bottom:-1px;right:-1px;border-left:0;border-top:0}
+
+  .ro{display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;
+    margin-top:8px;font-size:10px;letter-spacing:.1em;color:var(--faint)}
+  .ro b{color:var(--muted);font-weight:400}
+  .ro b.hot{color:var(--ink)}
+  .ro b.emb{color:var(--ember);font-weight:500}
+
+  .kv{display:flex;justify-content:space-between;gap:14px;padding:7px 0;
+    border-bottom:1px dashed var(--line);font-size:10px;letter-spacing:.1em}
+  .kv:last-child{border-bottom:0}
+  .kv .k{color:var(--faint)}
+  .kv .v{color:var(--muted);text-align:right}
+  .kv .v.hot{color:var(--ink)}
+  .kv .v.emb{color:var(--ember)}
+
+  /* ---- SAS compare ------------------------------------------------ */
+  .sas{border:1px solid var(--line);background:var(--card)}
+  .sas-head,.sas-row{display:grid;
+    grid-template-columns:34px 1fr 1fr 30px;gap:8px;align-items:center;
+    padding:0 12px}
+  .sas-head{padding-top:9px;padding-bottom:9px;
+    border-bottom:1px solid var(--line);font-size:8px;
+    letter-spacing:.22em;color:var(--faint)}
+  .sas-head .c2,.sas-head .c3{text-align:center}
+  .sas-row{padding-top:7px;padding-bottom:7px;font-size:13px;
+    border-bottom:1px solid rgba(35,38,45,.5)}
+  .sas-row:last-child{border-bottom:0}
+  .sas-row .g{font-size:9px;letter-spacing:.16em;color:var(--faint)}
+  .sas-row .n{text-align:center;letter-spacing:.28em;color:var(--muted);
+    font-variant-numeric:tabular-nums}
+  .sas-row .s{text-align:center;font-size:11px;color:var(--faint)}
+
+  /* matching groups: ember digits + soft glow pulse */
+  .sas-row.ok .n{color:var(--ember);
+    text-shadow:0 0 6px rgba(255,178,36,.35);
+    animation:sasglow 3.2s ease-in-out infinite}
+  @keyframes sasglow{
+    0%,100%{text-shadow:0 0 4px rgba(255,178,36,.22)}
+    50%{text-shadow:0 0 10px rgba(255,178,36,.55)}}
+  .sas-row.ok .s i{display:inline-block;width:6px;height:6px;
+    background:var(--ember);box-shadow:0 0 7px rgba(255,178,36,.6);
+    animation:sasglow 3.2s ease-in-out infinite}
+
+  /* mismatched group: danger flash + neq */
+  .sas-row.bad{background:rgba(255,107,94,.05)}
+  .sas-row.bad .n2{color:var(--danger);
+    animation:dflash 1.05s steps(1) infinite}
+  .sas-row.bad .n1{color:var(--ink)}
+  .sas-row.bad .s{color:var(--danger);font-size:14px;font-weight:500;
+    animation:dflash 1.05s steps(1) infinite}
+  @keyframes dflash{0%,55%{opacity:1}55.01%,100%{opacity:.2}}
+
+  .sas-verdict{display:flex;justify-content:space-between;gap:10px;
+    padding:9px 12px;border-top:1px solid var(--line);
+    font-size:9px;letter-spacing:.16em}
+  .sas-verdict .v1{color:var(--danger)}
+  .sas-verdict .v2{color:var(--faint)}
+
+  .note{font-family:var(--body);color:var(--muted);font-size:12px;
+    margin-top:14px;max-width:42ch}
+  .note b{color:var(--ink);font-weight:500}
+  .note code{font-family:var(--mono);font-size:11px;color:var(--ember)}
+  .demo-flag{margin-top:14px;font-size:8px;letter-spacing:.2em;
+    color:var(--faint)}
+  .demo-flag b{color:var(--dim-ember);font-weight:400}
+
+  .p-foot{display:flex;justify-content:space-between;gap:14px;flex-wrap:wrap;
+    padding:10px 18px;border-top:1px solid var(--line);font-size:9px;
+    letter-spacing:.14em;color:var(--faint)}
+  .p-foot b{color:var(--muted);font-weight:400}
+
+  @media(max-width:760px){
+    .p-body{grid-template-columns:1fr}
+    .fp .scr{aspect-ratio:1}
+  }
+  @media (prefers-reduced-motion:reduce){
+    .led,.sas-row.ok .n,.sas-row.ok .s i{animation:none}
+    .sas-row.bad .n2,.sas-row.bad .s{animation:none}
+  }
+
+  footer{border-top:1px solid #1A1D22;padding:16px 32px;display:flex;
+    justify-content:space-between;gap:16px;flex-wrap:wrap;font-size:10px;
+    letter-spacing:.12em;color:var(--faint)}
+  footer b{color:var(--muted);font-weight:400}
+</style>
+</head>
+<body>
+<div class="page">
+  <header>
+    <span class="tag">cinder / experiments</span>
+    <span class="hint">dither-fingerprint — key verification readout</span>
+  </header>
+
+  <main>
+    <div class="wrap">
+      <div class="intro">
+        <p class="kicker">PEER VERIFICATION // B8×8 ORDERED</p>
+        <h1>A public key you can read by eye.</h1>
+        <p class="lede">Every cinder peer is an X25519 keypair; its peer-id is
+          SHA-256 of the public key. Below, that hash is rendered as a
+          16×16 ordered-dither field — <b>density is the hash, ember is the
+          ink</b> — and beside it the 7-group numeric SAS you compare out
+          loud. One group doesn't match. That's what a man-in-the-middle
+          looks like.</p>
+      </div>
+
+      <div class="panel" id="panel">
+        <div class="p-head">
+          <i class="led" aria-hidden="true"></i>
+          <span class="l">PEER VERIFY // KX-9C1F</span>
+          <span class="r">X25519 · SHA-256 · <b style="color:var(--ember);font-weight:400">DEMO VECTOR</b></span>
+        </div>
+
+        <div class="p-body">
+          <!-- 01 · fingerprint matrix -->
+          <div class="inst fp">
+            <div class="ilab"><span>// 01 — FINGERPRINT MATRIX</span><span>B8×8 · 16 CELL · DITHER</span></div>
+            <div class="scr" role="img"
+              aria-label="Ordered-dither fingerprint matrix derived from a peer's SHA-256 key hash">
+              <canvas id="cv-fp" aria-hidden="true"></canvas>
+              <span class="st">FP-16</span><span class="st2">SIG-MAP</span>
+              <span class="st3">DENS ∝ HASH</span><span class="st4">SWP</span>
+            </div>
+            <div class="ro">
+              <span>PEER-ID <b class="hot">9c1f…aa07</b></span>
+              <span>CELLS <b>16×16</b> · RAMP <b>13</b></span>
+            </div>
+            <div class="kv" style="margin-top:10px">
+              <span class="k">PEER-ID</span><span class="v hot">9c1f…aa07</span>
+            </div>
+            <div class="kv">
+              <span class="k">KEY TYPE</span><span class="v">X25519 / 32B PK</span>
+            </div>
+            <div class="kv">
+              <span class="k">HASH</span><span class="v">SHA-256 → 16×16 FIELD</span>
+            </div>
+            <div class="kv">
+              <span class="k">TRUST</span><span class="v emb">UNVERIFIED — COMPARE SAS</span>
+            </div>
+          </div>
+
+          <!-- 02 · SAS compare -->
+          <div class="inst sascol">
+            <div class="ilab"><span>// 02 — SAS COMPARE</span><span>7 GROUPS · SPEAK ALOUD</span></div>
+            <div class="sas" role="table" aria-label="Short authentication string comparison">
+              <div class="sas-head" role="row">
+                <span>GRP</span><span class="c2">YOU READ</span>
+                <span class="c3">THEY READ</span><span></span>
+              </div>
+              <div class="sas-row ok" role="row">
+                <span class="g">01</span><span class="n n1">482</span>
+                <span class="n n2">482</span><span class="s"><i></i></span>
+              </div>
+              <div class="sas-row ok" role="row">
+                <span class="g">02</span><span class="n n1">091</span>
+                <span class="n n2">091</span><span class="s"><i></i></span>
+              </div>
+              <div class="sas-row ok" role="row">
+                <span class="g">03</span><span class="n n1">775</span>
+                <span class="n n2">775</span><span class="s"><i></i></span>
+              </div>
+              <div class="sas-row ok" role="row">
+                <span class="g">04</span><span class="n n1">340</span>
+                <span class="n n2">340</span><span class="s"><i></i></span>
+              </div>
+              <div class="sas-row bad" role="row">
+                <span class="g">05</span><span class="n n1">156</span>
+                <span class="n n2">917</span><span class="s">≠</span>
+              </div>
+              <div class="sas-row ok" role="row">
+                <span class="g">06</span><span class="n n1">823</span>
+                <span class="n n2">823</span><span class="s"><i></i></span>
+              </div>
+              <div class="sas-row ok" role="row">
+                <span class="g">07</span><span class="n n1">504</span>
+                <span class="n n2">504</span><span class="s"><i></i></span>
+              </div>
+              <div class="sas-verdict">
+                <span class="v1">GROUP 05 ≠ — DO NOT TRUST</span>
+                <span class="v2">6/7 MATCH</span>
+              </div>
+            </div>
+
+            <p class="note">You read your column aloud; your peer reads
+              theirs. Every group must match. <b>Group 05 differs — a
+              relay is answering in their place.</b> Drop the channel,
+              re-exchange keys in person or over a trusted path.</p>
+            <p class="demo-flag">SCRIPTED VALUES · NO LIVE HANDSHAKE ·
+              <b>DEMO ONLY</b></p>
+          </div>
+        </div>
+
+        <div class="p-foot">
+          <span>FP = SHA-256(PK) → 128-BIT FIELD · MIRRORED L→R</span>
+          <span>IGNITIONS + SWEEP <b>DECORATIVE</b> · MATRIX <b>DETERMINISTIC</b></span>
+        </div>
+      </div>
+    </div>
+  </main>
+
+  <footer>
+    <span><b>cinder</b> — dither fingerprint study</span>
+    <span>B8×8 + IGN · 0 DEPS · IO-GATED · PRM-SAFE · DPR≤2</span>
+  </footer>
+</div>
+
+<script>
+(function(){
+'use strict';
+
+/* -----------------------------------------------------------------
+   FINGERPRINT MATRIX — a peer-id identicon as ordered dither.
+
+   peer-id = SHA-256(x25519 pubkey). Here it's a scripted demo vector;
+   a real build would feed the 32-byte hash straight into cellField().
+
+   Structure: 16×16 cells, horizontally mirrored (classic identicon).
+   Each cell gets a base value from a hash-seeded Gaussian feature
+   field plus per-cell detail noise — so the field reads as clustered
+   "ridges", not uniform static. Within a cell, a Bayer 8×8 + IGN
+   threshold decides which subpixels light (density ∝ value) and the
+   shared 13-level charcoal→ember→white ramp colors them. Result:
+   variable-density dot fields, zero solid fills.
+
+   Life: a slow scanline sweeps top→bottom and random cells ignite
+   (ember flare, exponential decay). Both are decorative; the matrix
+   itself is deterministic. Buffer is 16 cells × 9·DPR px pitch at
+   DPR capped to 2, upscaled with image-rendering:pixelated.
+------------------------------------------------------------------ */
+var RM = matchMedia('(prefers-reduced-motion: reduce)');
+var reduced = RM.matches;
+var STATIC_T = 4.61;    // frozen frame: scanline mid-field, one flare dying
+
+var PEER = '9c1f7bd24e88a1c3f50d6b4e9a2d7710c86be412f9aa07';
+
+var LEVELS, PAL = [
+  [ 11, 12, 14],   // 0  ground #0B0C0E
+  [ 20, 21, 25],   // 1  whisper charcoal
+  [ 33, 35, 41],   // 2  charcoal
+  [ 50, 47, 38],   // 3  warm ash
+  [ 74, 55, 22],   // 4  umber
+  [106, 71, 20],   // 5  dim ember
+  [146, 96, 24],   // 6  ember low
+  [196,127, 27],   // 7  ember mid
+  [232,152, 30],   // 8  ember high
+  [255,178, 36],   // 9  brand ember #FFB224
+  [255,190, 52],   // 10 hot amber
+  [255,214,110],   // 11 hotter
+  [255,240,196]    // 12 near-white
+];
+LEVELS = PAL.length - 1;
+
+var TH8 = new Float32Array([
+   0,32, 8,40, 2,34,10,42, 48,16,56,24,50,18,58,26,
+  12,44, 4,36,14,46, 6,38, 60,28,52,20,62,30,54,22,
+   3,35,11,43, 1,33, 9,41, 51,19,59,27,49,17,57,25,
+  15,47, 7,39,13,45, 5,37, 63,31,55,23,61,29,53,21]);
+for (var i=0; i<64; i++) TH8[i] = (TH8[i]+0.5)/64;
+
+function ign(x, y){
+  var f = (0.06711056*x + 0.00583715*y) % 1;
+  return (52.9829189*f) % 1;
+}
+function el(id){ return document.getElementById(id); }
+function clamp01(v){ return v<0 ? 0 : (v>1 ? 1 : v); }
+
+/* cyrb53 — small deterministic string hash, plenty for an identicon */
+function hash53(str, seed){
+  var h1 = 0xdeadbeef ^ (seed||0), h2 = 0x41c6ce57 ^ (seed||0);
+  for (var i=0; i<str.length; i++){
+    var ch = str.charCodeAt(i);
+    h1 = Math.imul(h1 ^ ch, 2654435761);
+    h2 = Math.imul(h2 ^ ch, 1597334677);
+  }
+  h1 = Math.imul(h1 ^ (h1>>>16), 2246822507) ^ Math.imul(h2 ^ (h2>>>13), 3266489909);
+  h2 = Math.imul(h2 ^ (h2>>>16), 2246822507) ^ Math.imul(h1 ^ (h1>>>13), 3266489909);
+  return (h2>>>0) * 4294967296 + (h1>>>0);   // 53-bit
+}
+
+/* ===================== fingerprint field ======================== */
+var GRID = 16, HALF = 8;
+var DPR = Math.min(window.devicePixelRatio || 1, 2);
+var PITCH = 9 * DPR;                 // px per cell: 8·DPR dots + DPR gutter
+var cv = el('cv-fp');
+var cx2d = cv.getContext('2d', {alpha:false});
+var BUF = GRID * PITCH + 1, IMG = null, V = null;
+var CELL = new Float32Array(HALF * GRID);   // base value per half-cell
+var ENERGY = new Float32Array(GRID * GRID); // ignition envelope per cell
+
+/* hash-seeded Gaussian blobs = fingerprint "ridges" */
+var FEAT = [];
+(function seedField(){
+  var s = PEER + ':feat';
+  for (var f=0; f<7; f++){
+    FEAT.push({
+      x: 0.5 + (hash53(s+':x'+f, f) % 1000)/1000 * (HALF-1),
+      y:      (hash53(s+':y'+f, f) % 1000)/1000 * (GRID-1),
+      r: 1.6 + (hash53(s+':r'+f, f) % 1000)/1000 * 3.4,
+      a: 0.45 + (hash53(s+':a'+f, f) % 1000)/1000 * 0.55
+    });
+  }
+})();
+
+function cellField(hx, y){          // hx in [0,HALF), y in [0,GRID)
+  var base = 0;
+  for (var f=0; f<FEAT.length; f++){
+    var g = FEAT[f], dx = hx-g.x, dy = y-g.y;
+    var b = g.a * Math.exp(-(dx*dx+dy*dy)/(g.r*g.r));
+    if (b > base) base = b;
+  }
+  var det = (hash53(PEER+':c:'+hx+':'+y, 7) % 10000)/10000;
+  return clamp01(base*(0.50 + 0.62*det) + 0.16*det*det*det*det - 0.02);
+}
+
+function buildCells(){
+  for (var y=0; y<GRID; y++)
+    for (var hx=0; hx<HALF; hx++)
+      CELL[y*HALF+hx] = cellField(hx, y);
+}
+
+function cellAt(cx, cy){            // mirrored lookup, full-grid coords
+  var hx = cx < HALF ? cx : GRID-1-cx;
+  return CELL[cy*HALF+hx];
+}
+
+function fit(){
+  DPR = Math.min(window.devicePixelRatio || 1, 2);
+  PITCH = 9 * DPR;
+  BUF = GRID * PITCH + 1;
+  cv.width = BUF; cv.height = BUF;
+  IMG = cx2d.createImageData(BUF, BUF);
+  V = new Float32Array(BUF * BUF);
+}
+
+/* values -> palette levels through B8+IGN threshold (shared recipe) */
+function quantize(){
+  var d = IMG.data, p = 0, o = 0;
+  for (var y=0; y<BUF; y++){
+    var brow = (y&7)<<3;
+    for (var x=0; x<BUF; x++){
+      var v = V[p];
+      var th = TH8[brow|(x&7)]*0.62 + ign(x,y)*0.38;
+      var f = v*LEVELS, l = f|0;
+      if (f-l > th) l++;
+      if (l<0) l = 0; else if (l>LEVELS) l = LEVELS;
+      var c = PAL[l];
+      d[o]=c[0]; d[o+1]=c[1]; d[o+2]=c[2]; d[o+3]=255;
+      p++; o+=4;
+    }
+  }
+  cx2d.putImageData(IMG, 0, 0);
+}
+
+/* ignition scheduler */
+var nextIgn = 0;
+function ignite(t, dt){
+  if (t >= nextIgn){
+    var idx = (Math.random()*GRID*GRID)|0;
+    ENERGY[idx] = 1;
+    nextIgn = t + 0.7 + Math.random()*1.9;
+  }
+  var decay = Math.exp(-dt*2.4);
+  for (var i=0; i<ENERGY.length; i++)
+    if (ENERGY[i] > 0.002) ENERGY[i] *= decay; else ENERGY[i] = 0;
+}
+
+function draw(t, dt){
+  ignite(t, dt);
+
+  /* scanline: one pass ~7s, wrap with margin */
+  var margin = 8*DPR, span = BUF + margin*2;
+  var sy = ((t*0.145) % 1) * span - margin;
+  var sHW = 5*DPR;
+
+  for (var y=0; y<BUF; y++){
+    var cy = (y/PITCH)|0; if (cy > GRID-1) cy = GRID-1;
+    var gY = (y % PITCH) < DPR;                 // gutter row?
+    var scan = 1 - Math.abs(y-sy)/sHW;
+    if (scan < 0) scan = 0;
+    var brow = (y&7)<<3;
+
+    for (var x=0; x<BUF; x++){
+      var o = y*BUF + x, v;
+      var cx = (x/PITCH)|0; if (cx > GRID-1) cx = GRID-1;
+
+      if (gY || (x % PITCH) < DPR){
+        v = 0.055 + 0.05*scan;                  // dim lattice + sweep lift
+      } else {
+        var ci = cy*GRID + cx;
+        var cv0 = cellAt(cx, cy);
+        var e = ENERGY[ci];
+        var dens = cv0*(0.25 + 0.72*cv0) + 0.38*e;
+        if (dens > 1) dens = 1;
+        var th = TH8[brow|(x&7)]*0.70 + ign(x+31, y+57)*0.30;
+        if (th < dens){
+          /* lit dot: level from cell value, ignition runs hot→white */
+          v = 0.30 + 0.62*cv0 + 0.55*e;
+        } else {
+          v = 0.012 + 0.010*ign(x*3+y, y*7+x);  // floor grain
+        }
+        v += 0.13*scan*(0.35 + 0.65*cv0);       // sweep reads denser cells
+      }
+      V[o] = v > 1 ? 1 : v;
+    }
+  }
+  quantize();
+}
+
+/* ===================== driver ==================================== */
+var panel = el('panel');
+var raf = 0, running = false, inView = false, last = 0;
+
+/* warm ignitions/scanline so a frozen frame looks lived-in */
+function warmup(tEnd, n){
+  var i;
+  for (i=0; i<ENERGY.length; i++) ENERGY[i] = 0;
+  nextIgn = 0;
+  for (i=n; i>0; i--) draw(tEnd - i/60, 1/60);
+  draw(tEnd, 1/60);
+}
+
+function loop(now){
+  raf = 0;
+  var t = now/1000, dt = t - last;
+  if (dt > 0.05) dt = 0.05;
+  if (dt < 0) dt = 0;
+  draw(t, dt);
+  last = t;
+  if (running) raf = requestAnimationFrame(loop);
+}
+
+function start(){
+  if (!running && !reduced && !document.hidden && inView){
+    running = true;
+    last = performance.now()/1000;
+    if (!raf) raf = requestAnimationFrame(loop);
+  }
+}
+function stop(){
+  running = false;
+  if (raf){ cancelAnimationFrame(raf); raf = 0; }
+}
+
+function fitAll(){
+  fit();
+  if (reduced) warmup(STATIC_T, 90);
+}
+
+document.addEventListener('visibilitychange', function(){
+  document.hidden ? stop() : start();
+});
+new IntersectionObserver(function(e){
+  inView = e[0].isIntersecting;
+  inView ? start() : stop();
+}).observe(panel);
+
+if (RM.addEventListener) RM.addEventListener('change', function(e){
+  reduced = e.matches;
+  if (reduced){ stop(); warmup(STATIC_T, 90); } else { start(); }
+});
+
+var rt; window.addEventListener('resize', function(){
+  clearTimeout(rt); rt = setTimeout(fitAll, 150);
+});
+
+buildCells();
+fitAll();
+if (reduced) warmup(STATIC_T, 90);
+start();
+})();
+</script>
+</body>
+</html>

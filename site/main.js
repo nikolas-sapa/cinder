@@ -103,22 +103,109 @@ if (cv) {
   requestAnimationFrame(frame);
 }
 
-/* ---- terminal demo: self-typing prompt ---- */
-const typedEl = document.getElementById("typed");
-if (typedEl && !matchMedia("(prefers-reduced-motion: reduce)").matches) {
-  const cmds = ["/finger", "/sas verify", "/msg wheels up in ten?"];
-  let ci = 0;
-  const typeIn = (s, i, done) =>
-    i <= s.length
-      ? (typedEl.textContent = s.slice(0, i), setTimeout(() => typeIn(s, i + 1, done), 55 + Math.random() * 80))
-      : setTimeout(done, 2600);
-  const erase = (done) =>
-    typedEl.textContent.length
-      ? (typedEl.textContent = typedEl.textContent.slice(0, -1), setTimeout(() => erase(done), 28))
-      : setTimeout(done, 500);
-  (function loop() {
-    typeIn(cmds[ci], 0, () => erase(() => { ci = (ci + 1) % cmds.length; loop(); }));
-  })();
-} else if (typedEl) {
-  typedEl.textContent = "/finger";
+/* ---- interactive terminal demo ---- */
+const transcript = document.getElementById("transcript");
+const input = document.getElementById("term-input");
+if (transcript && input) {
+  const D = '<span class="dim">';
+  const A = '<span class="amber">';
+  const PEERS = {
+    eidolon: { status: "· verified", fp: "9c1f…aa07",
+      lines: [
+        `${D}13:04</span>  ${A}eidolon</span>  copy that`,
+        `${D}13:04</span>  ${A}eidolon</span>  wheels up in ten`,
+        `${D}13:07</span>  ${A}agent</span>   msg.send → id:ccfd7c · deduped:false`,
+        `${D}13:12</span>  — sas verified · numeric match · session pinned —`,
+        `${D}13:13</span>  <span class="you">you</span>  rendezvous at the NEM port, 0400`,
+      ],
+      replies: ["solid copy", "ack — wheels up", "rendezvous locked"] },
+    "k-9": { status: "· verified", fp: "4b7e…1d90",
+      lines: [
+        `${D}09:41</span>  ${A}k-9</span>  relay lagging on eu-west, switching`,
+        `${D}09:44</span>  <span class="you">you</span>  mailbox had 2 queued, all drained`,
+        `${D}09:44</span>  ${A}agent</span>   file.send → 2.1MB · chunk 0/17 offered`,
+        `${D}09:51</span>  — file verified · sha256 match · saved —`,
+      ],
+      replies: ["roger", "queued, draining now", "chunk 17/17 confirmed"] },
+    operator: { status: "· unverified", fp: "77aa…01c3",
+      lines: [
+        `${D}22:10</span>  ${A}operator</span>  new key — verify me before anything`,
+        `${D}22:10</span>  ${D}— key change detected · sends blocked until /sas —`,
+      ],
+      replies: ["verify first, then we talk", "still waiting on sas"] },
+  };
+  const peerName = document.getElementById("peer-name");
+  const peerStatus = document.getElementById("peer-status");
+  let peer = "eidolon";
+  let replyIdx = 0;
+  const line = (html, cls = "msg") => {
+    const p = document.createElement("p");
+    p.className = cls + " typed";
+    p.innerHTML = html;
+    transcript.appendChild(p);
+    transcript.scrollTop = transcript.scrollHeight;
+    return p;
+  };
+  const sys = (html) => line(`${D}${html}</span>`, "msg dim");
+  const stamp = () => "13:" + String(14 + Math.floor(Math.random() * 40)).padStart(2, "0");
+
+  function loadPeer(name) {
+    peer = name;
+    replyIdx = 0;
+    transcript.innerHTML = "";
+    peerName.textContent = name;
+    peerStatus.textContent = PEERS[name].status;
+    PEERS[name].lines.forEach((l, i) =>
+      setTimeout(() => line(l), 120 + i * 160));
+  }
+
+  document.querySelectorAll(".peer[data-peer]").forEach((el) => {
+    const pick = () => {
+      document.querySelectorAll(".peer").forEach((x) => x.classList.remove("active"));
+      el.classList.add("active");
+      loadPeer(el.dataset.peer);
+    };
+    el.addEventListener("click", pick);
+    el.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); pick(); } });
+  });
+
+  const CMDS = {
+    "/help": () => sys("commands: /help · /finger · /sas · /msg &lt;text&gt; · /invite · /contacts · /deny · /wipe"),
+    "/finger": () => sys(`peer ${PEERS[peer].fp} · X25519 · ${peer === "operator" ? "UNVERIFIED — run /sas" : "verified · session pinned"}`),
+    "/sas": () => {
+      sys("sas: 041 · 229 · 088 · 611 · 204 · 773 · 512");
+      setTimeout(() => sys("— read aloud out-of-band · if it matches, session pinned —"), 350);
+      if (peer === "operator") setTimeout(() => { sys("— operator verified · sends unblocked —"); peerStatus.textContent = "· verified"; }, 800);
+    },
+    "/invite": () => sys(`cinder://${PEERS[peer].fp.replace("…", "")}…@relay:8443?rendezvous=8f2a · one-time, expires on use`),
+    "/contacts": () => sys("eidolon ✓ · k-9 ✓ · operator ⚠ unverified · denied: 0"),
+    "/deny": () => { sys(`— ${peer} denied · sessions torn down · grants revoked · token rotated —`); sys("no un-deny via rpc — manual db surgery only"); },
+    "/wipe": () => { transcript.innerHTML = ""; sys(`— chat wiped · 214 events · 3 files · dedup rows —`); sys("authenticated ChatWipe sent · peer's client destroys its copy"); },
+  };
+
+  input.addEventListener("keydown", (e) => {
+    if (e.key !== "Enter") return;
+    const raw = input.value.trim();
+    input.value = "";
+    if (!raw) return;
+    line(`${D}${stamp()}</span>  <span class="prompt">&gt;</span> ${raw.replace(/</g, "&lt;")}`, "msg dim");
+    if (raw.startsWith("/")) {
+      const cmd = raw.split(/\s+/)[0].toLowerCase();
+      if (CMDS[cmd]) return CMDS[cmd]();
+      if (cmd === "/msg") {
+        const body = raw.slice(5).trim() || "…";
+        line(`${D}${stamp()}</span>  <span class="you">you</span>  ${body.replace(/</g, "&lt;")}`, "msg out-msg");
+        const replies = PEERS[peer].replies;
+        return setTimeout(() =>
+          line(`${D}${stamp()}</span>  ${A}${peer}</span>  ${replies[replyIdx++ % replies.length]}`), 700);
+      }
+      return sys(`unknown command ${cmd.replace(/</g, "&lt;")} — /help`);
+    }
+    line(`${D}${stamp()}</span>  <span class="you">you</span>  ${raw.replace(/</g, "&lt;")}`, "msg out-msg");
+    const replies = PEERS[peer].replies;
+    setTimeout(() => line(`${D}${stamp()}</span>  ${A}${peer}</span>  ${replies[replyIdx++ % replies.length]}`), 700);
+  });
+
+  document.querySelector(".term-body").addEventListener("click", () => input.focus());
+  loadPeer("eidolon");
 }

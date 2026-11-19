@@ -173,19 +173,19 @@
       <div class="term-body mono">
         <div class="side">
           <p class="side-h">CHATS</p>
-          <p class="peer active">eidolon <span class="vdot" aria-hidden="true">●</span></p>
-          <p class="peer">k-9</p>
-          <p class="peer">operator</p>
-          <p class="side-f dim">alt+1..9 · j/k · q quit<br>unread 2</p>
+          <p class="peer active" data-peer="eidolon" role="button" tabindex="0">eidolon <span class="vdot" aria-hidden="true">●</span></p>
+          <p class="peer" data-peer="k-9" role="button" tabindex="0">k-9</p>
+          <p class="peer" data-peer="operator" role="button" tabindex="0">operator</p>
+          <p class="side-h" style="margin-top:14px">DEMO</p>
+          <p class="side-f dim">click a peer · type a command<br>try <span class="amber">/help</span></p>
         </div>
         <div class="pane" id="demo-pane">
-          <p class="pane-h"><span class="amber">eidolon</span> <span class="dim">· verified</span><span class="pane-time dim">13:12</span></p>
-          <p class="msg"><span class="dim">13:04</span>  <span class="amber">eidolon</span>  copy that</p>
-          <p class="msg"><span class="dim">13:04</span>  <span class="amber">eidolon</span>  wheels up in ten</p>
-          <p class="msg agent"><span class="dim">13:07</span>  <span class="amber">agent</span>   msg.send → id:ccfd7c · deduped:false</p>
-          <p class="msg dim"><span class="dim">13:12</span>  — sas verified · numeric match · session pinned —</p>
-          <p class="msg out-msg"><span class="dim">13:13</span>  <span class="you">you</span> rendezvous at the NEM port, 0400</p>
-          <p class="prompt-line"><span class="prompt">&gt;</span> <span id="typed"></span><span class="caret" aria-hidden="true"></span></p>
+          <p class="pane-h"><span class="amber" id="peer-name">eidolon</span> <span class="dim" id="peer-status">· verified</span><span class="pane-time dim">live demo — fake, but honest</span></p>
+          <div class="transcript" id="transcript"></div>
+          <p class="prompt-line"><span class="prompt">&gt;</span>
+            <input id="term-input" class="mono" spellcheck="false" autocomplete="off"
+                   aria-label="Try a cinder command" placeholder="/help">
+          </p>
         </div>
       </div>
     </div>

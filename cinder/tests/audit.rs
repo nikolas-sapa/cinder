@@ -4,6 +4,8 @@
 //! mutation scoping, contact-add wedge, inbound gating, offline queue
 //! flush, react gating, and unread marking.
 
+#[path = "../src/call.rs"]
+mod call;
 #[path = "../src/core.rs"]
 mod core;
 #[path = "../src/rpc/mod.rs"]

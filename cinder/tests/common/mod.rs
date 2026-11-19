@@ -400,6 +400,57 @@ impl CinderCore for MockCore {
         Ok(json!({"file_id": p.file_id, "thumb_b64": null, "mime": null}))
     }
 
+    // ---------- Phase A call surface (recording stubs) ----------
+    async fn call_ring(&self, p: CallRingParams) -> Result<Value, RpcError> {
+        self.check("call.ring")?;
+        self.file_calls.lock().unwrap().push(json!({
+            "m": "call.ring", "to": p.to, "media": p.media,
+        }));
+        Ok(json!({
+            "call_id": "call:aaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "chat_id": CHAT,
+            "state": "outgoing",
+            "media": "audio",
+        }))
+    }
+
+    async fn call_accept(&self, p: CallIdParams) -> Result<Value, RpcError> {
+        self.check("call.accept")?;
+        Ok(json!({"call_id": p.call_id.unwrap_or_default(), "state": "active", "media": "audio"}))
+    }
+
+    async fn call_decline(&self, p: CallIdParams) -> Result<Value, RpcError> {
+        self.check("call.decline")?;
+        Ok(json!({"call_id": p.call_id.unwrap_or_default(), "state": "ended", "reason": "decline"}))
+    }
+
+    async fn call_hangup(&self, p: CallIdParams) -> Result<Value, RpcError> {
+        self.check("call.hangup")?;
+        Ok(json!({"call_id": p.call_id.unwrap_or_default(), "state": "ended", "reason": "hangup"}))
+    }
+
+    async fn call_info(&self, p: CallIdParams) -> Result<Value, RpcError> {
+        self.check("call.info")?;
+        Ok(json!({
+            "call_id": p.call_id.unwrap_or_default(),
+            "state": "active",
+            "dir": "out",
+            "peer_id": PEER,
+            "contact_id": CONTACT,
+            "chat_id": CHAT,
+            "media": "audio",
+            "since_ts": "2026-11-18T16:04:22Z",
+            "muted": false,
+            "quality": "good",
+            "stats": {"tx_frames": 12, "rx_frames": 11, "plc": 0, "drops_out": 0, "drops_late": 0},
+        }))
+    }
+
+    async fn call_mute(&self, p: CallMuteParams) -> Result<Value, RpcError> {
+        self.check("call.mute")?;
+        Ok(json!({"call_id": p.call_id.unwrap_or_default(), "muted": p.muted.unwrap_or(true)}))
+    }
+
     async fn backlog_summary(&self) -> Result<Value, RpcError> {
         Ok(self.summary.lock().unwrap().clone())
     }

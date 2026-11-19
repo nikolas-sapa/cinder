@@ -127,6 +127,7 @@ guaranteed within a major protocol version; agents MUST treat them as opaque.
 | `chat:` | 1:1 conversation | `chat:77aa...` |
 | `msg:` | message | `msg:e01d...` |
 | `file:` | file transfer (also the `body.file.file_id` anchor) | `file:3k9x...` |
+| `call:` | voice call (correlation id for `call.*` methods/events) | `call:7h2m...` |
 | `inv:` | pending invite | `inv:2c44...` |
 | `sub:` | event subscription | `sub:1` |
 | `cur:` | opaque pagination cursor | `cur:gbv4...` |
@@ -978,6 +979,53 @@ Thumbnail bytes are **UNTRUSTED peer-controlled data** (≤ 16 KiB JPEG,
 dimension/allocation-guarded at generation) — decode only with guarded
 decoders; never pass to unguarded image libraries.
 
+### 4.21 Call methods (`call.*`)
+
+1:1 encrypted Opus voice calls (Phase A). Signalling **and** media ride the
+existing Noise session — the relay stays byte-blind, peers never learn each
+other's IP, and nothing is added to `ClientMsg`. Call signalling is
+live-session only: it is never queued in `pending_out` and never deposited
+into a mailbox. Media frames are unreliable/isochronous: never retried, never
+queued. `CALL_MAX_ACTIVE = 1` — one call per account, inbound rings while
+live are answered with `CallEnd{busy}`.
+
+#### `call.ring` — scope `send`
+
+| Field | Type | Req | Description |
+|---|---|---|---|
+| `to` | string | yes | `contact:`/`chat:`/`peer:` id of an ACTIVE contact |
+| `media` | string | no | `"audio"` — the only media in Phase A |
+| `client_call_id` | string | no | Idempotency key like `client_msg_id`: replays return `deduped:true`; conflicting reuse → `-32018`/`conflict` |
+
+**Result:** `{call_id, chat_id, state:"outgoing", media:"audio", deduped?}` —
+returned at ring acceptance; the lifecycle arrives as `call.state` events.
+
+**Errors:** `-32602` invalid params (bad prefix/media); `-32011` peer_offline
+(no live session — calls never mailbox); `-32018` conflict (a call is already
+live, or `client_call_id` reuse with a different payload).
+
+#### `call.accept` / `call.decline` / `call.hangup` — scope `send`
+
+**Params:** `{call_id?}` — optional when exactly one matching call is live.
+
+- `call.accept` answers an inbound `ringing` call → `{call_id, state:"active"}`.
+- `call.decline` rejects an inbound `ringing` call → `{call_id, state:"ended", reason:"decline"}`.
+- `call.hangup` ends any non-terminal call (cancel outgoing, abort ringing,
+  hang up active) → `{call_id, state:"ended", reason:"hangup"}`.
+
+#### `call.info` — scope `read`
+
+**Params:** `{call_id?}` — omitted → the single live call. →
+`{call_id, state, dir, peer_id, contact_id, chat_id, media, since_ts}` plus,
+once active: `muted`, `quality`, `stats:{tx_frames, rx_frames, plc,
+drops_out, drops_late}`.
+
+#### `call.mute` — scope `send`
+
+**Params:** `{call_id?, muted?}` (`muted` defaults `true`). Local mic gate
+only — **emits zero wire messages**; the peer hears a media gap, never a
+flag. → `{call_id, muted}`.
+
 ---
 
 ## 5. Event catalog
@@ -1252,6 +1300,33 @@ bytes_total, reason?}`
 {"jsonrpc":"2.0","method":"file_state","params":{"subscription_id":"sub:1","seq":417,"ts":"2026-11-18T16:06:40Z","file_id":"file:3k9x…","msg_id":"msg:e01d…","chat_id":"chat:77aa…","dir":"in","state":"transferring","bytes_done":14336,"bytes_total":28672}}
 ```
 
+### 5.11 `call.incoming`
+
+An inbound `CallRing` that passed validation (live session, `audio` media,
+not busy). The callee auto-acks with `CallRinging`; answer via `call.accept`
+/ `call.decline`. The ring expires at `limits.call_ring_timeout_s`.
+
+**Payload:** `{call_id, contact_id, peer_id, chat_id, media, cap}`
+
+### 5.12 `call.state`
+
+Call lifecycle transitions, exactly once per state, per `call_id`:
+`outgoing` (ring sent) → `ringing` (delivered) → `active` (accepted) →
+`ended` (terminal, emitted exactly once, absorbing).
+
+**Payload:** `{call_id, state, dir, chat_id, peer_id, media, since_ts,
+reason?, quality?, muted?, stats?}`
+
+- `reason` (on `ended` only): `hangup` · `decline` · `busy` · `no_answer` ·
+  `failed` · `timeout` · `key_changed`.
+- `quality` flips (`good`/`degraded`) while `active` emit throttled updates
+  (≤ 1 per 5 s) carrying `quality` + `stats`.
+- `stats`: `{tx_frames, rx_frames, plc, drops_out, drops_late}`.
+
+```json
+{"jsonrpc":"2.0","method":"call.state","params":{"subscription_id":"sub:1","seq":512,"ts":"2026-11-18T16:07:12Z","call_id":"call:7h2m…","state":"ended","dir":"out","chat_id":"chat:77aa…","peer_id":"peer:oyv4…","media":"audio","reason":"hangup"}}
+```
+
 ---
 
 ## 6. Trust marking — prompt-injection hygiene
@@ -1377,6 +1452,14 @@ On `shutdown.request` acceptance (or SIGTERM / stdin EOF):
 | History page | ≤ 500 messages |
 | Replay log | bounded, advertised (`replay_log_max_events`) |
 | Dedup records | bounded window, ≥ 24 h |
+| Call ring TTL | 60 s (`call_ring_timeout_s`) |
+| Call deliver window | 10 s (`call_deliver_timeout_s`) |
+| Active calls | 1 per account (`call_max_active`) |
+| Call frame queue | 64 frames (`call_frame_queue`) |
+| Jitter buffer | 120 ms target / 240 ms max (`call_jitter_ms_*`) |
+| Media dead-air | 10 s → `ended(failed)` (`call_media_dead_s`) |
+| Opus payload | ≤ 400 B per `CallFrame` (48 kHz mono, 20 ms) |
+| Call max duration | 4 h → `ended(timeout)` |
 
 ---
 

@@ -659,6 +659,133 @@ fn r_file_thumb() -> Value {
     )
 }
 
+// ---------- Phase A voice calls (docs/plans/voice-video-calls.md §5) ----------
+
+fn p_call_ring() -> Value {
+    obj(
+        &["to"],
+        json!({
+            "to": {"type": "string", "description": "contact:/peer:/chat: id of the callee"},
+            "media": {"enum": ["audio"], "default": "audio", "description": "only 'audio' exists in Phase A"},
+            "client_call_id": {"type": "string", "description": "idempotency key like client_msg_id; replays return the stored result"},
+        }),
+    )
+}
+
+fn p_call_id() -> Value {
+    obj(
+        &[],
+        json!({"call_id": id_prop("call:", "optional — defaults to the single matching live call")}),
+    )
+}
+
+fn p_call_mute() -> Value {
+    obj(
+        &[],
+        json!({
+            "call_id": id_prop("call:", "optional — defaults to the active call"),
+            "muted": {"type": "boolean", "default": true, "description": "local mic gate only — emits no wire message (§7)"},
+        }),
+    )
+}
+
+fn r_call_ring() -> Value {
+    obj(
+        &["call_id", "chat_id", "state"],
+        json!({
+            "call_id": id_prop("call:", "correlation id for all call.* calls"),
+            "chat_id": id_prop("chat:", ""),
+            "state": {"enum": ["outgoing"], "description": "ring delivered; lifecycle arrives via call.state events"},
+            "media": {"enum": ["audio"]},
+            "deduped": {"type": "boolean", "description": "true iff this replayed a prior client_call_id"},
+        }),
+    )
+}
+
+fn r_call_state_ack() -> Value {
+    obj(
+        &["call_id", "state"],
+        json!({
+            "call_id": id_prop("call:", ""),
+            "state": {"enum": ["outgoing", "ringing", "active", "ended"], "description": "state AFTER the action"},
+            "reason": {"enum": ["hangup", "decline", "busy", "no_answer", "failed", "timeout", "key_changed", "null"], "description": "present on state:ended"},
+            "media": {"enum": ["audio"]},
+        }),
+    )
+}
+
+fn r_call_info() -> Value {
+    obj(
+        &[
+            "call_id",
+            "state",
+            "dir",
+            "peer_id",
+            "contact_id",
+            "chat_id",
+            "media",
+            "since_ts",
+        ],
+        json!({
+            "call_id": id_prop("call:", ""),
+            "state": {"enum": ["outgoing", "ringing", "active", "ended"]},
+            "dir": {"enum": ["in", "out"]},
+            "peer_id": id_prop("peer:", ""),
+            "contact_id": id_prop("contact:", ""),
+            "chat_id": id_prop("chat:", ""),
+            "media": {"enum": ["audio"]},
+            "since_ts": ts_prop(),
+            "muted": {"type": "boolean", "description": "local mic gate; present once the call is active"},
+            "quality": {"enum": ["good", "degraded"], "description": "media health; present once the call is active"},
+            "stats": {"type": "object", "properties": {"tx_frames": {"type": "integer"}, "rx_frames": {"type": "integer"}, "plc": {"type": "integer"}, "drops_out": {"type": "integer"}, "drops_late": {"type": "integer"}}, "description": "present once the call is active"},
+        }),
+    )
+}
+
+fn r_call_mute() -> Value {
+    obj(
+        &["call_id", "muted"],
+        json!({
+            "call_id": id_prop("call:", ""),
+            "muted": {"type": "boolean"},
+            "note": {"type": "string", "description": "mute is local truth; the peer is never signalled"},
+        }),
+    )
+}
+
+fn e_call_incoming() -> Value {
+    event_envelope(
+        &["call_id", "contact_id", "peer_id", "chat_id", "media"],
+        json!({
+            "call_id": id_prop("call:", ""),
+            "contact_id": id_prop("contact:", ""),
+            "peer_id": id_prop("peer:", ""),
+            "chat_id": id_prop("chat:", ""),
+            "media": {"enum": ["audio"]},
+            "cap": {"type": "integer", "description": "peer capability bitmask (bit0 audio/opus-48k)"},
+        }),
+    )
+}
+
+fn e_call_state() -> Value {
+    event_envelope(
+        &["call_id", "state", "dir", "chat_id"],
+        json!({
+            "call_id": id_prop("call:", ""),
+            "state": {"enum": ["outgoing", "ringing", "active", "ended"], "description": "ended is terminal and emitted exactly once per call"},
+            "dir": {"enum": ["in", "out"]},
+            "chat_id": id_prop("chat:", ""),
+            "peer_id": id_prop("peer:", ""),
+            "media": {"enum": ["audio"]},
+            "since_ts": ts_prop(),
+            "reason": {"enum": ["hangup", "decline", "busy", "no_answer", "failed", "timeout", "key_changed", "null"], "description": "set on state:ended"},
+            "quality": {"enum": ["good", "degraded"], "description": "set on quality transitions while active (throttled <=1/5s)"},
+            "muted": {"type": "boolean"},
+            "stats": {"type": "object", "properties": {"tx_frames": {"type": "integer"}, "rx_frames": {"type": "integer"}, "plc": {"type": "integer"}, "drops_out": {"type": "integer"}, "drops_late": {"type": "integer"}}},
+        }),
+    )
+}
+
 pub const METHODS: &[MethodDef] = &[
     MethodDef { name: "session.hello", scope: "", description: "Handshake + version negotiation + capability discovery. First call a client SHOULD make; works pre-auth.", params: p_hello, result: r_hello },
     MethodDef { name: "rpc.describe", scope: "", description: "Full machine-readable schema: every method's params/result schema, every event's payload schema, the error-kind table, and server limits. Works pre-auth.", params: empty_schema, result: r_describe },
@@ -684,6 +811,12 @@ pub const METHODS: &[MethodDef] = &[
     MethodDef { name: "file.list", scope: "read", description: "List file transfers newest-first; chat/state filters, opaque-cursor paginated like chat.list.", params: p_file_list, result: r_file_list },
     MethodDef { name: "file.save", scope: "read", description: "Materialize a complete inbound blob to disk: sanitized name, collision suffix, 0600, hash re-verified before rename. Filesystem materialization, not a confidentiality boundary.", params: p_file_save, result: r_file_save },
     MethodDef { name: "file.thumb", scope: "read", description: "Fetch a transfer's thumbnail as base64. UNTRUSTED peer-controlled bytes — consumers MUST decode with the documented dimension/allocation guards.", params: p_file_id, result: r_file_thumb },
+    MethodDef { name: "call.ring", scope: "send", description: "Ring an ACTIVE contact for a 1:1 encrypted Opus voice call (Phase A). Signalling rides the live Noise session only — never queued, never mailbox-deposited; peer_offline if no live session. CALL_MAX_ACTIVE=1: a second ring while any call is live → conflict.", params: p_call_ring, result: r_call_ring },
+    MethodDef { name: "call.accept", scope: "send", description: "Answer an inbound call in state ringing → CallAccept on the wire + media pumps start. call_id optional when exactly one inbound call rings.", params: p_call_id, result: r_call_state_ack },
+    MethodDef { name: "call.decline", scope: "send", description: "Decline an inbound ringing call → CallEnd{decline}; terminal.", params: p_call_id, result: r_call_state_ack },
+    MethodDef { name: "call.hangup", scope: "send", description: "End any non-terminal call (outgoing cancel, ringing abort, active hangup) → CallEnd{hangup}; terminal.", params: p_call_id, result: r_call_state_ack },
+    MethodDef { name: "call.info", scope: "read", description: "Row for one call (or the live call when call_id omitted): state, dir, peer, media runtime stats (tx/rx frames, PLC, drops), muted, quality.", params: p_call_id, result: r_call_info },
+    MethodDef { name: "call.mute", scope: "send", description: "Local mic gate for the active call. Emits ZERO wire messages — the peer hears a media gap (silence → their PLC), not a flag (§7).", params: p_call_mute, result: r_call_mute },
     MethodDef { name: "events.subscribe", scope: "read", description: "Open a resumable event stream over this connection. since= resumes at seq+1; a gap is only ever signalled by an event.gap marker.", params: p_events_subscribe, result: r_events_subscribe },
     MethodDef { name: "events.unsubscribe", scope: "read", description: "Close a subscription; the seq cursor remains resumable inside the replay window.", params: p_events_unsubscribe, result: r_events_unsubscribe },
     MethodDef { name: "shutdown.request", scope: "admin", description: "Ask the server to shut down gracefully; drains within grace_ms then closes.", params: p_shutdown, result: r_shutdown },
@@ -832,6 +965,8 @@ pub const EVENTS: &[EventDef] = &[
     EventDef { name: "security.identity_changed", description: "Pinned remote static key changed at handshake; trust becomes key_changed and sending blocks until re-verified. Never silently rebound.", params: e_identity_changed },
     EventDef { name: "security.verification_needed", description: "Contact is connected-but-unverified; sas_hint lets agents surface the SAS without an extra call.", params: e_verification_needed },
     EventDef { name: "file_state", description: "Transfer lifecycle + progress. Every state transition emits; progress within transferring coalesces to <=1 event/s per transfer. Terminal failures carry reason.", params: e_file_state },
+    EventDef { name: "call.incoming", description: "An inbound CallRing that passed validation (live session, audio media, not busy). The callee auto-acks with CallRinging; answer via call.accept/call.decline. Ring TTL is limits.call_ring_timeout_s.", params: e_call_incoming },
+    EventDef { name: "call.state", description: "Call lifecycle transitions: outgoing (ring sent) -> ringing (delivered) -> active (accepted) -> ended (terminal, exactly once, with reason). Quality flips while active emit throttled updates carrying quality+drops.", params: e_call_state },
     EventDef { name: "session.backlog", description: "Catch-up summary emitted exactly once per subscription after replay; also the shutdown notice shape.", params: e_session_backlog },
     EventDef { name: "event.gap", description: "Replay-expiry marker — the only legal representation of lost events. Emitted before the first replayed event when since < oldest_seq-1.", params: e_event_gap },
 ];

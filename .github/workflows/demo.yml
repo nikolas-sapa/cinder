@@ -42,6 +42,9 @@ jobs:
 
       - name: install cinder + cinder-relay onto PATH
         run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libasound2-dev libopus-dev pkg-config
           cargo install --locked --path cinder --root "$HOME/.local"
           cargo install --locked --path cinder-relay --root "$HOME/.local"
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"

@@ -81,6 +81,13 @@ rendezvous token inside it.
 much. Can correlate two users' flows to the same relay and infer who talks to
 whom with timing analysis — padding does not address this at all. Bucketed
 sizes still leak approximate length class and full conversation shape.
+**Voice calls are traffic-shape distinguishable**: an active call is a
+sustained ~50 fps bidirectional stream of small frames — a rhythm no chat
+pattern produces. An observer (or the relay) can infer *that a call is in
+progress* and roughly *which two concurrently-connected users are talking*,
+though never content, keys, or signaling. Accepted: real-time media cannot
+hide its cadence without constant-rate cover traffic, which is a declared
+non-goal (§7).
 **Learns mailbox capability tokens** when they observe
 `MailboxDeposit/Fetch/Ack/Rotate/Close` frames on your client↔relay link —
 tokens transit in cleartext (there is no client↔relay crypto layer; Noise is
@@ -128,6 +135,12 @@ partition users; log everything forever.
   mitigated: `msg_state` stays `queued`, `session.backlog`/`event.gap`
   events expose gaps rather than hiding them. The silence itself is the
   only signal; there is no independent delivery proof.
+- **Call metadata**: calls ride the same encrypted `Transport` frames, so
+  the relay sees no signaling and no media — but the isochronous ~50 fps
+  bidirectional cadence betrays that a call is live between two of its
+  connected peer-ids, for its duration. Worst case the relay learns
+  *who is calling whom and when*, never what is said. Accepted residual;
+  the fix (constant-rate cover traffic) is out of scope (§7).
 - **Metadata beyond padding**: flow timing, message frequency, online
   presence, IP↔peer-id binding. Not mitigated.
 - **Forced re-handshakes**: killing connections costs you CPU/rate-limit
@@ -450,7 +463,7 @@ RUSTSEC-2024-0344 (the dalek timing-signal advisory).
 - Multi-device / linked devices / key rotation
 - Mobile platforms and their lifecycle constraints
 - Federation between relays or servers
-- Voice/video calls
+- Video calls (Phase A voice calls ship inside the existing Noise session)
 - Metadata-resistant transport (Tor, mixnets, constant-rate cover traffic)
 - Spam/abuse scoring beyond rate limits and contact blocking
 

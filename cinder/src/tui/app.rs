@@ -83,6 +83,14 @@ pub enum Command {
     Decline(Option<String>),
     /// `/files` — transfer list panel for the focused chat.
     Files,
+    /// `/call` — ring the focused chat's peer (Phase A voice call).
+    Call,
+    /// `/answer [call_id]` — accept an inbound ringing call.
+    Answer(Option<String>),
+    /// `/hangup [call_id]` — end the live call (or abort a ringing one).
+    Hangup(Option<String>),
+    /// `/mute [on|off]` — local mic gate; `/unmute` clears. No wire signal.
+    Mute(bool),
     Unknown(String),
 }
 
@@ -124,6 +132,16 @@ pub fn parse_command(line: &str) -> Command {
         "/accept" => Command::Accept(arg.filter(|a| !a.is_empty()).map(str::to_string)),
         "/decline" => Command::Decline(arg.filter(|a| !a.is_empty()).map(str::to_string)),
         "/files" => Command::Files,
+        "/call" | "/dial" => Command::Call,
+        "/answer" | "/pickup" => Command::Answer(arg.filter(|a| !a.is_empty()).map(str::to_string)),
+        "/hangup" | "/endcall" => {
+            Command::Hangup(arg.filter(|a| !a.is_empty()).map(str::to_string))
+        }
+        "/mute" => match arg.filter(|a| !a.is_empty()) {
+            Some("off") | Some("0") => Command::Mute(false),
+            _ => Command::Mute(true),
+        },
+        "/unmute" => Command::Mute(false),
         other => Command::Unknown(format!("unknown command {other} (/help)")),
     }
 }
@@ -192,7 +210,18 @@ pub struct App {
     pub pending: HashMap<String, String>,
     /// msg_id → live transfer progress, fed by `file_state` events.
     pub file_progress: HashMap<String, FileProg>,
+    /// Live call view fed by `call.incoming`/`call.state` events (Phase A).
+    pub call: Option<CallView>,
     pub chat_view_height: u16,
+}
+
+/// Rendered call state for the status line — no audio claim, just the
+/// signalling truth (device is server-side: cpal or NullMedia).
+pub struct CallView {
+    pub call_id: String,
+    pub state: String,
+    pub dir: String,
+    pub muted: bool,
 }
 
 impl App {
@@ -210,6 +239,7 @@ impl App {
             status_line: None,
             pending: HashMap::new(),
             file_progress: HashMap::new(),
+            call: None,
             chat_view_height: 1,
         }
     }
@@ -426,6 +456,78 @@ impl App {
                     });
                 }
                 let _ = chat_id;
+            }
+            Event::CallIncoming {
+                call_id,
+                contact_id,
+                peer_id,
+                chat_id,
+                media,
+            } => {
+                self.call = Some(CallView {
+                    call_id,
+                    state: "ringing".to_string(),
+                    dir: "in".to_string(),
+                    muted: false,
+                });
+                self.touch_chat(&chat_id, now_ts(), "[call] incoming");
+                self.status_line = Some(format!(
+                    "INCOMING CALL {contact_id} ({peer_id}, {media}) — /answer or /hangup"
+                ));
+            }
+            Event::CallState {
+                call_id,
+                chat_id,
+                state,
+                dir,
+                reason,
+                quality,
+            } => {
+                self.touch_chat(&chat_id, now_ts(), "[call]");
+                let mine = self
+                    .call
+                    .as_ref()
+                    .map(|c| c.call_id == call_id)
+                    .unwrap_or(true);
+                match state.as_str() {
+                    "ended" => {
+                        if mine {
+                            self.call = None;
+                        }
+                        self.status_line = Some(match reason {
+                            Some(r) => format!("call ended ({r})"),
+                            None => "call ended".to_string(),
+                        });
+                    }
+                    "active" => {
+                        self.call = Some(CallView {
+                            call_id,
+                            state,
+                            dir,
+                            muted: false,
+                        });
+                        self.status_line =
+                            Some("call active — /mute toggles mic, /hangup ends".to_string());
+                    }
+                    _ => {
+                        if let Some(c) = &mut self.call {
+                            if c.call_id == call_id {
+                                c.state = state.clone();
+                            }
+                        } else {
+                            self.call = Some(CallView {
+                                call_id,
+                                state: state.clone(),
+                                dir,
+                                muted: false,
+                            });
+                        }
+                        self.status_line = Some(match quality {
+                            Some(q) => format!("call {state} (media {q})"),
+                            None => format!("call {state}"),
+                        });
+                    }
+                }
             }
             Event::ConnChanged(s) => {
                 self.conn = s;

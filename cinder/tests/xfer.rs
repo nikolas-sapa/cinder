@@ -5,6 +5,8 @@
 //! cancel/reaper flows, and resume across a session death.
 #![allow(dead_code)]
 
+#[path = "../src/call.rs"]
+mod call;
 #[path = "../src/core.rs"]
 mod core;
 #[path = "../src/rpc/mod.rs"]

@@ -332,7 +332,66 @@ async fn run_command<B: Backend>(backend: &mut B, app: &mut App, line: &str) -> 
             Err(e) => app.status_line = Some(format!("cancel: {e}")),
         },
         Command::Accept(id) => file_decision(backend, app, id, true).await,
-        Command::Decline(id) => file_decision(backend, app, id, false).await,
+        Command::Decline(id) => {
+            // `/decline` doubles as the call-reject path when an inbound
+            // call rings and the arg isn't a file: id.
+            let is_file = id
+                .as_deref()
+                .map(|s| s.starts_with("file:"))
+                .unwrap_or(false);
+            if !is_file && app.call.as_ref().map(|c| c.dir.as_str()) == Some("in") {
+                match backend.call_decline(id.as_deref()).await {
+                    Ok(()) => app.status_line = Some("call declined".to_string()),
+                    Err(e) => app.status_line = Some(format!("decline: {e}")),
+                }
+            } else {
+                file_decision(backend, app, id, false).await;
+            }
+        }
+        Command::Call => {
+            let Some(chat) = app.active_chat() else {
+                app.status_line = Some("no chat selected".to_string());
+                return Ok(());
+            };
+            if chat.trust == Trust::KeyChanged {
+                app.status_line = Some("key changed — /verify before calling".to_string());
+                return Ok(());
+            }
+            // In a call already → show its row instead of dialling again.
+            if app.call.is_some() {
+                match backend.call_info().await {
+                    Ok(Some(info)) => app.status_line = Some(info),
+                    Ok(None) => app.status_line = Some("no call row".to_string()),
+                    Err(e) => app.status_line = Some(format!("call: {e}")),
+                }
+                return Ok(());
+            }
+            match backend.call_ring(&chat.chat_id.clone()).await {
+                Ok(id) => app.status_line = Some(format!("ringing {id}…")),
+                Err(e) => app.status_line = Some(format!("call: {e}")),
+            }
+        }
+        Command::Answer(id) => match backend.call_accept(id.as_deref()).await {
+            Ok(()) => app.status_line = Some("answering…".to_string()),
+            Err(e) => app.status_line = Some(format!("answer: {e}")),
+        },
+        Command::Hangup(id) => match backend.call_hangup(id.as_deref()).await {
+            Ok(()) => app.status_line = Some("call ended".to_string()),
+            Err(e) => app.status_line = Some(format!("hangup: {e}")),
+        },
+        Command::Mute(on) => match backend.call_mute(on).await {
+            Ok(()) => {
+                if let Some(c) = &mut app.call {
+                    c.muted = on;
+                }
+                app.status_line = Some(if on {
+                    "mic muted (local only — peer hears silence)".to_string()
+                } else {
+                    "mic unmuted".to_string()
+                });
+            }
+            Err(e) => app.status_line = Some(format!("mute: {e}")),
+        },
         Command::Files => {
             let Some(chat) = app.active_chat() else {
                 app.status_line = Some("no chat selected".to_string());

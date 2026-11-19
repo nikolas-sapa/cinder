@@ -31,11 +31,13 @@ use cinder_core::proto::{
 use cinder_core::session::Session;
 use cinder_core::transport::{ClientEvent, Link, RelayTransport};
 
+use crate::call::{self, CallCaps, CallDir, CallRt, CallState, EndReason, Quality};
 use crate::rpc::core::{
-    ChatHistoryParams, ChatListParams, ChatSetDisappearingParams, CinderCore, ContactAddParams,
-    ContactIdParams, ContactListParams, EventSink, FileIdParams, FileListParams, FileSaveParams,
-    FileSendParams, IdentVerifyParams, InviteAcceptParams, InviteCreateParams, MsgDeleteParams,
-    MsgEditParams, MsgReactParams, MsgSendParams,
+    CallIdParams, CallMuteParams, CallRingParams, ChatHistoryParams, ChatListParams,
+    ChatSetDisappearingParams, CinderCore, ContactAddParams, ContactIdParams, ContactListParams,
+    EventSink, FileIdParams, FileListParams, FileSaveParams, FileSendParams, IdentVerifyParams,
+    InviteAcceptParams, InviteCreateParams, MsgDeleteParams, MsgEditParams, MsgReactParams,
+    MsgSendParams,
 };
 use crate::rpc::events::{EventRecord, ReplayLog};
 use crate::rpc::protocol::{ErrorKind, RpcError};
@@ -252,6 +254,47 @@ pub(crate) enum AppMsg {
     },
     FileDecline {
         file_id: [u8; 32],
+    },
+    // ----- Phase A voice calls (docs/plans/voice-video-calls.md §3) -----
+    // All five ride the same Noise session → the relay stays blind; peers
+    // on pre-call builds drop the unknown variant index on decode.
+    /// Ring request (§3). The call pins to the session generation that
+    /// carried it — the demux path already rejects stale/foreign sids
+    /// before this variant can be reached.
+    CallRing {
+        call_id: [u8; 16],
+        /// Media kind; `call::MEDIA_AUDIO` is the only Phase A kind.
+        media: u8,
+        /// Capability bitmask (§3): bit0 audio, bit1 video, bit2
+        /// udp-capable (reserved for Phase B fallback), bits 3-7 = 0.
+        cap: u8,
+        /// Sender-side unix-ms ring deadline; the callee enforces its own
+        /// 60 s cap (§3: `expires_unix` is informational).
+        expires_unix: u64,
+    },
+    /// Delivery proof from the callee (§3): auto-emitted on a valid ring.
+    CallRinging {
+        call_id: [u8; 16],
+    },
+    /// Callee accepted; `cap` carries the negotiated intersection.
+    CallAccept {
+        call_id: [u8; 16],
+        cap: u8,
+    },
+    /// Terminating signal for every terminal path (§4 table). Also the
+    /// busy answer to an inbound ring under `CALL_MAX_ACTIVE`.
+    CallEnd {
+        call_id: [u8; 16],
+        reason: u8,
+    },
+    /// One encrypted Opus frame (48 kHz mono 20 ms). `seq` wraps per
+    /// direction (modular compare in `call::JitterBuf`); `ts_ms` is
+    /// sender call-relative and informational.
+    CallFrame {
+        call_id: [u8; 16],
+        seq: u16,
+        ts_ms: u32,
+        payload: Vec<u8>,
     },
 }
 
@@ -525,6 +568,12 @@ struct Shared {
     shutting_down: bool,
     /// Live transfer runtime state, keyed by `file:` id.
     xfers: HashMap<String, Xfer>,
+    /// Call rows by raw `call_id` — includes recently-ended rows so
+    /// `call.info`/terminal dedup stay consistent (bounded: one live call,
+    /// ended rows trimmed past CALL_ENDED_KEEP).
+    calls: HashMap<[u8; 16], Call>,
+    /// Last inbound/outbound ring attempt per peer (CALL_RING_MIN_GAP).
+    call_last_ring: HashMap<PeerId, Instant>,
 }
 
 /// Response waiters completed by the pump. Request ops are serialized by
@@ -719,7 +768,35 @@ pub struct Core {
     data_dir: PathBuf,
     /// Transfer caps; test-injectable via `test_caps_mut`.
     caps: Mutex<XferCaps>,
+    /// Call caps; test-injectable via `test_call_caps_mut`.
+    call_caps: Mutex<CallCaps>,
+    /// Audio device factory for the media pumps — cpal under the `calls`
+    /// feature, NullMedia otherwise; tests inject Loopback/Null.
+    media_factory: Mutex<MediaFactory>,
 }
+
+/// One live (or recently-ended) Phase A call. Cloning shares the `CallRt`
+/// arc so counters stay consistent after the row leaves the map.
+#[derive(Clone)]
+struct Call {
+    id: [u8; 16],
+    peer: PeerId,
+    dir: CallDir,
+    state: CallState,
+    /// Local session id the call is pinned to — mismatch = dead call (§4).
+    local_sid: SessionId,
+    cap: u8,
+    since_ms: i64,
+    /// 60 s ring TTL (caller & callee both enforce).
+    ring_deadline: Instant,
+    /// Caller-side: no `CallRinging` by this point → `ended(timeout)`.
+    deliver_deadline: Option<Instant>,
+    /// CALL_MAX_DURATION hard cap.
+    max_deadline: Instant,
+    rt: Option<Arc<CallRt>>,
+}
+
+type MediaFactory = Arc<dyn Fn() -> call::Devices + Send + Sync>;
 
 impl Core {
     /// Opens the core: sqlite store + contacts + persisted meta, then (when
@@ -815,6 +892,8 @@ impl Core {
                 conn: tb::ConnState::Offline,
                 shutting_down: false,
                 xfers: HashMap::new(),
+                calls: HashMap::new(),
+                call_last_ring: HashMap::new(),
             }),
             link: Arc::new(LinkHub {
                 cmd_tx,
@@ -833,6 +912,8 @@ impl Core {
             tasks: Mutex::new(Vec::new()),
             data_dir: data_dir.to_path_buf(),
             caps: Mutex::new(XferCaps::default()),
+            call_caps: Mutex::new(CallCaps::default()),
+            media_factory: Mutex::new(std::sync::Arc::new(call::default_devices) as MediaFactory),
         });
 
         if let Some((addr, host)) = relay {
@@ -853,6 +934,10 @@ impl Core {
         core.tasks.lock().unwrap_or_else(|e| e.into_inner()).push({
             let c = core.clone();
             tokio::spawn(async move { c.file_reap_loop().await })
+        });
+        core.tasks.lock().unwrap_or_else(|e| e.into_inner()).push({
+            let c = core.clone();
+            tokio::spawn(async move { c.call_janitor_loop().await })
         });
         Ok(core)
     }
@@ -993,6 +1078,126 @@ impl Core {
     #[allow(dead_code)]
     pub fn test_caps_mut(&self) -> std::sync::MutexGuard<'_, XferCaps> {
         self.caps.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// Test seam: mutate call caps (timeouts, queue caps, jitter, pace).
+    #[cfg(test)]
+    #[allow(dead_code)]
+    pub fn test_call_caps_mut(&self) -> std::sync::MutexGuard<'_, CallCaps> {
+        self.call_caps.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// Test seam: override the media device factory (Loopback/Null).
+    #[cfg(test)]
+    #[allow(dead_code)]
+    pub fn test_media_factory(&self, f: MediaFactory) {
+        *self.media_factory.lock().unwrap_or_else(|e| e.into_inner()) = f;
+    }
+
+    /// Test seam: `{state, dir, since_ts}` for a call_id, or None.
+    #[cfg(test)]
+    #[allow(dead_code)]
+    pub fn test_call(&self, call_id: &str) -> Option<(String, String)> {
+        let id = Self::call_id_raw(call_id)?;
+        self.sh()
+            .calls
+            .get(&id)
+            .map(|c| (c.state.as_str().to_string(), c.dir.as_str().to_string()))
+    }
+
+    /// Test seam: rt counters for a call_id — `(tx, rx, plc, drops_out, drops_late)`.
+    #[cfg(test)]
+    #[allow(dead_code)]
+    pub fn test_call_stats(&self, call_id: &str) -> Option<(u64, u64, u64, u64, u64)> {
+        use std::sync::atomic::Ordering::Relaxed;
+        let id = Self::call_id_raw(call_id)?;
+        let rt = self.sh().calls.get(&id)?.rt.clone()?;
+        rt.sync_drops();
+        Some((
+            rt.tx_frames.load(Relaxed),
+            rt.rx_frames.load(Relaxed),
+            rt.plc.load(Relaxed),
+            rt.drops_out.load(Relaxed),
+            rt.drops_late.load(Relaxed),
+        ))
+    }
+
+    /// Test seam: is there a live (non-ended) call at all?
+    #[cfg(test)]
+    #[allow(dead_code)]
+    pub fn test_live_calls(&self) -> usize {
+        self.live_calls().len()
+    }
+
+    /// Test seam: does a live session exist for peer (used by CA9's
+    /// no-decrypt-fatal assertion on stale-sid frames).
+    #[cfg(test)]
+    #[allow(dead_code)]
+    pub fn test_has_session(&self, peer: &PeerId) -> bool {
+        self.session(peer).is_some()
+    }
+
+    /// Test seam: last known presence for `peer` (CA18 waits for the
+    /// offline flip before ringing).
+    #[cfg(test)]
+    #[allow(dead_code)]
+    pub fn test_peer_online(&self, peer: &PeerId) -> Option<bool> {
+        self.sh().presence.get(peer).copied()
+    }
+
+    /// Test seam: inject a presence value for `peer` (CA18 exercises the
+    /// deposit-vs-live guard without a relay round-trip).
+    #[cfg(test)]
+    #[allow(dead_code)]
+    pub fn test_set_presence(&self, peer: &PeerId, online: bool) {
+        self.sh().presence.insert(*peer, online);
+    }
+
+    /// Test seam: stamp the per-peer re-ring throttle so the next CallRing
+    /// from `peer` is dropped silently (CA3 deliver-timeout).
+    #[cfg(test)]
+    #[allow(dead_code)]
+    pub fn test_touch_ring(&self, peer: &PeerId) {
+        self.sh().call_last_ring.insert(*peer, Instant::now());
+    }
+
+    /// Test seam: drop the live session for `peer` so the next send
+    /// re-handshakes into a fresh generation (CA9/CA13 pin checks).
+    #[cfg(test)]
+    #[allow(dead_code)]
+    pub fn test_drop_session(&self, peer: &PeerId) {
+        self.drop_session(peer);
+    }
+
+    /// Test seam: drive the real key-change consequence path as if a
+    /// re-handshake presented `new_static` under `peer` (CA13).
+    #[cfg(test)]
+    #[allow(dead_code)]
+    pub async fn test_key_change(&self, peer: &PeerId, new_static: [u8; 32]) {
+        let p = *peer;
+        let old = self
+            .cblk(move |c| {
+                let old = c.get(&p).map(|ct| ct.static_pubkey);
+                let _ = c.record_key_change(&p, new_static);
+                old
+            })
+            .await
+            .flatten();
+        self.key_changed_path(*peer, old, Some(new_static)).await;
+    }
+
+    /// Test seam: mark a call's inbound-clock back so media_dead sweeps fire.
+    #[cfg(test)]
+    #[allow(dead_code)]
+    pub fn test_age_call_rx(&self, call_id: &str, secs: u64) {
+        let Some(id) = Self::call_id_raw(call_id) else {
+            return;
+        };
+        let Some(rt) = self.sh().calls.get(&id).and_then(|c| c.rt.clone()) else {
+            return;
+        };
+        *rt.last_rx.lock().unwrap_or_else(|e| e.into_inner()) =
+            Some(Instant::now() - Duration::from_secs(secs));
     }
 
     #[cfg(test)]
@@ -1449,6 +1654,13 @@ impl Core {
             sh.early_total = 0;
             sh.presence.clear();
         }
+        // §4: link death is session death — every pinned call ends failed.
+        {
+            let c = self.arc();
+            tokio::spawn(async move {
+                c.sweep_dead_session_calls().await;
+            });
+        }
         self.link.fail_all(&ClientEvent::Error {
             code: ErrorCode::ProtocolViolation,
             detail: "relay link lost".into(),
@@ -1755,6 +1967,32 @@ impl Core {
         None
     }
 
+    /// §4 key-change consequence path: emit `security.identity_changed`,
+    /// then end every live call with that peer (`KeyChanged`, no wire
+    /// notice — sends are blocked). Shared by `on_session_ready` and the
+    /// test seam so the emit→end ordering is exercised, not duplicated.
+    async fn key_changed_path(
+        &self,
+        peer: PeerId,
+        old_fp: Option<[u8; 32]>,
+        remote_static: Option<[u8; 32]>,
+    ) {
+        self.emit(
+            "security.identity_changed",
+            None,
+            json!({
+                "contact_id": contact_str(&peer),
+                "peer_id": peer_str(&peer),
+                "old_fingerprint": old_fp.map(|k| b32(PeerId::from_static_key(&k).as_bytes())),
+                "new_fingerprint": remote_static
+                    .map(|k| b32(PeerId::from_static_key(&k).as_bytes())),
+                "trust": "key_changed",
+            }),
+        );
+        self.end_calls_peer(&peer, EndReason::KeyChanged, false)
+            .await;
+    }
+
     fn send_lock(&self, peer: &PeerId) -> Arc<tokio::sync::Mutex<()>> {
         self.send_locks
             .lock()
@@ -1824,18 +2062,9 @@ impl Core {
         };
 
         if key_changed {
-            self.emit(
-                "security.identity_changed",
-                None,
-                json!({
-                    "contact_id": contact_str(&peer),
-                    "peer_id": peer_str(&peer),
-                    "old_fingerprint": old_fp.map(|k| b32(PeerId::from_static_key(&k).as_bytes())),
-                    "new_fingerprint": remote_static
-                        .map(|k| b32(PeerId::from_static_key(&k).as_bytes())),
-                    "trust": "key_changed",
-                }),
-            );
+            // §4: a key change mid-call aborts like sends are blocked —
+            // ordering keeps identity_changed ahead of the terminal event.
+            self.key_changed_path(peer, old_fp, remote_static).await;
         }
 
         if self.install_session(peer, session).is_none() {
@@ -1919,6 +2148,12 @@ impl Core {
         // resumable rows — a link-up FileAccept can land in a dead session
         // generation (foreign-sid drop), so re-emit on install too.
         self.resume_xfers().await;
+
+        // Presence refresh: the link-up subscribe only covered contacts
+        // active at that moment — a peer that came online after must be
+        // (re)subscribed so offline flips (mailbox-vs-live routing, call
+        // availability) are observed.
+        let _ = self.presence_subscribe().await;
 
         if outbound || became_active {
             self.emit(
@@ -2278,6 +2513,705 @@ impl Core {
             }
             self.emit("msg_state", Some(&m.chat_id), p);
         }
+    }
+
+    // ----- Phase A call engine (docs/plans/voice-video-calls.md) -------------
+
+    /// Trimmed ended rows keep `call.info`/dedup consistent without growing
+    /// `Shared.calls` unboundedly.
+    fn call_id_str(id: &[u8; 16]) -> String {
+        format!("call:{}", b32(id))
+    }
+
+    fn call_id_raw(s: &str) -> Option<[u8; 16]> {
+        data_encoding::BASE32_NOPAD
+            .decode(s.strip_prefix("call:")?.to_uppercase().as_bytes())
+            .ok()?
+            .try_into()
+            .ok()
+    }
+
+    fn call_caps(&self) -> CallCaps {
+        self.call_caps
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+    }
+
+    /// Non-terminal calls (Outgoing/Ringing/Active) — `CALL_MAX_ACTIVE` math.
+    fn live_calls(&self) -> Vec<Call> {
+        self.sh()
+            .calls
+            .values()
+            .filter(|c| c.state != CallState::Ended)
+            .cloned()
+            .collect()
+    }
+
+    /// Live session pinned check: the session must exist AND be the exact
+    /// generation the call was created on (a re-handshake = new call).
+    fn call_session_live(&self, c: &Call) -> Option<Arc<PeerSession>> {
+        match self.sh().sessions.get(&c.peer) {
+            Some(ps) if ps.session_id == c.local_sid => Some(ps.clone()),
+            _ => None,
+        }
+    }
+
+    /// Ring-path liveness: session alive AND not a "known-offline + grant"
+    /// deposit route — calls never ride mailboxes (§8, CA18).
+    fn call_live_path(&self, peer: &PeerId) -> Option<Arc<PeerSession>> {
+        let ps = self.session(peer)?;
+        let deposit_would = {
+            let sh = self.sh();
+            sh.presence.get(peer).map(|o| !*o).unwrap_or(false)
+                && sh.meta.get(peer).and_then(|m| m.grant.as_ref()).is_some()
+        };
+        if deposit_would {
+            return None;
+        }
+        Some(ps)
+    }
+
+    /// Call signalling: seal on the pinned session, NEVER deposit, send
+    /// reliably on cmd_tx (control messages are low-rate).
+    async fn send_call_ctrl(&self, peer: PeerId, app: &AppMsg, pinned_sid: SessionId) -> bool {
+        let SealOutcome::Sealed {
+            ps,
+            ct,
+            ctrl,
+            deposit,
+        } = self.seal_app(&peer, app)
+        else {
+            return false;
+        };
+        if deposit || ps.session_id != pinned_sid {
+            return false;
+        }
+        if self
+            .link
+            .cmd_tx
+            .send(ClientMsg::Transport {
+                to: peer,
+                session_id: ps.session_id,
+                body: ct,
+            })
+            .await
+            .is_err()
+        {
+            return false;
+        }
+        if let Some(ctrl) = ctrl {
+            let _ = self
+                .link
+                .cmd_tx
+                .send(ClientMsg::Transport {
+                    to: peer,
+                    session_id: ps.session_id,
+                    body: ctrl,
+                })
+                .await;
+        }
+        true
+    }
+
+    /// Media lane: seal on the pinned session, send via try_send so a
+    /// saturated channel drops the frame (isochronous) instead of
+    /// queueing behind chat. Returns whether the frame went on the wire.
+    async fn send_call_frame(&self, peer: PeerId, app: &AppMsg, pinned_sid: SessionId) -> bool {
+        let SealOutcome::Sealed {
+            ps,
+            ct,
+            ctrl,
+            deposit,
+        } = self.seal_app(&peer, app)
+        else {
+            return false;
+        };
+        if deposit || ps.session_id != pinned_sid {
+            return false;
+        }
+        if let Some(ctrl) = ctrl {
+            let _ = self.link.cmd_tx.try_send(ClientMsg::Transport {
+                to: peer,
+                session_id: ps.session_id,
+                body: ctrl,
+            });
+        }
+        self.link
+            .cmd_tx
+            .try_send(ClientMsg::Transport {
+                to: peer,
+                session_id: ps.session_id,
+                body: ct,
+            })
+            .is_ok()
+    }
+
+    fn emit_call_state(&self, c: &Call, reason: Option<EndReason>) {
+        let rt = c.rt.clone();
+        if let Some(r) = &rt {
+            r.sync_drops();
+        }
+        let mut p = json!({
+            "call_id": Self::call_id_str(&c.id),
+            "state": c.state.as_str(),
+            "dir": c.dir.as_str(),
+            "peer_id": peer_str(&c.peer),
+            "contact_id": contact_str(&c.peer),
+            "chat_id": chat_str(&c.peer),
+            "media": "audio",
+            "since_ts": rfc3339(c.since_ms),
+        });
+        if let Some(rt) = &rt {
+            use std::sync::atomic::Ordering::Relaxed;
+            p["stats"] = json!({
+                "tx_frames": rt.tx_frames.load(Relaxed),
+                "rx_frames": rt.rx_frames.load(Relaxed),
+                "plc": rt.plc.load(Relaxed),
+                "drops_out": rt.drops_out.load(Relaxed),
+                "drops_late": rt.drops_late.load(Relaxed),
+            });
+            p["muted"] = Value::Bool(rt.muted.load(Relaxed));
+            p["quality"] = Value::String(
+                rt.quality
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .as_str()
+                    .into(),
+            );
+        }
+        if let Some(r) = reason {
+            p["reason"] = Value::String(r.as_str().into());
+        }
+        self.emit("call.state", Some(&chat_str(&c.peer)), p);
+    }
+
+    fn emit_call_incoming(&self, c: &Call) {
+        self.emit(
+            "call.incoming",
+            Some(&chat_str(&c.peer)),
+            json!({
+                "call_id": Self::call_id_str(&c.id),
+                "contact_id": contact_str(&c.peer),
+                "peer_id": peer_str(&c.peer),
+                "chat_id": chat_str(&c.peer),
+                "media": "audio",
+                "cap": c.cap,
+            }),
+        );
+    }
+
+    /// Terminal transition: idempotent (state CAS), stops pumps, optionally
+    /// emits the wire `CallEnd`, and emits exactly one `call.state:ended`.
+    async fn end_call(&self, call_id: &[u8; 16], reason: EndReason, notify_peer: bool) {
+        let call = {
+            let mut sh = self.sh();
+            match sh.calls.get_mut(call_id) {
+                Some(c) if c.state != CallState::Ended => {
+                    c.state = CallState::Ended;
+                    Some(c.clone())
+                }
+                _ => None,
+            }
+        };
+        let Some(call) = call else { return };
+        if let Some(rt) = &call.rt {
+            rt.stop.store(true, std::sync::atomic::Ordering::Relaxed);
+        }
+        if notify_peer {
+            let _ = self
+                .send_call_ctrl(
+                    call.peer,
+                    &AppMsg::CallEnd {
+                        call_id: *call_id,
+                        reason: reason.to_u8(),
+                    },
+                    call.local_sid,
+                )
+                .await;
+        }
+        self.emit_call_state(&call, Some(reason));
+    }
+
+    /// Sweep every live call whose pinned session no longer exists
+    /// (link down, session drop, re-handshake) — `ended(failed)`.
+    async fn sweep_dead_session_calls(&self) {
+        let ids: Vec<[u8; 16]> = self
+            .live_calls()
+            .into_iter()
+            .filter(|c| self.call_session_live(c).is_none())
+            .map(|c| c.id)
+            .collect();
+        for id in ids {
+            self.end_call(&id, EndReason::Failed, true).await;
+        }
+    }
+
+    /// End every non-terminal call pinned to a peer (key change, link
+    /// death, contact loss) — sweeps from `sh()` each call.
+    async fn end_calls_peer(&self, peer: &PeerId, reason: EndReason, notify: bool) {
+        let ids: Vec<[u8; 16]> = self
+            .live_calls()
+            .into_iter()
+            .filter(|c| c.peer == *peer)
+            .map(|c| c.id)
+            .collect();
+        for id in ids {
+            self.end_call(&id, reason, notify).await;
+        }
+    }
+
+    /// Spawn the three pumps for a call that just went Active: mic→encode→
+    /// out_q, out_q→wire (try_send), and jitter→decode→speaker.
+    fn start_media(self: &Arc<Self>, call_id: [u8; 16], peer: PeerId, local_sid: SessionId) {
+        let caps = self.call_caps();
+        let rt = {
+            let mut sh = self.sh();
+            let Some(c) = sh.calls.get_mut(&call_id) else {
+                return;
+            };
+            let rt = Arc::new(CallRt::new(&caps));
+            c.rt = Some(rt.clone());
+            rt
+        };
+        let devices = {
+            let f = self
+                .media_factory
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .clone();
+            f()
+        };
+
+        // Mic → encode → out_q. spawn_blocking: device reads can block.
+        {
+            let rt = rt.clone();
+            let mut mic = devices.mic;
+            let pace = caps.frame_pace;
+            std::thread::spawn(move || {
+                let Ok(enc) = call::OpusEnc::new(caps.bitrate) else {
+                    tracing::warn!("call mic pump: opus encoder init failed");
+                    rt.stop.store(true, std::sync::atomic::Ordering::Relaxed);
+                    return;
+                };
+                let mut pcm = [0.0f32; call::FRAME_SAMPLES];
+                while !rt.stop.load(std::sync::atomic::Ordering::Relaxed) {
+                    let t = Instant::now();
+                    if mic.read(&mut pcm).is_err() {
+                        pcm.fill(0.0);
+                    }
+                    // §7 mute is local truth: capture gates at the source —
+                    // no AppMsg is produced, the peer sees a media gap.
+                    if rt.muted.load(std::sync::atomic::Ordering::Relaxed) {
+                        std::thread::sleep(pace);
+                        continue;
+                    }
+                    match enc.encode(&pcm) {
+                        Ok(pkt) if pkt.len() <= call::MAX_OPUS_PACKET => {
+                            if rt.out_q.push(pkt) {
+                                rt.drops_out
+                                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                            }
+                        }
+                        _ => {
+                            rt.drops_out
+                                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        }
+                    }
+                    let elapsed = t.elapsed();
+                    if elapsed < pace {
+                        std::thread::sleep(pace - elapsed);
+                    }
+                }
+            });
+        }
+
+        // out_q → sealed CallFrame → cmd_tx try_send (drop under backpressure).
+        {
+            let me = self.arc();
+            let rt = rt.clone();
+            tokio::spawn(async move {
+                loop {
+                    if rt.stop.load(std::sync::atomic::Ordering::Relaxed) && rt.out_q.len() == 0 {
+                        break;
+                    }
+                    let Some(pkt) = rt.out_q.pop() else {
+                        rt.out_q.wait(Duration::from_millis(200)).await;
+                        if rt.stop.load(std::sync::atomic::Ordering::Relaxed) {
+                            break;
+                        }
+                        continue;
+                    };
+                    // Live-call check: call may have ended while queued.
+                    let still_active = {
+                        let sh = me.sh();
+                        sh.calls
+                            .get(&call_id)
+                            .map(|c| c.state == CallState::Active)
+                            .unwrap_or(false)
+                    };
+                    if !still_active {
+                        continue;
+                    }
+                    let seq = rt.next_seq();
+                    let ts_ms = rt.ts_ms();
+                    let sent = me
+                        .send_call_frame(
+                            peer,
+                            &AppMsg::CallFrame {
+                                call_id,
+                                seq,
+                                ts_ms,
+                                payload: pkt,
+                            },
+                            local_sid,
+                        )
+                        .await;
+                    if sent {
+                        rt.tx_frames
+                            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    } else {
+                        rt.drops_out
+                            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        // Pinned session gone → the janitor's sweep ends it;
+                        // stop pumping instead of burning codec cycles.
+                        let pinned_alive = {
+                            let sh = me.sh();
+                            sh.sessions
+                                .get(&peer)
+                                .map(|ps| ps.session_id == local_sid)
+                                .unwrap_or(false)
+                        };
+                        if !pinned_alive {
+                            rt.stop.store(true, std::sync::atomic::Ordering::Relaxed);
+                        }
+                    }
+                }
+            });
+        }
+
+        // Jitter → decode → speaker, 20 ms isochronous playout.
+        {
+            let rt = rt.clone();
+            let mut speaker = devices.speaker;
+            tokio::spawn(async move {
+                let Ok(mut dec) = call::OpusDec::new() else {
+                    tracing::warn!("call play pump: opus decoder init failed");
+                    return;
+                };
+                let mut pcm = [0.0f32; call::FRAME_SAMPLES];
+                let mut iv = tokio::time::interval(Duration::from_millis(call::FRAME_MS));
+                loop {
+                    if rt.stop.load(std::sync::atomic::Ordering::Relaxed) {
+                        break;
+                    }
+                    iv.tick().await;
+                    let play = { rt.jitter.lock().unwrap_or_else(|e| e.into_inner()).tick() };
+                    let pkt = match play {
+                        call::Playout::Frame(p) => Some(p),
+                        call::Playout::Plc => None,
+                        call::Playout::Buffering => continue,
+                    };
+                    if dec.decode(pkt.as_deref(), &mut pcm).is_ok() {
+                        let _ = speaker.write(&pcm);
+                    }
+                }
+            });
+        }
+    }
+
+    /// Deadline/session sweeps: deliver timeout, ring TTL, media dead,
+    /// max duration, session-pin death, and quality transitions.
+    async fn call_janitor_loop(self: Arc<Self>) {
+        loop {
+            if self.shutdown_requested() {
+                return;
+            }
+            let tick = self.call_caps().janitor_tick;
+            tokio::time::sleep(tick).await;
+            let caps = self.call_caps();
+            let now = Instant::now();
+            let today = now_ms() / 86_400_000;
+            // Re-ring throttle cleanup alongside the call sweeps.
+            {
+                let mut sh = self.sh();
+                sh.call_last_ring
+                    .retain(|_, t| t.elapsed() < caps.ring_min_gap);
+                let ended: Vec<[u8; 16]> = sh
+                    .calls
+                    .iter()
+                    .filter(|(_, c)| c.state == CallState::Ended)
+                    .map(|(k, _)| *k)
+                    .collect();
+                // Keep at most 128 ended rows for info/dedup.
+                if ended.len() > 128 {
+                    let mut dated: Vec<([u8; 16], i64)> = ended
+                        .into_iter()
+                        .map(|id| (id, sh.calls.get(&id).map(|c| c.since_ms).unwrap_or(0)))
+                        .collect();
+                    dated.sort_by_key(|(_, t)| *t);
+                    let excess = dated.len() - 128;
+                    for (id, _) in dated.into_iter().take(excess) {
+                        sh.calls.remove(&id);
+                    }
+                }
+            }
+            let _ = today;
+            for c in self.live_calls() {
+                // Session-pin: any mismatch with the generation the call was
+                // created on = dead call (§4 "a dead session ends the call").
+                if self.call_session_live(&c).is_none() {
+                    self.end_call(&c.id, EndReason::Failed, true).await;
+                    continue;
+                }
+                match c.state {
+                    CallState::Outgoing => {
+                        if let Some(dl) = c.deliver_deadline {
+                            if now >= dl {
+                                self.end_call(&c.id, EndReason::Timeout, true).await;
+                                continue;
+                            }
+                        }
+                        if now >= c.ring_deadline {
+                            self.end_call(&c.id, EndReason::NoAnswer, true).await;
+                        }
+                    }
+                    CallState::Ringing => {
+                        if now >= c.ring_deadline {
+                            self.end_call(&c.id, EndReason::NoAnswer, true).await;
+                        }
+                    }
+                    CallState::Active => {
+                        if now >= c.max_deadline {
+                            self.end_call(&c.id, EndReason::Timeout, true).await;
+                            continue;
+                        }
+                        let Some(rt) = &c.rt else { continue };
+                        let last_rx = *rt.last_rx.lock().unwrap_or_else(|e| e.into_inner());
+                        let silence = now.saturating_duration_since(last_rx.unwrap_or(rt.started));
+                        if silence >= caps.media_dead {
+                            self.end_call(&c.id, EndReason::Failed, true).await;
+                            continue;
+                        }
+                        // Quality transitions, throttled to ≤1 emit / 5 s.
+                        let want = if silence >= caps.media_keepalive {
+                            Quality::Degraded
+                        } else {
+                            Quality::Good
+                        };
+                        let (cur, last_emit) = {
+                            let q = rt.quality.lock().unwrap_or_else(|e| e.into_inner());
+                            let le = rt
+                                .last_quality_emit
+                                .lock()
+                                .unwrap_or_else(|e| e.into_inner());
+                            (*q, *le)
+                        };
+                        if want != cur
+                            && now.saturating_duration_since(last_emit) >= Duration::from_secs(5)
+                        {
+                            *rt.quality.lock().unwrap_or_else(|e| e.into_inner()) = want;
+                            *rt.last_quality_emit
+                                .lock()
+                                .unwrap_or_else(|e| e.into_inner()) = now;
+                            self.emit_call_state(&c, None);
+                        }
+                    }
+                    CallState::Ended => {}
+                }
+            }
+        }
+    }
+
+    /// Resolve `call_id` (or the single live call when omitted) under the
+    /// shared lock, gated by a predicate — shared by accept/decline/hangup.
+    fn pick_call_locked<'a>(
+        &self,
+        sh: &'a mut Shared,
+        call_id: &Option<String>,
+        pred: impl Fn(&Call) -> bool,
+    ) -> Result<&'a mut Call, RpcError> {
+        match call_id {
+            Some(s) => {
+                let id = Self::call_id_raw(s)
+                    .ok_or_else(|| RpcError::new(ErrorKind::InvalidParams, "malformed call_id"))?;
+                let c = sh
+                    .calls
+                    .get_mut(&id)
+                    .ok_or_else(|| RpcError::new(ErrorKind::NotFound, "call_id not found"))?;
+                if !pred(c) {
+                    return Err(RpcError::new(
+                        ErrorKind::Conflict,
+                        "call is not in a state that accepts this action",
+                    ));
+                }
+                Ok(c)
+            }
+            None => sh
+                .calls
+                .values_mut()
+                .find(|c| pred(c))
+                .ok_or_else(|| RpcError::new(ErrorKind::NotFound, "no matching call")),
+        }
+    }
+
+    // ---- inbound call signalling ----
+
+    async fn on_call_ring(
+        self: &Arc<Self>,
+        peer: PeerId,
+        call_id: [u8; 16],
+        media: u8,
+        cap: u8,
+        expires_unix: u64,
+    ) {
+        let caps = self.call_caps();
+        // The frame already decrypted under the live session for `peer`
+        // (stale/foreign sids never reach here); that session's generation
+        // is the pin.
+        let Some(ps) = self.session(&peer) else {
+            return;
+        };
+        // Re-ring of a call we already know → re-ack, no new state/event.
+        let existing = { self.sh().calls.get(&call_id).cloned() };
+        if let Some(existing) = existing {
+            if existing.state == CallState::Ringing {
+                let _ = self
+                    .send_call_ctrl(peer, &AppMsg::CallRinging { call_id }, existing.local_sid)
+                    .await;
+            }
+            return;
+        }
+        // Unsupported media → explicit decline path.
+        if media & call::CAP_AUDIO_OPUS48K == 0 {
+            let _ = self
+                .send_call_ctrl(
+                    peer,
+                    &AppMsg::CallEnd {
+                        call_id,
+                        reason: EndReason::Failed.to_u8(),
+                    },
+                    ps.session_id,
+                )
+                .await;
+            return;
+        }
+        // Expired ring → dead on arrival.
+        if expires_unix != 0 && expires_unix < now_ms() as u64 {
+            return;
+        }
+        // Re-ring throttle: same peer re-ringing inside CALL_RING_MIN_GAP.
+        {
+            let mut sh = self.sh();
+            if let Some(t) = sh.call_last_ring.get(&peer) {
+                if t.elapsed() < caps.ring_min_gap {
+                    return;
+                }
+            }
+            sh.call_last_ring.insert(peer, Instant::now());
+        }
+        // Busy: one live call — busy answer must not disturb it (CA4).
+        if self.live_calls().len() >= caps.max_active {
+            let _ = self
+                .send_call_ctrl(
+                    peer,
+                    &AppMsg::CallEnd {
+                        call_id,
+                        reason: EndReason::Busy.to_u8(),
+                    },
+                    ps.session_id,
+                )
+                .await;
+            return;
+        }
+        let c = Call {
+            id: call_id,
+            peer,
+            dir: CallDir::In,
+            state: CallState::Ringing,
+            local_sid: ps.session_id,
+            cap,
+            since_ms: now_ms(),
+            ring_deadline: Instant::now() + caps.ring_timeout,
+            deliver_deadline: None,
+            max_deadline: Instant::now() + caps.max_duration,
+            rt: None,
+        };
+        self.sh().calls.insert(call_id, c.clone());
+        self.emit_call_incoming(&c);
+        let _ = self
+            .send_call_ctrl(peer, &AppMsg::CallRinging { call_id }, ps.session_id)
+            .await;
+        self.emit_call_state(&c, None);
+    }
+
+    async fn on_call_ringing(&self, peer: PeerId, call_id: [u8; 16]) {
+        let mut sh = self.sh();
+        let Some(c) = sh.calls.get_mut(&call_id) else {
+            return;
+        };
+        if c.peer != peer || c.dir != CallDir::Out || !matches!(c.state, CallState::Outgoing) {
+            return;
+        }
+        c.state = CallState::Ringing;
+        c.deliver_deadline = None;
+        let c = c.clone();
+        drop(sh);
+        self.emit_call_state(&c, None);
+    }
+
+    async fn on_call_accept(self: &Arc<Self>, peer: PeerId, call_id: [u8; 16], cap: u8) {
+        let (c, sid) = {
+            let mut sh = self.sh();
+            let Some(c) = sh.calls.get_mut(&call_id) else {
+                return;
+            };
+            if c.peer != peer
+                || c.dir != CallDir::Out
+                || !matches!(c.state, CallState::Outgoing | CallState::Ringing)
+            {
+                return;
+            }
+            c.state = CallState::Active;
+            c.cap &= cap;
+            (c.clone(), c.local_sid)
+        };
+        self.start_media(call_id, peer, sid);
+        self.emit_call_state(&c, None);
+    }
+
+    async fn on_call_end(&self, peer: PeerId, call_id: [u8; 16], reason: u8) {
+        let known = {
+            let sh = self.sh();
+            sh.calls
+                .get(&call_id)
+                .map(|c| c.peer == peer)
+                .unwrap_or(false)
+        };
+        if !known {
+            return;
+        }
+        self.end_call(
+            &call_id,
+            EndReason::from_u8(reason).unwrap_or(EndReason::Failed),
+            false,
+        )
+        .await;
+    }
+
+    async fn on_call_frame(&self, peer: PeerId, call_id: [u8; 16], seq: u16, payload: Vec<u8>) {
+        if payload.len() > call::MAX_OPUS_PACKET {
+            return;
+        }
+        let rt = {
+            let sh = self.sh();
+            sh.calls
+                .get(&call_id)
+                .filter(|c| c.peer == peer && c.state == CallState::Active)
+                .and_then(|c| c.rt.clone())
+        };
+        let Some(rt) = rt else { return };
+        rt.rx_frame(seq, payload);
     }
 
     // ----- file/image transfer engine (docs/plans/files-images.md) ----------
@@ -4080,6 +5014,33 @@ impl Core {
             AppMsg::FileDecline { file_id } => {
                 self.on_file_decline(peer, file_id).await;
             }
+            // ---- Phase A call signalling ----
+            AppMsg::CallRing {
+                call_id,
+                media,
+                cap,
+                expires_unix,
+            } => {
+                self.on_call_ring(peer, call_id, media, cap, expires_unix)
+                    .await;
+            }
+            AppMsg::CallRinging { call_id } => {
+                self.on_call_ringing(peer, call_id).await;
+            }
+            AppMsg::CallAccept { call_id, cap } => {
+                self.on_call_accept(peer, call_id, cap).await;
+            }
+            AppMsg::CallEnd { call_id, reason } => {
+                self.on_call_end(peer, call_id, reason).await;
+            }
+            AppMsg::CallFrame {
+                call_id,
+                seq,
+                payload,
+                ..
+            } => {
+                self.on_call_frame(peer, call_id, seq, payload).await;
+            }
         }
     }
 
@@ -4551,6 +5512,21 @@ fn ui_event(kind: &str, p: &Value) -> Option<tb::Event> {
             contact_id: p["contact_id"].as_str()?.to_string(),
             sas: p["sas_hint"]["emoji"].as_str().unwrap_or("").to_string(),
         }),
+        "call.incoming" => Some(tb::Event::CallIncoming {
+            call_id: p["call_id"].as_str()?.to_string(),
+            contact_id: p["contact_id"].as_str()?.to_string(),
+            peer_id: p["peer_id"].as_str()?.to_string(),
+            chat_id: p["chat_id"].as_str()?.to_string(),
+            media: p["media"].as_str().unwrap_or("audio").to_string(),
+        }),
+        "call.state" => Some(tb::Event::CallState {
+            call_id: p["call_id"].as_str()?.to_string(),
+            chat_id: p["chat_id"].as_str()?.to_string(),
+            state: p["state"].as_str()?.to_string(),
+            dir: p["dir"].as_str().unwrap_or("").to_string(),
+            reason: p["reason"].as_str().map(String::from),
+            quality: p["quality"].as_str().map(String::from),
+        }),
         _ => None,
     }
 }
@@ -4981,6 +5957,10 @@ impl CinderCore for Core {
             }
         }
         self.set_meta(&peer, |m| m.state = MetaState::Active);
+        // The link-up subscribe only covered contacts active at that
+        // moment; a freshly accepted peer must be added so offline flips
+        // (mailbox-vs-live routing, call availability) are observed.
+        let _ = self.presence_subscribe().await;
         let verified = self.contact_verified(&peer).await;
         let _ = self
             .sblk(move |s| s.upsert_chat(&chat_str(&peer), peer.as_bytes(), None, verified))
@@ -5801,6 +6781,289 @@ impl CinderCore for Core {
         self.begin_shutdown();
         Ok(())
     }
+
+    // ---------- Phase A voice calls ----------
+
+    async fn call_ring(&self, p: CallRingParams) -> Result<Value, RpcError> {
+        let peer = self.resolve_to(&p.to)?;
+        if let Some(m) = &p.media {
+            if m != "audio" {
+                return Err(RpcError::new(
+                    ErrorKind::InvalidParams,
+                    "media must be \"audio\" (the only Phase A kind)",
+                ));
+            }
+        }
+        let caps = self.call_caps();
+        // Contact + trust gates mirror msg.send.
+        self.check_send_allowed(&peer).await?;
+        if self.meta_state(&peer) != Some(MetaState::Active) {
+            return Err(RpcError::new(
+                ErrorKind::PeerOffline,
+                "contact is not connected",
+            ));
+        }
+        // CALL_MAX_ACTIVE = 1: any live call blocks a second outbound ring.
+        if self.live_calls().len() >= caps.max_active {
+            return Err(RpcError::new(
+                ErrorKind::Conflict,
+                "a call is already in progress (CALL_MAX_ACTIVE=1)",
+            ));
+        }
+        // Live path only — calls never queue or mailbox-deposit (CA18).
+        let Some(ps) = self.call_live_path(&peer) else {
+            return Err(RpcError::new(
+                ErrorKind::PeerOffline,
+                "no live session with peer (calls cannot be deposited)",
+            ));
+        };
+        // Per-peer re-ring throttle.
+        {
+            let sh = self.sh();
+            if let Some(t) = sh.call_last_ring.get(&peer) {
+                if t.elapsed() < caps.ring_min_gap {
+                    return Err(RpcError::new(
+                        ErrorKind::RateLimited,
+                        format!(
+                            "re-ring to this peer within {}s",
+                            caps.ring_min_gap.as_secs()
+                        ),
+                    ));
+                }
+            }
+        }
+        let call_id = *HsId::random().as_bytes();
+        let expires_unix = (now_ms() + caps.ring_timeout.as_millis() as i64) as u64;
+        let sent = self
+            .send_call_ctrl(
+                peer,
+                &AppMsg::CallRing {
+                    call_id,
+                    media: call::MEDIA_AUDIO,
+                    cap: call::CAP_AUDIO_OPUS48K,
+                    expires_unix,
+                },
+                ps.session_id,
+            )
+            .await;
+        if !sent {
+            return Err(RpcError::new(
+                ErrorKind::PeerOffline,
+                "ring could not be delivered on the live session",
+            ));
+        }
+        let c = Call {
+            id: call_id,
+            peer,
+            dir: CallDir::Out,
+            state: CallState::Outgoing,
+            local_sid: ps.session_id,
+            cap: call::CAP_AUDIO_OPUS48K,
+            since_ms: now_ms(),
+            ring_deadline: Instant::now() + caps.ring_timeout,
+            deliver_deadline: Some(Instant::now() + caps.deliver_timeout),
+            max_deadline: Instant::now() + caps.max_duration,
+            rt: None,
+        };
+        {
+            let mut sh = self.sh();
+            sh.calls.insert(call_id, c.clone());
+            sh.call_last_ring.insert(peer, Instant::now());
+        }
+        self.emit_call_state(&c, None);
+        Ok(json!({
+            "call_id": Self::call_id_str(&call_id),
+            "chat_id": chat_str(&peer),
+            "state": "outgoing",
+            "media": "audio",
+        }))
+    }
+
+    async fn call_accept(&self, p: CallIdParams) -> Result<Value, RpcError> {
+        let (call, sid) = {
+            let mut sh = self.sh();
+            let target = self.pick_call_locked(&mut sh, &p.call_id, |c| {
+                c.dir == CallDir::In && c.state == CallState::Ringing
+            })?;
+            target.state = CallState::Active;
+            (target.clone(), target.local_sid)
+        };
+        let negotiated = call.cap & call::CAP_AUDIO_OPUS48K;
+        let sent = self
+            .send_call_ctrl(
+                call.peer,
+                &AppMsg::CallAccept {
+                    call_id: call.id,
+                    cap: negotiated,
+                },
+                sid,
+            )
+            .await;
+        if !sent {
+            let mut sh = self.sh();
+            if let Some(c) = sh.calls.get_mut(&call.id) {
+                c.state = CallState::Ringing;
+            }
+            return Err(RpcError::new(
+                ErrorKind::PeerOffline,
+                "session dropped before accept could be sent",
+            ));
+        }
+        self.arc().start_media(call.id, call.peer, sid);
+        self.emit_call_state(&call, None);
+        Ok(json!({
+            "call_id": Self::call_id_str(&call.id),
+            "state": "active",
+            "media": "audio",
+        }))
+    }
+
+    async fn call_decline(&self, p: CallIdParams) -> Result<Value, RpcError> {
+        let call = {
+            let mut sh = self.sh();
+            let c = self.pick_call_locked(&mut sh, &p.call_id, |c| {
+                c.dir == CallDir::In && c.state == CallState::Ringing
+            })?;
+            c.state = CallState::Ended;
+            c.clone()
+        };
+        let _ = self
+            .send_call_ctrl(
+                call.peer,
+                &AppMsg::CallEnd {
+                    call_id: call.id,
+                    reason: EndReason::Decline.to_u8(),
+                },
+                call.local_sid,
+            )
+            .await;
+        self.emit_call_state(&call, Some(EndReason::Decline));
+        Ok(json!({
+            "call_id": Self::call_id_str(&call.id),
+            "state": "ended",
+            "reason": "decline",
+        }))
+    }
+
+    async fn call_hangup(&self, p: CallIdParams) -> Result<Value, RpcError> {
+        let call = {
+            let mut sh = self.sh();
+            let c = self.pick_call_locked(&mut sh, &p.call_id, |c| c.state != CallState::Ended)?;
+            c.state = CallState::Ended;
+            c.clone()
+        };
+        if let Some(rt) = &call.rt {
+            rt.stop.store(true, std::sync::atomic::Ordering::Relaxed);
+        }
+        let _ = self
+            .send_call_ctrl(
+                call.peer,
+                &AppMsg::CallEnd {
+                    call_id: call.id,
+                    reason: EndReason::Hangup.to_u8(),
+                },
+                call.local_sid,
+            )
+            .await;
+        self.emit_call_state(&call, Some(EndReason::Hangup));
+        Ok(json!({
+            "call_id": Self::call_id_str(&call.id),
+            "state": "ended",
+            "reason": "hangup",
+        }))
+    }
+
+    async fn call_info(&self, p: CallIdParams) -> Result<Value, RpcError> {
+        let call = {
+            let sh = self.sh();
+            match &p.call_id {
+                Some(s) => {
+                    let id = Self::call_id_raw(s).ok_or_else(|| {
+                        RpcError::new(ErrorKind::InvalidParams, "malformed call_id")
+                    })?;
+                    sh.calls
+                        .get(&id)
+                        .cloned()
+                        .ok_or_else(|| RpcError::new(ErrorKind::NotFound, "call_id not found"))?
+                }
+                None => sh
+                    .calls
+                    .values()
+                    .filter(|c| c.state != CallState::Ended)
+                    .max_by_key(|c| c.since_ms)
+                    .or_else(|| sh.calls.values().max_by_key(|c| c.since_ms))
+                    .cloned()
+                    .ok_or_else(|| RpcError::new(ErrorKind::NotFound, "no call exists"))?,
+            }
+        };
+        let mut v = json!({
+            "call_id": Self::call_id_str(&call.id),
+            "state": call.state.as_str(),
+            "dir": call.dir.as_str(),
+            "peer_id": peer_str(&call.peer),
+            "contact_id": contact_str(&call.peer),
+            "chat_id": chat_str(&call.peer),
+            "media": "audio",
+            "since_ts": rfc3339(call.since_ms),
+        });
+        if let Some(rt) = &call.rt {
+            use std::sync::atomic::Ordering::Relaxed;
+            rt.sync_drops();
+            v["stats"] = json!({
+                "tx_frames": rt.tx_frames.load(Relaxed),
+                "rx_frames": rt.rx_frames.load(Relaxed),
+                "plc": rt.plc.load(Relaxed),
+                "drops_out": rt.drops_out.load(Relaxed),
+                "drops_late": rt.drops_late.load(Relaxed),
+            });
+            v["muted"] = Value::Bool(rt.muted.load(Relaxed));
+            v["quality"] = Value::String(
+                rt.quality
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .as_str()
+                    .into(),
+            );
+        }
+        Ok(v)
+    }
+
+    /// §7: mute is a LOCAL mic gate — no AppMsg goes on the wire (CA16).
+    async fn call_mute(&self, p: CallMuteParams) -> Result<Value, RpcError> {
+        let call = {
+            let sh = self.sh();
+            match &p.call_id {
+                Some(s) => {
+                    let id = Self::call_id_raw(s).ok_or_else(|| {
+                        RpcError::new(ErrorKind::InvalidParams, "malformed call_id")
+                    })?;
+                    sh.calls
+                        .get(&id)
+                        .cloned()
+                        .ok_or_else(|| RpcError::new(ErrorKind::NotFound, "call_id not found"))?
+                }
+                None => sh
+                    .calls
+                    .values()
+                    .find(|c| c.state == CallState::Active)
+                    .cloned()
+                    .ok_or_else(|| RpcError::new(ErrorKind::NotFound, "no active call"))?,
+            }
+        };
+        let Some(rt) = &call.rt else {
+            return Err(RpcError::new(
+                ErrorKind::Conflict,
+                "call has no media runtime (not active)",
+            ));
+        };
+        let muted = p.muted.unwrap_or(true);
+        rt.muted.store(muted, std::sync::atomic::Ordering::Relaxed);
+        Ok(json!({
+            "call_id": Self::call_id_str(&call.id),
+            "muted": muted,
+            "note": "local mic gate only; no wire signal is emitted",
+        }))
+    }
 }
 
 impl Core {
@@ -6184,6 +7447,116 @@ impl tb::Backend for TuiBackend {
             .get(&peer)
             .and_then(|m| m.sas_emoji.clone().or(m.sas_digits.clone()))
             .unwrap_or_default())
+    }
+
+    async fn call_ring(&mut self, to: &str) -> Result<String> {
+        let v = CinderCore::call_ring(
+            self.core.as_ref(),
+            CallRingParams {
+                to: to.to_string(),
+                media: Some("audio".into()),
+                client_call_id: None,
+            },
+        )
+        .await
+        .map_err(|e| {
+            anyhow!(
+                "{}: {}",
+                e.kind.as_str(),
+                e.hint.as_deref().unwrap_or(&e.message)
+            )
+        })?;
+        Ok(v["call_id"].as_str().unwrap_or("").to_string())
+    }
+
+    async fn call_accept(&mut self, call_id: Option<&str>) -> Result<()> {
+        CinderCore::call_accept(
+            self.core.as_ref(),
+            CallIdParams {
+                call_id: call_id.map(String::from),
+            },
+        )
+        .await
+        .map_err(|e| {
+            anyhow!(
+                "{}: {}",
+                e.kind.as_str(),
+                e.hint.as_deref().unwrap_or(&e.message)
+            )
+        })?;
+        Ok(())
+    }
+
+    async fn call_decline(&mut self, call_id: Option<&str>) -> Result<()> {
+        CinderCore::call_decline(
+            self.core.as_ref(),
+            CallIdParams {
+                call_id: call_id.map(String::from),
+            },
+        )
+        .await
+        .map_err(|e| {
+            anyhow!(
+                "{}: {}",
+                e.kind.as_str(),
+                e.hint.as_deref().unwrap_or(&e.message)
+            )
+        })?;
+        Ok(())
+    }
+
+    async fn call_hangup(&mut self, call_id: Option<&str>) -> Result<()> {
+        CinderCore::call_hangup(
+            self.core.as_ref(),
+            CallIdParams {
+                call_id: call_id.map(String::from),
+            },
+        )
+        .await
+        .map_err(|e| {
+            anyhow!(
+                "{}: {}",
+                e.kind.as_str(),
+                e.hint.as_deref().unwrap_or(&e.message)
+            )
+        })?;
+        Ok(())
+    }
+
+    async fn call_mute(&mut self, muted: bool) -> Result<()> {
+        CinderCore::call_mute(
+            self.core.as_ref(),
+            CallMuteParams {
+                call_id: None,
+                muted: Some(muted),
+            },
+        )
+        .await
+        .map_err(|e| {
+            anyhow!(
+                "{}: {}",
+                e.kind.as_str(),
+                e.hint.as_deref().unwrap_or(&e.message)
+            )
+        })?;
+        Ok(())
+    }
+
+    async fn call_info(&mut self) -> Result<Option<String>> {
+        match CinderCore::call_info(self.core.as_ref(), CallIdParams { call_id: None }).await {
+            Ok(v) => Ok(Some(format!(
+                "{} ({}, {})",
+                v["call_id"].as_str().unwrap_or(""),
+                v["state"].as_str().unwrap_or(""),
+                v["dir"].as_str().unwrap_or("")
+            ))),
+            Err(e) if e.kind == ErrorKind::NotFound => Ok(None),
+            Err(e) => Err(anyhow!(
+                "{}: {}",
+                e.kind.as_str(),
+                e.hint.as_deref().unwrap_or(&e.message)
+            )),
+        }
     }
 
     fn subscribe(&mut self) -> mpsc::Receiver<tb::Event> {

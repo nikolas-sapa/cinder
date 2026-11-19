@@ -70,6 +70,11 @@ Typed at the start of the input bar (`cinder/src/tui/app.rs:parse_command`).
 | `/cancel <file:…>` | Cancel an active or offered transfer, either direction | verified |
 | `/save [dir]` | Save the selected/completed received file to `dir` (default: downloads dir); untrusted names are sanitized to a basename | verified |
 | `/files` | List transfers in the active chat with state and progress | verified |
+| `/call`, `/dial` | Ring the active chat's contact for an encrypted voice call (one call per account) | verified |
+| `/answer [call:…]`, `/pickup` | Answer the inbound ringing call (`call:` id optional when exactly one rings) | verified |
+| `/hangup [call:…]`, `/endcall` | Hang up / cancel / abort the current call | verified |
+| `/mute [off\|0]` | Local mic gate on the active call — sends **nothing** on the wire; `off`/`0` un-mutes | verified |
+| `/unmute` | Un-mute the local mic | verified |
 | `/quit`, `/q` | Exit cinder | verified |
 | _(anything else)_ | `unknown command <x> (/help)` on the status line | verified |
 

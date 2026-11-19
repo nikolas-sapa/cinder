@@ -941,6 +941,90 @@ async fn file_thumb(eng: &Engine, params: Option<Value>) -> Result<Value, RpcErr
     eng.core().file_thumb(p).await
 }
 
+// ---------- Phase A voice calls (docs/plans/voice-video-calls.md §5) ----------
+
+async fn call_ring(eng: &Engine, params: Option<Value>) -> Result<Value, RpcError> {
+    let p: CallRingParams = parse_params(params)?;
+    check_prefix(&p.to, &["contact:", "chat:", "peer:"], "to")?;
+    if let Some(m) = &p.media {
+        if m != "audio" {
+            return Err(RpcError::invalid_params(
+                "media must be \"audio\" (the only Phase A kind)",
+            ));
+        }
+    }
+    // `client_call_id` dedup mirrors msg.send: same key+payload replays the
+    // stored result; same key different payload → -32018.
+    if let Some(cid) = p.client_call_id.clone() {
+        if cid.is_empty() {
+            return Err(RpcError::invalid_params("client_call_id must be non-empty"));
+        }
+        let fingerprint = json!({"m": "call.ring", "to": p.to, "media": p.media}).to_string();
+        match eng.dedup_lookup(&cid, &fingerprint) {
+            DedupHit::Replay(mut result) => {
+                result
+                    .as_object_mut()
+                    .map(|o| o.insert("deduped".into(), json!(true)));
+                return Ok(result);
+            }
+            DedupHit::Conflict => {
+                return Err(RpcError::new(
+                    ErrorKind::Conflict,
+                    "client_call_id reused with a different payload; use a new key per logical ring",
+                ));
+            }
+            DedupHit::Miss => {}
+        }
+        let mut result = eng.core().call_ring(p).await?;
+        result
+            .as_object_mut()
+            .map(|o| o.insert("deduped".into(), json!(false)));
+        eng.dedup_insert(cid, fingerprint, result.clone());
+        return Ok(result);
+    }
+    eng.core().call_ring(p).await
+}
+
+async fn call_accept(eng: &Engine, params: Option<Value>) -> Result<Value, RpcError> {
+    let p: CallIdParams = parse_params(params)?;
+    if let Some(id) = &p.call_id {
+        check_prefix(id, &["call:"], "call_id")?;
+    }
+    eng.core().call_accept(p).await
+}
+
+async fn call_decline(eng: &Engine, params: Option<Value>) -> Result<Value, RpcError> {
+    let p: CallIdParams = parse_params(params)?;
+    if let Some(id) = &p.call_id {
+        check_prefix(id, &["call:"], "call_id")?;
+    }
+    eng.core().call_decline(p).await
+}
+
+async fn call_hangup(eng: &Engine, params: Option<Value>) -> Result<Value, RpcError> {
+    let p: CallIdParams = parse_params(params)?;
+    if let Some(id) = &p.call_id {
+        check_prefix(id, &["call:"], "call_id")?;
+    }
+    eng.core().call_hangup(p).await
+}
+
+async fn call_info(eng: &Engine, params: Option<Value>) -> Result<Value, RpcError> {
+    let p: CallIdParams = parse_params(params)?;
+    if let Some(id) = &p.call_id {
+        check_prefix(id, &["call:"], "call_id")?;
+    }
+    eng.core().call_info(p).await
+}
+
+async fn call_mute(eng: &Engine, params: Option<Value>) -> Result<Value, RpcError> {
+    let p: CallMuteParams = parse_params(params)?;
+    if let Some(id) = &p.call_id {
+        check_prefix(id, &["call:"], "call_id")?;
+    }
+    eng.core().call_mute(p).await
+}
+
 pub async fn dispatch_method(
     eng: &Arc<Engine>,
     sess: &mut Session,
@@ -972,6 +1056,12 @@ pub async fn dispatch_method(
         "file.list" => file_list(eng, params).await,
         "file.save" => file_save(eng, params).await,
         "file.thumb" => file_thumb(eng, params).await,
+        "call.ring" => call_ring(eng, params).await,
+        "call.accept" => call_accept(eng, params).await,
+        "call.decline" => call_decline(eng, params).await,
+        "call.hangup" => call_hangup(eng, params).await,
+        "call.info" => call_info(eng, params).await,
+        "call.mute" => call_mute(eng, params).await,
         "events.subscribe" => events_subscribe(eng, sess, params).await,
         "events.unsubscribe" => events_unsubscribe(eng, sess, params),
         "shutdown.request" => shutdown_request(eng, sess, params).await,

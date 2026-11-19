@@ -123,6 +123,23 @@ pub enum Event {
         bytes_total: u64,
         reason: Option<String>,
     },
+    /// Phase A: an inbound ring that passed validation (§3).
+    CallIncoming {
+        call_id: String,
+        contact_id: String,
+        peer_id: String,
+        chat_id: String,
+        media: String,
+    },
+    /// Phase A: state transitions (outgoing/ringing/active/ended).
+    CallState {
+        call_id: String,
+        chat_id: String,
+        state: String,
+        dir: String,
+        reason: Option<String>,
+        quality: Option<String>,
+    },
     ConnChanged(ConnState),
 }
 
@@ -153,6 +170,16 @@ pub trait Backend {
     async fn add_contact(&mut self, uri: &str) -> Result<String>;
     async fn verify_contact(&mut self, contact_id: &str, sas: &str) -> Result<()>;
     async fn sas_hint(&mut self, contact_id: &str) -> Result<String>;
+    /// Phase A: `call.ring` — returns the new `call:` id.
+    async fn call_ring(&mut self, to: &str) -> Result<String>;
+    /// Phase A: answer/decline/hangup the live (or given) call.
+    async fn call_accept(&mut self, call_id: Option<&str>) -> Result<()>;
+    async fn call_decline(&mut self, call_id: Option<&str>) -> Result<()>;
+    async fn call_hangup(&mut self, call_id: Option<&str>) -> Result<()>;
+    /// Phase A: local mic gate — no wire signal (§7).
+    async fn call_mute(&mut self, muted: bool) -> Result<()>;
+    /// Phase A: `{state, muted}` for the live call, if any.
+    async fn call_info(&mut self) -> Result<Option<String>>;
     fn subscribe(&mut self) -> mpsc::Receiver<Event>;
 }
 

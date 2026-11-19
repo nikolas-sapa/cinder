@@ -4,6 +4,8 @@
 //! the relay never sees plaintext, and a full `cinder rpc` subprocess
 //! round-trip.
 
+#[path = "../src/call.rs"]
+mod call;
 #[path = "../src/core.rs"]
 mod core;
 #[path = "../src/rpc/mod.rs"]

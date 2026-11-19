@@ -65,6 +65,15 @@ impl EngineConfig {
             "file_max_inflight": 16,
             "file_inline_max_bytes": 1024 * 1024,
             "file_voice_max_ms": 300_000,
+            // Mirror of call::CallCaps::default() (call.rs) — literal so the
+            // rpc tree still compiles in #[path] test includes.
+            "call_ring_timeout_s": 60,
+            "call_max_active": 1,
+            "call_deliver_timeout_s": 10,
+            "call_media_dead_s": 10,
+            "call_frame_queue": 64,
+            "call_jitter_ms_target": 120,
+            "call_jitter_ms_max": 240,
         })
     }
 }

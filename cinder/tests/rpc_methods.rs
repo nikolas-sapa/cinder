@@ -29,6 +29,12 @@ const ALL_METHODS: &[&str] = &[
     "file.list",
     "file.save",
     "file.thumb",
+    "call.ring",
+    "call.accept",
+    "call.decline",
+    "call.hangup",
+    "call.info",
+    "call.mute",
     "events.subscribe",
     "events.unsubscribe",
     "shutdown.request",
@@ -255,6 +261,103 @@ async fn p1_all_methods_happy_path() {
     .await;
     assert_eq!(r["closed"], true);
 
+    // Phase A call surface — MockCore records the method + returns the
+    // canned outgoing state; the wire behavior lives in call.rs/e2e_call.rs.
+    let r = call(
+        &mut h,
+        20,
+        "call.ring",
+        json!({"to": CONTACT, "client_call_id": "p1-ring"}),
+    )
+    .await;
+    required_fields(&r, &["call_id", "chat_id", "state", "deduped"], "call.ring");
+    assert_eq!(r["state"], "outgoing");
+    assert_eq!(r["deduped"], false);
+    assert!(r["call_id"].as_str().unwrap().starts_with("call:"));
+
+    // Same client_call_id + same payload replays the stored result.
+    let r2 = call(
+        &mut h,
+        21,
+        "call.ring",
+        json!({"to": CONTACT, "client_call_id": "p1-ring"}),
+    )
+    .await;
+    assert_eq!(r2["deduped"], true);
+    assert_eq!(r2["call_id"], r["call_id"]);
+
+    // Same key, different payload → -32018 conflict.
+    let e = call_err(
+        &mut h,
+        22,
+        "call.ring",
+        json!({"to": "contact:beef99", "client_call_id": "p1-ring"}),
+    )
+    .await;
+    assert_eq!(e["code"], -32018);
+
+    let r = call(
+        &mut h,
+        23,
+        "call.accept",
+        json!({"call_id": "call:aaaaaaaaaaaaaaaaaaaaaaaaaa"}),
+    )
+    .await;
+    required_fields(&r, &["call_id", "state"], "call.accept");
+    assert_eq!(r["state"], "active");
+
+    let r = call(
+        &mut h,
+        24,
+        "call.info",
+        json!({"call_id": "call:aaaaaaaaaaaaaaaaaaaaaaaaaa"}),
+    )
+    .await;
+    required_fields(
+        &r,
+        &[
+            "call_id",
+            "state",
+            "dir",
+            "peer_id",
+            "contact_id",
+            "chat_id",
+            "media",
+            "since_ts",
+        ],
+        "call.info",
+    );
+
+    let r = call(
+        &mut h,
+        25,
+        "call.mute",
+        json!({"call_id": "call:aaaaaaaaaaaaaaaaaaaaaaaaaa", "muted": true}),
+    )
+    .await;
+    required_fields(&r, &["call_id", "muted"], "call.mute");
+    assert_eq!(r["muted"], true);
+
+    let r = call(
+        &mut h,
+        26,
+        "call.hangup",
+        json!({"call_id": "call:aaaaaaaaaaaaaaaaaaaaaaaaaa"}),
+    )
+    .await;
+    required_fields(&r, &["call_id", "state"], "call.hangup");
+    assert_eq!(r["state"], "ended");
+
+    let r = call(
+        &mut h,
+        27,
+        "call.decline",
+        json!({"call_id": "call:aaaaaaaaaaaaaaaaaaaaaaaaaa"}),
+    )
+    .await;
+    assert_eq!(r["state"], "ended");
+    assert_eq!(r["reason"], "decline");
+
     let r = call(&mut h, 18, "shutdown.request", json!({"grace_ms": 100})).await;
     assert_eq!(r["shutting_down"], true);
     assert_eq!(r["grace_ms"], 100);
@@ -267,8 +370,8 @@ async fn dispatch_covers_describe_table() {
     hello(&mut h).await;
     let d = call(&mut h, 2, "rpc.describe", json!({})).await;
     let described: Vec<String> = d["methods"].as_object().unwrap().keys().cloned().collect();
-    assert_eq!(described.len(), 27, "rpc.describe must describe 27 methods");
-    assert_eq!(METHODS.len(), 27);
+    assert_eq!(described.len(), 33, "rpc.describe must describe 33 methods");
+    assert_eq!(METHODS.len(), 33);
     for m in METHODS.iter() {
         assert!(
             described.contains(&m.name.to_string()),
@@ -282,7 +385,7 @@ async fn dispatch_covers_describe_table() {
             "METHODS table missing {name}"
         );
     }
-    assert_eq!(EVENTS.len(), 10);
+    assert_eq!(EVENTS.len(), 12);
 }
 
 // P2 — rpc.describe answers pre-auth and covers the whole surface.
@@ -312,6 +415,8 @@ async fn p2_describe_preauth() {
         "security.verification_needed",
         "session.backlog",
         "file_state",
+        "call.incoming",
+        "call.state",
         "event.gap",
     ] {
         assert!(events.contains_key(name), "describe missing event {name}");

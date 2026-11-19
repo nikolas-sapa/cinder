@@ -1,5 +1,6 @@
 #![deny(unsafe_code)]
 
+mod call;
 mod core;
 #[allow(unsafe_code)]
 mod hardening;

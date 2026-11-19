@@ -134,6 +134,29 @@ pub struct FileSaveParams {
     pub name: Option<String>,
 }
 
+// ---------- Phase A voice calls (docs/plans/voice-video-calls.md §5) ----------
+
+#[derive(Debug, Deserialize)]
+pub struct CallRingParams {
+    /// `contact:`/`peer:`/`chat:` id of the callee.
+    pub to: String,
+    /// Only "audio" exists in Phase A.
+    pub media: Option<String>,
+    /// Client-side idempotency key for the outbound ring.
+    pub client_call_id: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct CallIdParams {
+    pub call_id: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct CallMuteParams {
+    pub call_id: Option<String>,
+    pub muted: Option<bool>,
+}
+
 /// Domain seam to the messenger core. One async call per RPC method; the
 /// engine owns session.hello / rpc.describe / events.* / shutdown.request
 /// but consults the core for identity, backlog counters, and shutdown.
@@ -181,6 +204,19 @@ pub trait CinderCore: Send + Sync {
     /// decode under the same size guards as `xfer::make_thumb`.
     async fn file_thumb(&self, params: FileIdParams) -> Result<Value, RpcError>;
 
+    // ---------- Phase A voice calls ----------
+    /// `{call_id, chat_id, state}` on acceptance. Call signalling rides the
+    /// live Noise session only — never queued, never mailbox-deposited.
+    async fn call_ring(&self, params: CallRingParams) -> Result<Value, RpcError>;
+    async fn call_accept(&self, params: CallIdParams) -> Result<Value, RpcError>;
+    async fn call_decline(&self, params: CallIdParams) -> Result<Value, RpcError>;
+    async fn call_hangup(&self, params: CallIdParams) -> Result<Value, RpcError>;
+    /// The live (or queried) call row: `{call_id, state, dir, peer_id,
+    /// contact_id, chat_id, media, since_ts, quality, muted, stats}`.
+    async fn call_info(&self, params: CallIdParams) -> Result<Value, RpcError>;
+    /// Local-only mic gate — emits no wire message (§7).
+    async fn call_mute(&self, params: CallMuteParams) -> Result<Value, RpcError>;
+
     /// `{unread_chats, pending_contact_requests, queued_outbound}` for the
     /// session.backlog summary.
     async fn backlog_summary(&self) -> Result<Value, RpcError>;
@@ -199,6 +235,8 @@ pub const CORE_EVENT_KINDS: &[&str] = &[
     "security.identity_changed",
     "security.verification_needed",
     "file_state",
+    "call.incoming",
+    "call.state",
 ];
 
 /// Push channel the core uses to report domain events. Emission assigns the

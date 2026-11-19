@@ -9,7 +9,9 @@
 <meta property="og:description" content="E2E-encrypted terminal messenger for humans and AI agents. Typed JSON-RPC core, Noise_XX, blind relay, no accounts.">
 <meta property="og:type" content="website">
 <link rel="icon" href="assets/favicon.svg" type="image/svg+xml">
-<link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@700&family=Inter:wght@400;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="style.css">
 <script src="main.js" defer></script>
 </head>
@@ -19,11 +21,12 @@
 <header class="nav">
   <div class="wrap nav-in">
     <a class="wordmark" href="#top" aria-label="cinder home">
-      <svg class="mark" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4.2" fill="var(--accent)"/><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-opacity=".35" stroke-width="1.4" stroke-dasharray="4 3.4"/></svg>
+      <svg class="mark" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4.2" fill="var(--ember)"/><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-opacity=".35" stroke-width="1.4" stroke-dasharray="4 3.4"/></svg>
       cinder
     </a>
     <nav class="nav-links" aria-label="Sections">
-      <a href="#features">features</a>
+      <a href="#wire">wire</a>
+      <a href="#features">spec</a>
       <a href="#agents">agents</a>
       <a href="#security">security</a>
       <a class="nav-gh" href="https://github.com/nikolas-sapa/cinder" rel="noopener">
@@ -38,13 +41,15 @@
 
 <!-- ============ HERO ============ -->
 <section class="hero" id="top">
-  <div class="hero-glow" aria-hidden="true"></div>
   <div class="wrap">
     <p class="eyebrow mono">e2e-encrypted · terminal-native · agent-first</p>
-    <h1>encrypted chat<br>your agents can drive</h1>
-    <p class="sub">cinder is a terminal messenger where the TUI and your AI agents are
-    equal clients of one typed JSON-RPC protocol. Every message end-to-end
-    encrypted. No accounts, no servers that can read you.</p>
+    <h1>encrypted chat<br>your agents<br>can drive<span class="ember-dot">.</span></h1>
+    <div class="hero-sub">
+      <p class="sub">cinder is a terminal messenger where the TUI and your AI agents are
+      equal clients of one typed JSON-RPC protocol. Every message end-to-end
+      encrypted. No accounts, no servers that can read you.</p>
+      <p class="hero-meta mono">protocol v1 · noise_xx<br>rust · mit · ~14k loc</p>
+    </div>
 
     <div class="install mono" data-reveal>
       <span class="prompt" aria-hidden="true">$</span>
@@ -57,255 +62,345 @@
     </div>
 
     <div class="ctas" data-reveal>
-      <a class="btn btn-primary" href="#quickstart">Get started</a>
-      <a class="btn btn-ghost" href="https://github.com/nikolas-sapa/cinder" rel="noopener">
-        <svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M12 .5C5.65.5.5 5.65.5 12c0 5.08 3.29 9.39 7.86 10.91.58.11.79-.25.79-.56 0-.27-.01-1.17-.02-2.12-3.2.7-3.88-1.36-3.88-1.36-.52-1.33-1.28-1.68-1.28-1.68-1.04-.71.08-.7.08-.7 1.15.08 1.76 1.19 1.76 1.19 1.03 1.76 2.69 1.25 3.35.96.1-.75.4-1.25.72-1.54-2.55-.29-5.24-1.28-5.24-5.68 0-1.26.45-2.28 1.19-3.09-.12-.29-.52-1.46.11-3.05 0 0 .97-.31 3.17 1.18a11.04 11.04 0 0 1 5.78 0c2.2-1.49 3.17-1.18 3.17-1.18.63 1.59.23 2.76.11 3.05.74.81 1.19 1.83 1.19 3.09 0 4.41-2.7 5.38-5.27 5.66.41.36.78 1.06.78 2.14 0 1.54-.02 2.79-.02 3.17 0 .31.21.68.8.56A10.52 10.52 0 0 0 23.5 12C23.5 5.65 18.35.5 12 .5z"/></svg>
-        GitHub
-      </a>
+      <a class="btn btn-primary" href="#quickstart">get started</a>
+      <a class="btn btn-ghost" href="https://github.com/nikolas-sapa/cinder/tree/main/docs" rel="noopener">read the docs</a>
+      <p class="chips mono">
+        <span>Noise_XX_25519_ChaChaPoly_BLAKE2s</span>
+        <span>blind relay</span>
+        <span>no accounts</span>
+      </p>
     </div>
+  </div>
+</section>
 
-    <p class="chips mono" data-reveal>
-      <span>Noise_XX_25519_ChaChaPoly_BLAKE2s</span>
-      <span>blind relay</span>
-      <span>no accounts</span>
-    </p>
+<!-- ============ EMBER FIELD — stars cooling into dither ============ -->
+<div class="ember-field" aria-hidden="true" data-reveal>
+  <svg class="stars" width="1328" height="38" viewBox="0 0 1328 38" preserveAspectRatio="xMidYMid slice">
+    <circle cx="88" cy="17" r="1.1" opacity=".55"/><circle cx="196" cy="29" r=".9" opacity=".4"/><circle cx="342" cy="11" r="1.3" opacity=".7"/><circle cx="470" cy="25" r=".9" opacity=".45"/><circle cx="605" cy="15" r="1.2" opacity=".6"/><circle cx="730" cy="31" r=".9" opacity=".35"/><circle cx="858" cy="19" r="1.1" opacity=".55"/><circle cx="995" cy="9" r="1.4" opacity=".75"/><circle cx="1120" cy="27" r=".9" opacity=".45"/><circle cx="1245" cy="14" r="1.2" opacity=".6"/><circle cx="38" cy="33" r=".8" opacity=".3"/><circle cx="530" cy="33" r=".8" opacity=".3"/><circle cx="780" cy="8" r=".8" opacity=".35"/>
+    <path class="tw" d="M 270,20 l0,-2.4 M 268.8,18.8 l2.4,0" stroke-width=".9" opacity=".5"/>
+    <path class="tw" d="M 660,12 l0,-2.4 M 658.8,10.8 l2.4,0" stroke-width=".9" opacity=".45" style="animation-delay:.7s"/>
+    <path d="M 1180,34 l0,-2.4 M 1178.8,32.8 l2.4,0" stroke-width=".9" opacity=".5"/>
+    <path d="M 420,26 l0,-4 M 416,22 l8,0" stroke-width="1" opacity=".55"/>
+    <path d="M 920,14 l0,-4 M 916,10 l8,0" stroke-width="1" opacity=".6"/>
+    <path class="tw big" d="M0,-5.5 L1.4,-1.4 L5.5,0 L1.4,1.4 L0,5.5 L-1.4,1.4 L-5.5,0 L-1.4,-1.4 Z" transform="translate(1050,18)"/>
+    <path class="tw big" d="M0,-4.5 L1.1,-1.1 L4.5,0 L1.1,1.1 L0,4.5 L-1.1,1.1 L-4.5,0 L-1.1,-1.1 Z" transform="translate(300,10)" style="animation-delay:1.1s"/>
+    <path d="M0,-4 L1,-1 L4,0 L1,1 L0,4 L-1,1 L-4,0 L-1,-1 Z" transform="translate(1290,26)" opacity=".65"/>
+  </svg>
+  <div class="band b2"></div>
+  <div class="band b4"></div>
+  <div class="band b6"></div>
+  <div class="band b8"></div>
+  <div class="band b10"></div>
+  <div class="band b12"></div>
+  <div class="band b14"></div>
+  <div class="molten"></div>
+  <div class="baseline"></div>
+</div>
+
+<!-- ============ THE WIRE ============ -->
+<section class="wire" id="wire">
+  <div class="wrap">
+    <div class="sec-head">
+      <p class="kicker mono">00 — the wire</p>
+      <h2>three flights, then silence</h2>
+      <p class="sec-side mono">Noise_XX — full handshake, annotated</p>
+    </div>
+    <div class="wire-card" data-reveal>
+      <div class="trace">
+        <div class="trace-ends mono">
+          <span>YOU <em>initiator</em></span>
+          <span><em>responder</em> PEER</span>
+        </div>
+        <div class="flights">
+          <div class="flight">
+            <span class="dir mono">e →</span>
+            <div class="line"></div>
+            <span class="payload mono">e</span>
+            <span class="note">fresh ephemeral, nothing else</span>
+          </div>
+          <div class="flight">
+            <span class="dir mono">← e</span>
+            <div class="line"></div>
+            <span class="payload mono">e, ee, s, es</span>
+            <span class="note">peer's static arrives already encrypted</span>
+          </div>
+          <div class="flight">
+            <span class="dir mono">s →</span>
+            <div class="line"></div>
+            <span class="payload mono">s, se</span>
+            <span class="note">your static, encrypted — pinned to peer-id</span>
+          </div>
+        </div>
+        <div class="trace-foot mono">
+          <span class="dim">handshake_hash</span>
+          <span>7f3a…e91c</span>
+          <span class="flex-spacer"></span>
+          <span class="amber">then: transport frames only</span>
+        </div>
+      </div>
+      <aside class="sas">
+        <p class="sas-kicker mono">sas — read aloud, don't type</p>
+        <div class="sas-cells" role="img" aria-label="Seven emoji short authentication string">
+          <span class="cell">🌋</span><span class="cell">🧭</span><span class="cell">🛰️</span><span class="cell">🗝️</span><span class="cell">🎛️</span><span class="cell hot">🔥</span><span class="cell">⚓</span>
+        </div>
+        <div class="fp-row">
+          <svg class="fp" viewBox="0 0 96 96" role="img" aria-label="Peer fingerprint identicon">
+            <rect width="96" height="96" rx="6" fill="#101216" stroke="#2A2D33"/>
+            <g fill="#FFB224" opacity=".85">
+              <rect x="8" y="8" width="10" height="10"/><rect x="32" y="8" width="10" height="10"/><rect x="54" y="8" width="10" height="10"/><rect x="78" y="8" width="10" height="10"/>
+              <rect x="20" y="20" width="10" height="10"/><rect x="32" y="20" width="10" height="10"/><rect x="54" y="20" width="10" height="10"/><rect x="66" y="20" width="10" height="10"/>
+              <rect x="8" y="32" width="10" height="10"/><rect x="32" y="32" width="10" height="10"/><rect x="43" y="32" width="10" height="10"/><rect x="54" y="32" width="10" height="10"/><rect x="78" y="32" width="10" height="10"/>
+              <rect x="20" y="43" width="10" height="10"/><rect x="43" y="43" width="10" height="10"/><rect x="66" y="43" width="10" height="10"/>
+              <rect x="8" y="54" width="10" height="10"/><rect x="20" y="54" width="10" height="10"/><rect x="66" y="54" width="10" height="10"/><rect x="78" y="54" width="10" height="10"/>
+              <rect x="32" y="66" width="10" height="10"/><rect x="54" y="66" width="10" height="10"/>
+              <rect x="8" y="78" width="10" height="10"/><rect x="43" y="78" width="10" height="10"/><rect x="78" y="78" width="10" height="10"/>
+            </g>
+          </svg>
+          <div class="fp-meta">
+            <span class="mono dim">FINGERPRINT</span>
+            <span class="mono amber">9c1f…aa07</span>
+            <span class="fp-sub">same key, same glyph — anywhere</span>
+          </div>
+        </div>
+        <p class="numeric mono">numeric: 0417 · 2290 · 8861 · 1204</p>
+        <p class="sas-note">Derived from the handshake hash + both static keys, sorted — both sides
+        compute the same string. An MITM would need to make you read different emoji.</p>
+      </aside>
+    </div>
+    <div class="meter" data-reveal>
+      <span class="mono dim">LINK</span>
+      <div class="meter-bars" aria-hidden="true">
+        <i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i class="half"></i><i class="fl fl-a"></i><i class="fl fl-b"></i><i class="off"></i><i class="off"></i><i class="off"></i><i class="off"></i><i class="off"></i><i class="off"></i><i class="off"></i>
+      </div>
+      <span class="mono dim">transport · 50fps media · mailbox 3 pending</span>
+    </div>
   </div>
 </section>
 
 <!-- ============ TERMINAL DEMO ============ -->
 <section class="demo" id="demo">
   <div class="wrap">
+    <div class="sec-head">
+      <p class="kicker mono">01 — the surface</p>
+      <p class="sec-side">the same session, two ways to drive it</p>
+    </div>
     <div class="term" data-reveal>
       <div class="term-bar">
         <span class="dot"></span><span class="dot"></span><span class="dot"></span>
-        <span class="term-title mono">cinder — 96&times;28</span>
+        <span class="term-title mono">cinder — tui</span>
       </div>
-      <div class="term-body">
-        <!-- static mock rendered until demo.gif lands; img covers it when present -->
-        <div class="tui mono" aria-hidden="true">
-          <div class="tui-main">
-            <div class="tui-side">
-              <div class="tui-side-h">chats</div>
-              <div class="tui-chat-item active"><span class="peer peer-a">eidolon</span><span class="tick-v" title="verified">&#10003;</span><span class="unread">2</span></div>
-              <div class="tui-chat-item"><span class="peer peer-b">k-9</span></div>
-              <div class="tui-chat-item"><span class="peer peer-c">operator</span></div>
-              <div class="tui-side-f">alt-1..9 jump &middot; m-a next unread</div>
-            </div>
-            <div class="tui-pane">
-              <div class="tui-pane-h"><span class="peer peer-a">eidolon</span> <span class="tick-v">&#10003; verified</span></div>
-              <div class="msgs">
-                <div class="msg out"><span class="ts">15:58</span><span class="who">you</span><span class="body">rendezvous at the NEW port, 0400</span><span class="tick">&#10003;&#10003;</span></div>
-                <div class="msg in"><span class="ts">16:04</span><span class="who peer-a">eidolon</span><span class="body">copy that</span></div>
-                <div class="msg in"><span class="ts">16:07</span><span class="who peer-a">eidolon</span><span class="body">wheels up in ten</span></div>
-              </div>
-              <div class="tui-input"><span class="caret">&rsaquo;</span> /finger<span class="cursor">&#9612;</span></div>
-            </div>
-          </div>
-          <div class="tui-status">noise_xx_25519_chachapoly_blake2s &middot; sas verified &middot; relay 127.0.0.1:7000 &middot; 3 contacts</div>
+      <div class="term-body mono">
+        <div class="side">
+          <p class="side-h">CHATS</p>
+          <p class="peer active">eidolon <span class="vdot" aria-hidden="true">●</span></p>
+          <p class="peer">k-9</p>
+          <p class="peer">operator</p>
+          <p class="side-f dim">alt+1..9 · j/k · q quit<br>unread 2</p>
         </div>
-        <img class="demo-gif" src="demo.gif" alt="Screen recording of a cinder terminal session: a sidebar lists contacts, the chat pane shows an encrypted conversation with delivery ticks, and an agent drives the same session over JSON-RPC." loading="lazy" onerror="this.remove()">
-      </div>
-    </div>
-    <p class="term-cap">the same session, two ways to drive it: the TUI for you, JSON-RPC for your agent.</p>
-  </div>
-</section>
-
-<!-- ============ FEATURES ============ -->
-<section class="section" id="features">
-  <div class="wrap">
-    <p class="kicker mono" data-reveal>features</p>
-    <h2 data-reveal>one protocol, two kinds of user</h2>
-
-    <div class="card card-wide" data-reveal>
-      <div class="card-wide-in">
-        <div class="card-text">
-          <h3><svg class="fi" viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="8" width="14" height="11" rx="2.5" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M12 8V5M12 5h0" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/><circle cx="12" cy="4.6" r="1" fill="currentColor"/><circle cx="9.4" cy="12.8" r="1.15" fill="currentColor"/><circle cx="14.6" cy="12.8" r="1.15" fill="currentColor"/><path d="M9.2 16.2h5.6M8 21h.01M16 21h.01" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>agent-first JSON-RPC</h3>
-          <p>Every capability the TUI has is a method on a typed JSON-RPC 2.0 socket.
-          <code>cinder rpc</code> speaks newline-delimited frames on stdio;
-          <code>cinder daemon</code> serves the same protocol to concurrent clients
-          over a peer-cred-authenticated unix socket. Sends are idempotent —
-          retry a <code>client_msg_id</code>, get the same <code>msg_id</code> back.</p>
+        <div class="pane">
+          <p class="pane-h"><span class="amber">eidolon</span> <span class="dim">· verified</span><span class="pane-time dim">13:12</span></p>
+          <p class="msg"><span class="dim">13:04</span>  <span class="amber">eidolon</span>  copy that</p>
+          <p class="msg"><span class="dim">13:04</span>  <span class="amber">eidolon</span>  wheels up in ten</p>
+          <p class="msg agent"><span class="dim">13:07</span>  <span class="amber">agent</span>   msg.send → id:ccfd7c · deduped:false</p>
+          <p class="msg dim"><span class="dim">13:12</span>  — sas verified · 7-emoji match · session pinned —</p>
+          <p class="msg out-msg"><span class="dim">13:13</span>  <span class="you">you</span> rendezvous at the NEM port, 0400</p>
+          <p class="prompt-line"><span class="prompt">&gt;</span> /finger <span class="caret" aria-hidden="true"></span></p>
         </div>
-        <div class="code-card mono" aria-label="Example msg.send request and response">
-<pre><span class="j-dir">&rarr;</span> {"jsonrpc":"2.0","id":10,"method":"msg.send",
-   "params":{"to":"contact:9f3b12",
-             "body":"rendezvous at the old port, 0400",
-             "client_msg_id":"agent-2026-11-18-0001"}}
-<span class="j-dir">&larr;</span> {"jsonrpc":"2.0","id":10,"result":{
-   "msg_id":"msg:e01d7c","chat_id":"chat:77aa01",
-   "state":"queued","deduped":false}}</pre>
-        </div>
-      </div>
-    </div>
-
-    <div class="grid">
-      <div class="card" data-reveal>
-        <h3><svg class="fi" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9v6M8 6v12M12 4v16M16 7v10M20 10v4" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>real noise, no ceremony</h3>
-        <p><code>Noise_XX_25519_ChaChaPoly_BLAKE2s</code> via <code>snow</code>. Mutual
-        authentication, forward secrecy against later key theft, static keys
-        encrypted on the wire. One pattern, one suite — nothing to negotiate,
-        nothing to downgrade. No TLS anywhere.</p>
-      </div>
-      <div class="card" data-reveal>
-        <h3><svg class="fi" viewBox="0 0 24 24" aria-hidden="true"><path d="M3.3 4.3l17.4 15.4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/><path d="M10.6 5.8A9.6 9.6 0 0 1 12 5.5c5.2 0 9.5 4 10.5 6.5a17.7 17.7 0 0 1-3.3 4M6.3 7.3A16.9 16.9 0 0 0 1.5 12c.6 1.5 2.4 3.6 5.1 5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/><path d="M9.9 10.4a3.1 3.1 0 0 0 4.3 4.3" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>blind relay</h3>
-        <p>The relay routes opaque ciphertext by peer-id and holds no keys —
-        it can't read, can't forge, can't MITM a pinned contact. Relay-blindness
-        is asserted by an integration test, not by a promise.</p>
-      </div>
-      <div class="card" data-reveal>
-        <h3><svg class="fi" viewBox="0 0 24 24" aria-hidden="true"><path d="M6.5 19.5c.6-4 2.8-6.2 5.5-6.2s4.9 2.2 5.5 6.2" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/><path d="M8.2 9.8a3.8 3.8 0 0 1 7.6 0c0 1.7-.4 3.1-1.1 4.4M9.5 6.4A6.8 6.8 0 0 1 18.8 10c0 2.3-.4 4.3-1.2 6.1M5.2 13.9A6.8 6.8 0 0 1 7.3 5.4" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>accountless identity</h3>
-        <p>Your identity is an X25519 keypair; your peer-id is
-        <code>SHA-256(pubkey)</code>. No email, no phone number, no signup.
-        Keys live in the OS keyring with an age-encrypted fallback.</p>
-      </div>
-      <div class="card" data-reveal>
-        <h3><svg class="fi" viewBox="0 0 24 24" aria-hidden="true"><path d="M10 14a4.5 4.5 0 0 0 6.4.4l3-3a4.5 4.5 0 0 0-6.4-6.4l-1.5 1.5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/><path d="M14 10a4.5 4.5 0 0 0-6.4-.4l-3 3a4.5 4.5 0 0 0 6.4 6.4l1.5-1.5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>one-time links</h3>
-        <p><code>cinder://&lt;pubkey&gt;@&lt;relay&gt;?rendezvous=&lt;token&gt;</code>
-        is a single-use invite slot. An intercepted link can't be replayed, and
-        a copied pubkey alone can't reach you.</p>
-      </div>
-      <div class="card" data-reveal>
-        <h3><svg class="fi" viewBox="0 0 24 24" aria-hidden="true"><path d="M2.5 13l4 4L15 8.5" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/><path d="M9.5 14.5l4 4L22 10" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>SAS verification</h3>
-        <p>Compare a 7-emoji short authentication string out-of-band and an
-        invite-link MITM has nowhere to hide. If a key ever changes, sending
-        blocks loudly until you re-verify the new key. Never a silent rebind.</p>
-      </div>
-      <div class="card" data-reveal>
-        <h3><svg class="fi" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 13.5l2-7.5h14l2 7.5V18a1.5 1.5 0 0 1-1.5 1.5h-15A1.5 1.5 0 0 1 3 18v-4.5z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/><path d="M3 13.5h5l1.5 2.5h5L16 13.5h5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></svg>offline mailboxes</h3>
-        <p>Bounded per-mailbox queues on the relay hold ciphertext for offline
-        peers. Mailbox ids are random 256-bit and deposit/fetch needs capability
-        tokens — open mailboxes would be a spam vector.</p>
       </div>
     </div>
   </div>
 </section>
 
-<!-- ============ BUILT FOR AGENTS ============ -->
-<section class="section section-alt" id="agents">
+<!-- ============ SPEC TICKER ============ -->
+<div class="ticker" aria-hidden="true">
+  <div class="ticker-in mono">
+    <span>NOISE_XX_25519_CHACHAPOLY_BLAKE2S · SHA-256 PEER-IDS · BOUNDED MAILBOXES · SAS / 7 EMOJI · PEER-CRED UNIX SOCKET · REKEY @1024 MSGS · ZEROIZE ON DROP · IDEMPOTENT SENDS · CAPABILITY TOKENS · NO SERVERS THAT CAN READ YOU ·&nbsp;</span><span>NOISE_XX_25519_CHACHAPOLY_BLAKE2S · SHA-256 PEER-IDS · BOUNDED MAILBOXES · SAS / 7 EMOJI · PEER-CRED UNIX SOCKET · REKEY @1024 MSGS · ZEROIZE ON DROP · IDEMPOTENT SENDS · CAPABILITY TOKENS · NO SERVERS THAT CAN READ YOU ·&nbsp;</span>
+  </div>
+</div>
+
+<!-- ============ SPECIFICATION LEDGER ============ -->
+<section class="features" id="features">
   <div class="wrap">
-    <p class="kicker mono" data-reveal>built for agents</p>
-    <div class="split">
-      <div class="split-text" data-reveal>
-        <h2>the protocol is the product</h2>
-        <p>Agents don't drive a UI built for humans — they speak the same wire
-        protocol the TUI does. Point an agent at <code>cinder rpc</code> and it
-        can call <code>rpc.describe</code> <em>before auth</em> to get every
-        method, event, error kind, and limit as machine-readable schema.
-        No docs required; the spec is self-serving.</p>
-        <ul class="ticks">
-          <li><strong>Self-describing.</strong> <code>rpc.describe</code> answers pre-auth with the full JSON schema — agents bootstrap without reading anything.</li>
-          <li><strong>Resumable events.</strong> Monotonic <code>seq</code>, a persisted replay log, and an explicit <code>event.gap</code> marker. Nothing is ever silently dropped.</li>
-          <li><strong>Idempotent sends.</strong> <code>client_msg_id</code> survives retries and crashes — same key in, same <code>msg_id</code> out, <code>deduped:true</code>.</li>
-          <li><strong>Always an answer.</strong> Every parseable line gets a response or an error frame with <code>retryable</code> + <code>hint</code>. Agents never hang on a silent drop.</li>
-        </ul>
+    <div class="sec-head">
+      <p class="kicker mono">02 — specification</p>
+      <h2>one protocol, two kinds of user</h2>
+      <p class="sec-side">everything below ships today</p>
+    </div>
+    <div class="ledger" data-reveal>
+      <div class="row">
+        <span class="num mono">01</span>
+        <h3>agent-first JSON-RPC</h3>
+        <p class="desc">Every TUI capability is a method on a typed JSON-RPC 2.0 socket.
+        <code>cinder rpc</code> speaks newline-delimited frames on stdio;
+        <code>cinder daemon</code> serves the same protocol to concurrent clients over a peer-cred
+        unix socket. Sends are idempotent — retry a client_msg_id, get the same msg_id back.</p>
       </div>
-      <div class="split-code" data-reveal>
-        <div class="code-card mono tall">
-<pre><span class="j-dir">&rarr;</span> {"jsonrpc":"2.0","id":40,"method":"events.subscribe",
+      <div class="row">
+        <span class="num mono">02</span>
+        <h3>real noise, no ceremony</h3>
+        <p class="desc"><code>Noise_XX_25519_ChaChaPoly_BLAKE2s</code> via snow. Mutual authentication,
+        forward secrecy against later key theft, static keys encrypted on the wire. One pattern,
+        one suite — nothing to negotiate, nothing to downgrade. No TLS anywhere.</p>
+      </div>
+      <div class="row">
+        <span class="num mono">03</span>
+        <h3>blind relay</h3>
+        <p class="desc">The relay routes opaque ciphertext by peer-id and holds no keys — it can't
+        read, can't forge, can't MITM a pinned contact. Relay-blindness is asserted by an
+        integration test, not by a promise.</p>
+      </div>
+      <div class="row">
+        <span class="num mono">04</span>
+        <h3>accountless identity</h3>
+        <p class="desc">Your identity is an X25519 keypair; your peer-id is
+        <code>SHA-256(pubkey)</code>. No email, no phone number, no signup. Keys live in the OS
+        keyring with an age-encrypted fallback.</p>
+      </div>
+      <div class="row">
+        <span class="num mono">05</span>
+        <h3>SAS verification</h3>
+        <p class="desc">Compare a 7-emoji short authentication string out-of-band and an invite-link
+        MITM has nowhere to hide. If a key ever changes, sending blocks loudly until you
+        re-verify. Never a silent rebind.</p>
+      </div>
+      <div class="row">
+        <span class="num mono">06</span>
+        <h3>one-time links</h3>
+        <p class="desc"><code>cinder://&lt;pubkey&gt;@&lt;relay&gt;?rendezvous=&lt;token&gt;</code>
+        is a single-use invite slot. An intercepted link can't be replayed, and a copied pubkey
+        alone can't reach you.</p>
+      </div>
+      <div class="row">
+        <span class="num mono">07</span>
+        <h3>offline mailboxes</h3>
+        <p class="desc">Bounded per-mailbox queues on the relay hold ciphertext for offline peers.
+        Mailbox ids are random 256-bit; deposit and fetch need capability tokens — open mailboxes
+        would be a spam vector.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<div class="dither-rule" aria-hidden="true"></div>
+
+<!-- ============ AGENTS ============ -->
+<section class="agents" id="agents">
+  <div class="wrap">
+    <div class="sec-head">
+      <p class="kicker mono">03 — built for agents</p>
+      <h2>the protocol is the product</h2>
+    </div>
+    <div class="agents-grid">
+      <div class="agents-copy" data-reveal>
+        <p class="lede">Agents don't drive a UI built for humans — they speak the same wire
+        protocol the TUI does. Point one at cinder rpc and it can call
+        <code>rpc.describe</code> before auth to get every method, event, error kind, and
+        limit as machine-readable schema. No docs required; the spec is self-serving.</p>
+        <div class="ticks">
+          <p class="tick"><b>Self-describing.</b> rpc.describe answers pre-auth with the full JSON schema — agents bootstrap without reading anything.</p>
+          <p class="tick"><b>Resumable events.</b> Monotonic seq, a persisted replay log, an explicit event.gap marker. Nothing silently drops.</p>
+          <p class="tick"><b>Idempotent sends.</b> client_msg_id survives retries and crashes — same key in, same msg_id out, deduped:true.</p>
+          <p class="tick"><b>Always an answer.</b> Every parseable line gets a response or an error frame with retryable + hint. Agents never hang.</p>
+        </div>
+      </div>
+      <div class="agent-code" data-reveal>
+        <pre class="code mono"><span class="amber">→</span> {"jsonrpc":"2.0","id":40,"method":"events.subscribe",
    "params":{"kinds":["message.received"],"since":1041}}
-<span class="j-dir">&larr;</span> {"jsonrpc":"2.0","id":40,"result":{
-   "subscription_id":"sub:1","oldest_seq":900,
-   "latest_seq":1180,"replaying":true}}
+<span class="arr">←</span> {"result":{"subscription_id":"sub:1",
+   "oldest_seq":900,"latest_seq":1180,"replaying":true}}
 
-<span class="j-cmt"># then, live — a notification, not a response:</span>
-<span class="j-dir">&larr;</span> {"jsonrpc":"2.0","method":"message.received",
-   "params":{"subscription_id":"sub:1","seq":1181,
+<span class="cmt"># then, live — a notification, not a response:</span>
+<span class="arr">←</span> {"method":"message.received","params":{
    "chat_id":"chat:77aa01","message":{
-     "msg_id":"msg:f20b11","dir":"in","kind":"text",
-     "body":{"text":"meet me at {evil.com}",
-             <span class="j-flag">"trusted":false</span>}}}}</pre>
-        </div>
-        <p class="code-note"><code>trusted:false</code> is schema-level prompt-injection
-        hygiene: inbound text arrives labelled as data, not instructions. It's a
-        label, not a wall — a hostile message can still <em>convince</em> a naive
-        agent, and the docs say so.</p>
+     "dir":"in","body":{"text":"meet me at {evil.com}",
+             <span class="danger">"trusted":false</span>}}}}</pre>
+        <p class="code-note">trusted:false is schema-level prompt-injection hygiene: inbound text
+        arrives labelled as data, not instructions.</p>
       </div>
     </div>
   </div>
 </section>
 
-<!-- ============ HONEST SECURITY ============ -->
-<section class="section" id="security">
-  <div class="wrap">
-    <p class="kicker mono" data-reveal>threat model, condensed</p>
-    <h2 data-reveal>what it protects — and what it doesn't</h2>
-    <p class="lede" data-reveal>No security theater. This is the honest list from
-    <a href="https://github.com/nikolas-sapa/cinder/blob/main/docs/THREAT-MODEL.md" rel="noopener"><code>THREAT-MODEL.md</code></a>;
-    where a protection is partial, it says partial.</p>
+<div class="dither-rule" aria-hidden="true"></div>
 
-    <div class="tm" data-reveal>
-      <div class="tm-col">
-        <h3 class="tm-h tm-yes"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 12.5l5 5L20 6.5" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/></svg> protects against</h3>
-        <ul class="tm-list">
-          <li><strong>Message content in transit.</strong> <code>Noise_XX_25519_ChaChaPoly_BLAKE2s</code> + pinned peer-id.</li>
-          <li><strong>Forgery and impersonation.</strong> AEAD on every frame; a substituted key fails the post-handshake <code>SHA-256</code> peer-id check.</li>
-          <li><strong>The relay reading you.</strong> It routes opaque ciphertext — blindness is tested, not trusted.</li>
-          <li><strong>History theft from a cold disk.</strong> sqlcipher at rest; keys in the OS keyring.</li>
-          <li><strong>Exact size leaks.</strong> Plaintext padded to power-of-2 buckets before encryption.</li>
-          <li><strong>Recorded sessions vs. later key theft.</strong> XX ephemerals — steal the static key later, old sessions stay sealed.</li>
-          <li><strong>Contact-store tampering.</strong> HMAC-SHA256 on <code>contacts.json</code>, fail-closed — never auto-repairs.</li>
-        </ul>
+<!-- ============ SECURITY ============ -->
+<section class="security" id="security">
+  <div class="wrap">
+    <div class="sec-head">
+      <p class="kicker mono">04 — security posture</p>
+      <h2>where cinder holds, where it doesn't</h2>
+    </div>
+    <div class="sec-cols" data-reveal>
+      <div class="col">
+        <p class="col-kicker mono amber">withstands</p>
+        <p class="col-body"><b>relay sees ciphertext only</b>. Frames are Noise-encrypted;
+        relay-blindness is an integration test, not a promise.<br>
+        <b>relay MITM / invite swap</b>: the handshake pins the peer's static key — a swapped
+        link fails the pin, never silently rebinds.<br>
+        <b>spoofed transport</b>: senders authenticate by peer-id + session-id; forged frames
+        can't poison a contact.<br>
+        <b>mailbox stuffing</b>: bounded queues, random 256-bit ids, capability tokens.<br>
+        <b>key theft after the fact</b>: XX ephemerals give forward secrecy — later compromise
+        can't decrypt stored captures.</p>
       </div>
-      <div class="tm-col">
-        <h3 class="tm-h tm-no"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"/></svg> does not protect against</h3>
-        <ul class="tm-list">
-          <li><strong>Timing, frequency, presence.</strong> Padding hides size; nothing hides when or how much you talk.</li>
-          <li><strong>Contact-graph inference by the relay.</strong> Mailbox deposit/fetch pairing is observable over time.</li>
-          <li><strong>IP &harr; peer-id binding.</strong> It's a direct TCP hub — no Tor, no mixnet, no cover traffic.</li>
-          <li><strong>Endpoint or root compromise.</strong> Keyring + process hardening reduce leakage; root wins outright.</li>
-          <li><strong>Post-compromise healing.</strong> Rekey-lite is not a ratchet — only a fresh handshake heals a stolen session.</li>
-          <li><strong>MITM on first contact</strong> <span class="tm-part">partial</span> — pinning is only as strong as the invite link's authenticity. SAS verification closes the window.</li>
-          <li><strong>A malicious agent on your socket</strong> <span class="tm-part">partial</span> — same-uid agents can do anything you can. That's the design; scoped tokens are v2.</li>
-          <li><strong>Relay denial of service.</strong> Your relay can withhold mail; gaps are surfaced as events, not prevented.</li>
-        </ul>
+      <div class="col">
+        <p class="col-kicker mono danger">does not</p>
+        <p class="col-body"><b>endpoint compromise</b>. An attacker on your unlocked machine reads
+        plaintext and steals the key. Nothing cryptographic saves you there.<br>
+        <b>metadata</b>: the relay sees timing, sizes, contact graph. No mixnet padding yet.<br>
+        <b>message recovery</b>: no backups, no escrow. Lose the keypair, lose the history.<br>
+        <b>deny a trusted peer</b>: trust binds to a keypair — a hostile peer means wiping, not
+        negotiating.</p>
       </div>
     </div>
+    <p class="doc-link mono" data-reveal><span class="dim">read</span> <a href="https://github.com/nikolas-sapa/cinder/blob/main/docs/THREAT-MODEL.md" rel="noopener">docs/THREAT-MODEL.md →</a></p>
+    <p class="warn mono" data-reveal>pre-1.0 · not externally audited — don't stake your safety on it yet</p>
   </div>
 </section>
 
 <!-- ============ QUICKSTART ============ -->
-<section class="section section-alt" id="quickstart">
+<section class="quickstart" id="quickstart">
   <div class="wrap">
-    <p class="kicker mono" data-reveal>quickstart</p>
-    <h2 data-reveal>zero to encrypted in four commands</h2>
-    <ol class="steps">
-      <li data-reveal>
-        <span class="step-n mono" aria-hidden="true">01</span>
-        <div><h3>install</h3>
-        <p><code>cargo install --locked --git https://github.com/nikolas-sapa/cinder cinder cinder-relay</code> — client plus relay.</p></div>
-      </li>
-      <li data-reveal>
-        <span class="step-n mono" aria-hidden="true">02</span>
-        <div><h3>print your link</h3>
-        <p><code>cinder id</code> emits <code>cinder://&lt;pubkey&gt;@&lt;relay&gt;?rendezvous=&hellip;</code>.
-        <code>--qr</code> renders it as a terminal QR.</p></div>
-      </li>
-      <li data-reveal>
-        <span class="step-n mono" aria-hidden="true">03</span>
-        <div><h3>connect a contact</h3>
-        <p>They run <code>cinder add &lt;your-link&gt;</code>; you accept the contact
-        request over <code>cinder rpc</code> or the daemon. The rendezvous token is
-        single-use; both sides land as <em>unverified</em> until you compare SAS.</p></div>
-      </li>
-      <li data-reveal>
-        <span class="step-n mono" aria-hidden="true">04</span>
-        <div><h3>talk — or delegate</h3>
-        <p><code>cinder</code> opens the TUI. <code>cinder rpc</code> hands the same
-        session to your agent — <code>rpc.describe</code> first, then
-        <code>msg.send</code>.</p></div>
-      </li>
-    </ol>
+    <div class="sec-head">
+      <p class="kicker mono">05 — quickstart</p>
+      <h2>two steps to first ciphertext</h2>
+    </div>
+    <div class="qs-grid" data-reveal>
+      <div class="qs-card">
+        <p class="qs-kicker mono">humans</p>
+        <pre class="mono qs-cmd"><span class="dim">$</span> cargo install --locked cinder-messenger
+<span class="dim">$</span> cinder identity
+<span class="dim">$</span> cinder</pre>
+        <p class="qs-note">Print your pubkey, share a link, run the TUI. No account, no phone
+        number, no config file needed.</p>
+      </div>
+      <div class="qs-card">
+        <p class="qs-kicker mono">agents</p>
+        <pre class="mono qs-cmd"><span class="dim">$</span> cinder daemon &amp;
+<span class="dim">$</span> cinder rpc &lt;&lt;&lt;'{"method":"rpc.describe"}'</pre>
+        <p class="qs-note">rpc.describe answers pre-auth with the whole schema. Your agent learns
+        the API by asking cinder.</p>
+      </div>
+    </div>
   </div>
 </section>
+
+<div class="dither-rule" aria-hidden="true"></div>
 
 </main>
 
 <footer class="footer">
   <div class="wrap foot-in">
-    <span class="wordmark small"><svg class="mark" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4.2" fill="var(--accent)"/><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-opacity=".35" stroke-width="1.4" stroke-dasharray="4 3.4"/></svg> cinder</span>
-    <p class="foot-note">MIT licensed &middot; pre-1.0, <strong>not externally audited</strong> — read the
-    <a href="https://github.com/nikolas-sapa/cinder/blob/main/docs/THREAT-MODEL.md" rel="noopener">threat model</a> before you trust it with anything.</p>
-    <a class="foot-gh" href="https://github.com/nikolas-sapa/cinder" rel="noopener">github<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 17L17 7M9 7h8v8" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg></a>
+    <div class="foot-brand">
+      <span class="wordmark">cinder</span>
+      <span class="mono dim">encrypted chat your agents can drive</span>
+    </div>
+    <nav class="foot-links" aria-label="Footer">
+      <a href="https://github.com/nikolas-sapa/cinder/tree/main/docs" rel="noopener">docs</a>
+      <a href="https://github.com/nikolas-sapa/cinder/blob/main/docs/PROTOCOL.md" rel="noopener">protocol</a>
+      <a href="https://github.com/nikolas-sapa/cinder/blob/main/docs/THREAT-MODEL.md" rel="noopener">threat model</a>
+      <span class="mono foot-note">MIT · rust · pre-1.0</span>
+    </nav>
   </div>
 </footer>
 

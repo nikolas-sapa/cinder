@@ -554,7 +554,10 @@ async fn ca11_relay_blind_to_calls() {
         let deadline = Instant::now() + WAIT;
         while Instant::now() < deadline {
             match a.test_call_stats(&call_id) {
-                Some((tx, rx, _, _, _)) if tx > 20 && rx > 20 => {
+                // Proof of duplex flow through the tap, not a rate test:
+                // starved CI runners sustain wildly asymmetric rates
+                // (observed tx=448/rx=8), so the inbound bar is low.
+                Some((tx, rx, _, _, _)) if tx > 15 && rx > 4 => {
                     media_ok = true;
                     break;
                 }

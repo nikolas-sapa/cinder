@@ -21,6 +21,14 @@ copyBtn.addEventListener("click", async () => {
   }, 1500);
 });
 
+/* ---- nav: scrolled state ---- */
+const navEl = document.querySelector(".nav");
+if (navEl) {
+  const onScroll = () => navEl.classList.toggle("scrolled", scrollY > 8);
+  addEventListener("scroll", onScroll, { passive: true });
+  onScroll();
+}
+
 const io = new IntersectionObserver(
   (entries) => {
     for (const e of entries) {
@@ -75,9 +83,13 @@ for (const el of document.querySelectorAll("[data-reveal]")) io.observe(el);
     if (reduced) { seedStatic(); draw(STATIC_T); }
   }
   function spawn(t) {
-    const left = Math.random() < 0.5;
+    const r = Math.random();
+    const x0 = r < 0.38 ? 2 + Math.random() * cols * 0.26
+             : r < 0.76 ? cols - 3 - Math.random() * cols * 0.26
+             : 2 + Math.random() * (cols - 4);
+    const left = x0 < cols / 2;
     return {
-      x0: left ? 2 + Math.random() * cols * 0.26 : cols - 3 - Math.random() * cols * 0.26,
+      x0,
       y0: ROWS * 0.60 + Math.random() * ROWS * 0.36,
       vx: (left ? 1 : -1) * (0.4 + Math.random() * 1.4),
       vy: 4.5 + Math.random() * 5.5,
@@ -117,7 +129,7 @@ for (const el of document.querySelectorAll("[data-reveal]")) io.observe(el);
         const mx = x * inv * 2 - 1;
         const a = mx < 0 ? -mx : mx;
         let e = a * a * (3 - 2 * a); e = e * e * (3 - 2 * e);
-        e *= (mx < 0 ? bL : bR);
+        e = (0.30 + 0.70 * e) * (mx < 0 ? bL : bR);
         const wx = x + warp;
         let v = 0.42 * Math.sin(wx * 0.030 + t * 0.50 + y * 0.110)
               + 0.26 * Math.sin(wx * 0.073 - t * 0.38 + y * 0.190 + 1.7)

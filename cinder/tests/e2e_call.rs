@@ -19,7 +19,7 @@ mod xfer;
 
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use cinder_core::identity::Identity;
 use cinder_core::PeerId;
@@ -535,19 +535,45 @@ async fn ca11_relay_blind_to_calls() {
     let rec_a = Rec::attach(&a);
 
     let peer_b = b.identity().peer_id();
-    let call_id = dial_active(&a, &b, &peer_b).await;
-    let needle = call_id_raw(&call_id);
 
-    // Let real media flow — dozens of CallFrames each direction.
-    wait_for(
-        || {
-            a.test_call_stats(&call_id)
-                .and_then(|(tx, rx, _, _, _)| (tx > 20 && rx > 20).then_some(()))
-        },
-        WAIT,
-        "media through tap",
-    )
-    .await;
+    // Media can die mid-call when a link blip re-handshakes the session —
+    // pinned-sid media drops are fail-closed by design and the janitor ends
+    // the call. This test's purpose is wire opacity, not pin semantics, so
+    // if the first call stalls before enough frames flow, tear it down and
+    // re-dial once on a fresh session.
+    let mut call_id = String::new();
+    let mut media_ok = false;
+    for attempt in 0..2 {
+        call_id = dial_active(&a, &b, &peer_b).await;
+        let deadline = Instant::now() + WAIT;
+        while Instant::now() < deadline {
+            match a.test_call_stats(&call_id) {
+                Some((tx, rx, _, _, _)) if tx > 20 && rx > 20 => {
+                    media_ok = true;
+                    break;
+                }
+                Some(_) => {}
+                None => break, // call ended — re-dial
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        if media_ok {
+            break;
+        }
+        assert_eq!(attempt, 0, "timed out waiting for media through tap");
+        let _ = a
+            .call_hangup(CallIdParams {
+                call_id: Some(call_id.clone()),
+            })
+            .await;
+        let _ = b
+            .call_hangup(CallIdParams {
+                call_id: Some(call_id.clone()),
+            })
+            .await;
+        tokio::time::sleep(Duration::from_millis(500)).await;
+    }
+    let needle = call_id_raw(&call_id);
     a.call_hangup(CallIdParams {
         call_id: Some(call_id.clone()),
     })

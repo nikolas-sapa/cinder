@@ -61,6 +61,9 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             libasound2-dev libopus-dev pkg-config
+      - name: audio deps for calls feature (macos)
+        if: runner.os == 'macOS'
+        run: brew install opus
       - run: cargo test --workspace --locked
 
   unsafe-gate:

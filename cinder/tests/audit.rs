@@ -18,6 +18,7 @@ mod tui;
 mod xfer;
 
 use std::net::SocketAddr;
+use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -28,15 +29,20 @@ use cinder_core::session::Session;
 use secrecy::ExposeSecret;
 use serde_json::Value;
 use tokio::net::TcpListener;
+use tokio::sync::Notify;
 
-use crate::core::{chat_str, contact_str, decode_app, AppMsg, Core, MetaState};
+use crate::core::{
+    chat_str, contact_str, decode_app, AppMsg, Core, MetaState, DEAD_SIDS_CAP, NONCONTACT_META_CAP,
+};
 use crate::rpc::core::{
     ChatHistoryParams, ChatListParams, CinderCore, ContactIdParams, FileSendParams,
     MsgDeleteParams, MsgReactParams, MsgSendParams,
 };
+use crate::rpc::events::{EventManager, Filters};
 use crate::rpc::protocol::ErrorKind;
 use crate::store::{Dir, MsgKind, MsgState, NewMessage, Store};
 use crate::tui::backend as tb;
+use crate::xfer::FileKind;
 
 const CONNECT_WAIT: Duration = Duration::from_secs(15);
 const HANDSHAKE_WAIT: Duration = Duration::from_secs(25);
@@ -1166,4 +1172,510 @@ async fn audit_file_send_chunk_cap() {
         files.iter().all(|f| f.name != "too-many-chunks.bin"),
         "rejected send must not leave a file row"
     );
+}
+
+// ---------------------------------------------------------------------------
+// F1/F2 outbox redesign. One bounded lane per peer carries every UNSEALED
+// job; a per-peer worker seals FIFO and pushes ct+ctrl to cmd_tx as one
+// contiguous pair. Wire order == lane order across chat / file / call /
+// ack / grant / deposit traffic; route-context sends are try_send only.
+// ---------------------------------------------------------------------------
+
+/// Attach the production replay sink; returns the manager so tests can
+/// replay via `subscribe` (mirror reads are synchronous — no writer lag).
+async fn attach_replay(core: &Arc<Core>) -> Arc<EventManager> {
+    let log = crate::core::SqliteReplayLog::open(core.store().clone(), 16_384)
+        .await
+        .unwrap();
+    let em = Arc::new(EventManager::new(Box::new(log), 1024));
+    core.attach_sink(em.clone());
+    em
+}
+
+/// Dead conn used only for `subscribe` replay snapshots.
+fn replay_conn(em: &EventManager) -> u64 {
+    let (tx, _rx) = tokio::sync::mpsc::channel(64);
+    em.register_conn(
+        tx,
+        Arc::new(AtomicBool::new(false)),
+        Arc::new(Notify::new()),
+    )
+}
+
+/// `(msg_id, body.text)` of every `message.received` event in seq order.
+fn replayed_msgs(em: &EventManager, conn: u64) -> Vec<(String, String)> {
+    let out = em
+        .subscribe(
+            conn,
+            Filters {
+                kinds: None,
+                chats: None,
+            },
+            Some(0),
+        )
+        .expect("subscribe");
+    out.replay_frames
+        .iter()
+        .filter_map(|f| {
+            let v: Value = serde_json::from_str(f).ok()?;
+            let p = &v["params"];
+            let mid = p["message"]["msg_id"].as_str()?.to_string();
+            let text = p["message"]["body"]["text"]
+                .as_str()
+                .unwrap_or("")
+                .to_string();
+            Some((mid, text))
+        })
+        .collect()
+}
+
+// Cross-lane FIFO: jobs of different kinds exit on the wire in the order
+// they entered the lane. Awaited `test_deliver_or_queue` calls fix the lane
+// order (send → offer → send); the receiver's `message.received` seq order
+// is the wire-order witness (emit order == decrypt order == wire order).
+#[tokio::test(flavor = "multi_thread", worker_threads = 8)]
+async fn audit_cross_lane_fifo_wire_order() {
+    init_logs();
+    let relay = spawn_relay().await;
+    let dir_a = tempfile::tempdir().unwrap();
+    let dir_b = tempfile::tempdir().unwrap();
+    let (a, b) = paired(relay, dir_a.path(), dir_b.path()).await;
+    let peer_b = b.identity().peer_id();
+    let peer_a = a.identity().peer_id();
+    let em_b = attach_replay(&b).await;
+    let conn_b = replay_conn(&em_b);
+
+    let pid = std::process::id();
+    let id_a = format!("msg:fifo-a-{pid}");
+    let id_offer = format!("msg:fifo-offer-{pid}");
+    let id_b = format!("msg:fifo-b-{pid}");
+    a.test_deliver_or_queue(
+        peer_b,
+        AppMsg::Text {
+            msg_id: id_a.clone(),
+            body: "fifo-first".into(),
+            expires_at: None,
+        },
+    )
+    .await;
+    a.test_deliver_or_queue(
+        peer_b,
+        AppMsg::FileOffer {
+            file_id: [0x42; 32],
+            fetch_token: [0x43; 32],
+            name: "fifo.bin".into(),
+            mime: "application/octet-stream".into(),
+            size: 512,
+            sha256: [0x44; 32],
+            chunk_size: 512,
+            chunks_total: 1,
+            kind: FileKind::File,
+            thumb: None,
+            audio: None,
+            caption: None,
+            reply_msg: id_offer.clone(),
+        },
+    )
+    .await;
+    a.test_deliver_or_queue(
+        peer_b,
+        AppMsg::Text {
+            msg_id: id_b.clone(),
+            body: "fifo-second".into(),
+            expires_at: None,
+        },
+    )
+    .await;
+    wait_for_body(&b, &chat_str(&peer_a), "fifo-second", DELIVERY_WAIT).await;
+
+    let order = wait_for(
+        || {
+            let ids: Vec<String> = replayed_msgs(&em_b, conn_b)
+                .into_iter()
+                .map(|(m, _)| m)
+                .collect();
+            ids.contains(&id_b).then_some(ids)
+        },
+        DELIVERY_WAIT,
+        "all three frames replayed",
+    )
+    .await;
+    let pos = |id: &str| order.iter().position(|m| m == id).expect("id replayed");
+    assert!(
+        pos(&id_a) < pos(&id_offer) && pos(&id_offer) < pos(&id_b),
+        "lane order must be wire order, got {order:?}"
+    );
+}
+
+// Call-media pin check happens BEFORE sealing: a frame pinned to a dead
+// generation sheds without consuming a nonce — the live stream's nonce
+// sequence stays gapless, proven by the next real send decrypting.
+#[tokio::test(flavor = "multi_thread", worker_threads = 8)]
+async fn audit_call_frame_stale_pin_sheds_preseal() {
+    init_logs();
+    let relay = spawn_relay().await;
+    let dir_a = tempfile::tempdir().unwrap();
+    let dir_b = tempfile::tempdir().unwrap();
+    let (a, b) = paired(relay, dir_a.path(), dir_b.path()).await;
+    let peer_b = b.identity().peer_id();
+    let peer_a = a.identity().peer_id();
+    let sid = a.test_local_sid(&peer_b).expect("live session sid");
+    let frame = |seq: u16| AppMsg::CallFrame {
+        call_id: [7u8; 16],
+        seq,
+        ts_ms: seq as u32 * 20,
+        payload: vec![1, 2, 3],
+    };
+
+    // Wrong generation → pre-seal shed; no nonce burns.
+    assert!(
+        !a.test_send_call_frame(peer_b, frame(0), SessionId::random())
+            .await,
+        "stale-pinned frame must not seal"
+    );
+    // Live pin → sealed + wired (B drops it — no call exists).
+    assert!(a.test_send_call_frame(peer_b, frame(1), sid).await);
+
+    // Nonce continuity: the shed never consumed one — the next send lands.
+    let body = format!("after-shed-{}", std::process::id());
+    a.msg_send(MsgSendParams {
+        to: contact_str(&peer_b),
+        body: body.clone(),
+        client_msg_id: "shed-proof".into(),
+        ttl_ms: None,
+    })
+    .await
+    .expect("post-shed send");
+    wait_for_body(&b, &chat_str(&peer_a), &body, DELIVERY_WAIT).await;
+}
+
+// Once a frame is sealed as a mailbox deposit the WHOLE generation is
+// deposit-pinned: the deposit lives off-stream on the receiver's side, so
+// a live send under that sid could interleave with it. Even a faked-online
+// presence must keep sends on the mailbox path until a fresh generation.
+#[tokio::test(flavor = "multi_thread", worker_threads = 8)]
+async fn audit_mailbox_only_generation() {
+    init_logs();
+    let relay = spawn_relay().await;
+    let dir_a = tempfile::tempdir().unwrap();
+    let dir_b = tempfile::tempdir().unwrap();
+    let (a, b) = paired(relay, dir_a.path(), dir_b.path()).await;
+    let peer_b = b.identity().peer_id();
+    let peer_a = a.identity().peer_id();
+    let blob_b = b.identity().stored_blob().expose_secret().to_vec();
+
+    wait_for(
+        || a.test_has_grant(&peer_b).then_some(()),
+        DELIVERY_WAIT,
+        "B's mailbox grant on A",
+    )
+    .await;
+    stop(&b).await;
+    wait_for(
+        || a.test_presence(&peer_b).filter(|o| !*o),
+        CONNECT_WAIT,
+        "A to learn B offline",
+    )
+    .await;
+
+    // First send → sealed deposit → generation pins mailbox-only.
+    let body1 = format!("mbox-only-1-{}", std::process::id());
+    a.msg_send(MsgSendParams {
+        to: contact_str(&peer_b),
+        body: body1.clone(),
+        client_msg_id: "mo-1".into(),
+        ttl_ms: None,
+    })
+    .await
+    .expect("deposit send");
+    wait_for(
+        || (a.test_mailbox_only(&peer_b) == Some(true)).then_some(()),
+        Duration::from_secs(10),
+        "deposit pins the generation mailbox-only",
+    )
+    .await;
+
+    // Faked-online presence does NOT restore the live path on this
+    // generation — the second send must deposit too and stay queued.
+    a.test_set_presence(&peer_b, true);
+    let body2 = format!("mbox-only-2-{}", std::process::id());
+    let r2 = a
+        .msg_send(MsgSendParams {
+            to: contact_str(&peer_b),
+            body: body2.clone(),
+            client_msg_id: "mo-2".into(),
+            ttl_ms: None,
+        })
+        .await
+        .expect("second send");
+    let mid2 = r2["msg_id"].as_str().unwrap().to_string();
+    tokio::time::sleep(Duration::from_millis(800)).await;
+    let m2 = a.store().get_message(&mid2).unwrap().unwrap();
+    assert_eq!(
+        m2.state,
+        Some(MsgState::Queued),
+        "mailbox-pinned generation must not mark a live send"
+    );
+    wait_for(
+        || (a.test_pending_len(&peer_b) >= 2).then_some(()),
+        Duration::from_secs(10),
+        "both sends retained for the next live path",
+    )
+    .await;
+
+    // B returns: presence kick handshakes a FRESH generation — the flag
+    // resets — and the backlog flushes live.
+    let b2 = reopen_core(dir_b.path(), relay, &blob_b).await;
+    assert!(b2.wait_connected(CONNECT_WAIT).await);
+    wait_for(
+        || (a.test_mailbox_only(&peer_b) == Some(false)).then_some(()),
+        HANDSHAKE_WAIT,
+        "fresh generation clears the mailbox pin",
+    )
+    .await;
+    // presence→handshake→install→flush→decrypt is a 5-hop chain — same
+    // slack the offline-queue test budgets for starved runners.
+    let chain = HANDSHAKE_WAIT + DELIVERY_WAIT + Duration::from_secs(30);
+    wait_for_body(&b2, &chat_str(&peer_a), &body1, chain).await;
+    wait_for_body(&b2, &chat_str(&peer_a), &body2, chain).await;
+}
+
+// Non-Text backlog (here: a reaction) survives in pending_out.v1 — the
+// persisted queue repopulates on reopen, same as queued Text rows.
+#[tokio::test(flavor = "multi_thread", worker_threads = 8)]
+async fn audit_pending_nontext_survives_restart() {
+    init_logs();
+    let relay = spawn_relay().await;
+    let dir_a = tempfile::tempdir().unwrap();
+    let dir_b = tempfile::tempdir().unwrap();
+    let (a, b) = paired(relay, dir_a.path(), dir_b.path()).await;
+    let peer_b = b.identity().peer_id();
+    let blob_a = a.identity().stored_blob().expose_secret().to_vec();
+
+    // Inbound row for the react to hang on (store-direct: no wire path).
+    a.store()
+        .insert_message(&NewMessage {
+            msg_id: "msg:react-target".into(),
+            chat_id: chat_str(&peer_b),
+            dir: Dir::In,
+            kind: MsgKind::Text,
+            body: "react to me".into(),
+            state: Some(MsgState::Delivered),
+            client_msg_id: None,
+            ts: 1000,
+            expires_at: None,
+        })
+        .unwrap();
+    wait_for(
+        || a.test_has_grant(&peer_b).then_some(()),
+        DELIVERY_WAIT,
+        "B's grant on A",
+    )
+    .await;
+    stop(&b).await;
+    wait_for(
+        || a.test_presence(&peer_b).filter(|o| !*o),
+        CONNECT_WAIT,
+        "A to learn B offline",
+    )
+    .await;
+
+    a.msg_react(MsgReactParams {
+        msg_id: "msg:react-target".into(),
+        emoji: Some("🔥".into()),
+    })
+    .await
+    .expect("react");
+    wait_for(
+        || (a.test_pending_len(&peer_b) > 0).then_some(()),
+        Duration::from_secs(10),
+        "react queued",
+    )
+    .await;
+    // persist_pending is a fire-and-forget store write — let it land.
+    tokio::time::sleep(Duration::from_millis(1200)).await;
+
+    stop(&a).await;
+    let a2 = reopen_core(dir_a.path(), relay, &blob_a).await;
+    assert_eq!(
+        a2.test_pending_len(&peer_b),
+        1,
+        "non-Text backlog must restore from pending_out.v1"
+    );
+}
+
+// Tombstone cap: at DEAD_SIDS_CAP the oldest live entries evict, but a
+// fresh tombstone ALWAYS lands — a skipped insert resurrects a dead sid.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn audit_dead_sid_eviction_keeps_newest() {
+    let dir = tempfile::tempdir().unwrap();
+    let a = Core::open(dir.path(), None, Identity::generate().unwrap())
+        .await
+        .unwrap();
+    let last = a.test_tombstone_fill(DEAD_SIDS_CAP + 16);
+    assert!(
+        a.test_dead_sid_len() <= DEAD_SIDS_CAP,
+        "tombstones stay bounded"
+    );
+    assert!(
+        a.test_dead_sid_has(last),
+        "the newest tombstone must always land"
+    );
+}
+
+// Sybil bound: un-accepted PendingIn metas cap at NONCONTACT_META_CAP,
+// evicting oldest; user-decided metas are never evicted.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn audit_meta_cap_evicts_pending_in_only() {
+    let dir = tempfile::tempdir().unwrap();
+    let a = Core::open(dir.path(), None, Identity::generate().unwrap())
+        .await
+        .unwrap();
+    for i in 0..(NONCONTACT_META_CAP + 8) as u64 {
+        let mut k = [0u8; 32];
+        k[..8].copy_from_slice(&i.to_le_bytes());
+        a.test_set_state(&PeerId::from_bytes(k), MetaState::PendingIn);
+    }
+    let active = PeerId::from_bytes([0xAA; 32]);
+    a.test_set_state(&active, MetaState::Active);
+    assert!(
+        a.test_pending_in_len() <= NONCONTACT_META_CAP,
+        "unaccepted metas stay bounded"
+    );
+    assert_eq!(
+        a.meta_state(&active),
+        Some(MetaState::Active),
+        "decided metas are never evicted"
+    );
+}
+
+// Frames parked during a FAILED handshake belong to the dead generation —
+// they must be flushed, never bound to the next handshake's stream.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn audit_early_frames_flush_on_failed_handshake() {
+    let dir = tempfile::tempdir().unwrap();
+    let a = Core::open(dir.path(), None, Identity::generate().unwrap())
+        .await
+        .unwrap();
+    let peer = PeerId::from_bytes([0xBE; 32]);
+    a.test_park_early(&peer, SessionId::random());
+    assert_eq!(a.test_early_len(&peer), 1);
+    // No relay: the initiator waits out the §12 handshake deadline (~10 s),
+    // then the Err branch runs the production failed-generation cleanup.
+    a.test_outbound_handshake(peer).await;
+    assert_eq!(
+        a.test_early_len(&peer),
+        0,
+        "dead-generation frames must be flushed"
+    );
+}
+
+// F4: `message.received` replay frames persist a copy of the body — a peer
+// delete must scrub both halves (sqlite inside the store tx, the live
+// replay mirror beside it) so replay never serves deleted plaintext.
+#[tokio::test(flavor = "multi_thread", worker_threads = 8)]
+async fn audit_replay_scrub_on_peer_delete() {
+    init_logs();
+    let relay = spawn_relay().await;
+    let dir_a = tempfile::tempdir().unwrap();
+    let dir_b = tempfile::tempdir().unwrap();
+    let (a, b) = paired(relay, dir_a.path(), dir_b.path()).await;
+    let peer_b = b.identity().peer_id();
+    let peer_a = a.identity().peer_id();
+    let em_a = attach_replay(&a).await;
+    let conn_a = replay_conn(&em_a);
+
+    let body = format!("replay-scrub-{}", std::process::id());
+    let r = b
+        .msg_send(MsgSendParams {
+            to: contact_str(&peer_a),
+            body: body.clone(),
+            client_msg_id: "rs-1".into(),
+            ttl_ms: None,
+        })
+        .await
+        .expect("send");
+    let mid = r["msg_id"].as_str().unwrap().to_string();
+    wait_for_body(&a, &chat_str(&peer_b), &body, DELIVERY_WAIT).await;
+
+    let seen = wait_for(
+        || {
+            let msgs = replayed_msgs(&em_a, conn_a);
+            msgs.iter()
+                .find(|(m, t)| *m == mid && *t == body)
+                .map(|(m, t)| (m.clone(), t.clone()))
+        },
+        DELIVERY_WAIT,
+        "replay serving the original body",
+    )
+    .await;
+    assert_eq!(seen.1, body);
+
+    b.msg_delete(MsgDeleteParams {
+        msg_id: mid.clone(),
+        scope: Some("everyone".into()),
+        client_op_id: None,
+    })
+    .await
+    .expect("peer delete");
+
+    let scrubbed = wait_for(
+        || {
+            let msgs = replayed_msgs(&em_a, conn_a);
+            msgs.iter()
+                .find(|(m, _)| *m == mid)
+                .map(|(_, t)| t.clone())
+                .filter(|t| t.is_empty())
+        },
+        DELIVERY_WAIT,
+        "replayed body scrubbed after delete",
+    )
+    .await;
+    assert!(scrubbed.is_empty());
+}
+
+// A locally-unsealable item (wire-encodable but over the 8192B pad bucket)
+// is poison, not unlucky: each idle-point flush counts ONE local attempt,
+// and at PENDING_MAX_ATTEMPTS it is dropped — never wedging the queue.
+#[tokio::test(flavor = "multi_thread", worker_threads = 8)]
+async fn audit_poison_item_bounded_retries() {
+    init_logs();
+    let relay = spawn_relay().await;
+    let dir_a = tempfile::tempdir().unwrap();
+    let dir_b = tempfile::tempdir().unwrap();
+    let (a, b) = paired(relay, dir_a.path(), dir_b.path()).await;
+    let peer_b = b.identity().peer_id();
+    let peer_a = a.identity().peer_id();
+
+    a.test_deliver_or_queue(
+        peer_b,
+        AppMsg::Text {
+            msg_id: "msg:poison".into(),
+            body: "x".repeat(9000),
+            expires_at: None,
+        },
+    )
+    .await;
+    // Each awaited Flush job runs ONE bounded pending_out pass — one local
+    // attempt on the poison per pass. Seven flushes ≫ the 5-attempt cap.
+    for _ in 0..7 {
+        a.test_flush_pending(&peer_b).await;
+    }
+    wait_for(
+        || (a.test_pending_len(&peer_b) == 0).then_some(()),
+        DELIVERY_WAIT,
+        "poison item evicted after bounded attempts",
+    )
+    .await;
+    // And the queue still works for real items afterwards.
+    let body = format!("post-poison-{}", std::process::id());
+    a.msg_send(MsgSendParams {
+        to: contact_str(&peer_b),
+        body: body.clone(),
+        client_msg_id: "post-poison".into(),
+        ttl_ms: None,
+    })
+    .await
+    .expect("post-poison send");
+    wait_for_body(&b, &chat_str(&peer_a), &body, DELIVERY_WAIT).await;
 }

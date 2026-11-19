@@ -5,6 +5,7 @@ use ratatui_textarea::TextArea;
 use super::backend::{
     now_ts, ChatSummary, ConnState, Dir, Event, FileMeta, HistoryPage, Message, MsgState, Trust,
 };
+use super::sanitize::sanitize;
 
 #[derive(Debug, Clone)]
 pub struct ChatBuffer {
@@ -709,7 +710,14 @@ impl App {
                     format!(" — {}{}", p.state, pct)
                 })
                 .unwrap_or_default();
-            lines.push(format!("{} · {} · {}{}", f.file_id, f.name, f.kind, prog));
+            // Peer-claimed name — same sanitize pass as file_label/ui.rs.
+            lines.push(format!(
+                "{} · {} · {}{}",
+                f.file_id,
+                sanitize(&f.name),
+                f.kind,
+                prog
+            ));
         }
         if lines.is_empty() {
             lines.push("no transfers".to_string());

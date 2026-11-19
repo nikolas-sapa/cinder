@@ -38,10 +38,13 @@ fn hex32(s: &str) -> [u8; 32] {
 
 #[test]
 fn peer_id_is_sha256_of_static_pubkey() {
-    // Hand-computed: sha256(b"\x00\x01..\x1f") via independent implementation.
-    let public: [u8; 32] = std::array::from_fn(|i| i as u8);
-    let expected = hex32("630dcd2966c4336691125448bbb25b4ff412a49c732db2c8abc1b8581bd710dd");
-    let mut blob = vec![0xabu8; 32];
+    // RFC 7748 §6.1 X25519 pair — an independently published (priv, pub) —
+    // since from_stored_blob now verifies pub == X25519(priv) on load.
+    // Hand-computed: sha256(pub) via independent implementation.
+    let private = hex32("77076d0a7318a57d3c16c17251b26645df4c2f87ebc0992ab177fba51db92c2a");
+    let public = hex32("8520f0098930a754748b7ddcb43ef75a0dbf3a0d26381af4eba4a98eaa9b4e6a");
+    let expected = hex32("300c9c9603b92a4b39ed3958bf9240114804db4fd373012c0ca47432d63425ae");
+    let mut blob = private.to_vec();
     blob.extend_from_slice(&public);
     let id = Identity::from_stored_blob(&blob).unwrap();
     assert_eq!(id.public(), public);
@@ -62,6 +65,27 @@ fn identity_blob_roundtrip_and_rejects_bad_len() {
     assert_eq!(id2.peer_id(), id.peer_id());
     assert!(Identity::from_stored_blob(&[0u8; 63]).is_err());
     assert!(Identity::from_stored_blob(&[0u8; 65]).is_err());
+}
+
+#[test]
+fn identity_blob_rejects_pub_priv_mismatch() {
+    // A tampered/rolled blob must fail closed instead of loading a keypair
+    // that doesn't match the advertised peer-id.
+    let id = Identity::generate().unwrap();
+    let mut blob = id.stored_blob().expose_secret().to_vec();
+    blob[40] ^= 0x01; // flip one bit in the stored public half
+    let err = Identity::from_stored_blob(&blob)
+        .err()
+        .expect("mismatched blob must fail");
+    assert!(
+        matches!(err, Error::IdentityStore(_)),
+        "expected IdentityStore, got {err:?}"
+    );
+    // Same private, different-but-plausible public (another identity's).
+    let other = Identity::generate().unwrap();
+    let mut blob = id.stored_blob().expose_secret().to_vec();
+    blob[32..].copy_from_slice(&other.public());
+    assert!(Identity::from_stored_blob(&blob).is_err());
 }
 
 #[test]

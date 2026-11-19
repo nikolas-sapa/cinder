@@ -209,6 +209,17 @@ async fn submit<B: Backend>(backend: &mut B, app: &mut App) -> Result<()> {
         return Ok(());
     }
     let chat_id = chat.chat_id.clone();
+    // TUI bypasses the RPC layer's max_body_bytes gate — check at the edge
+    // so an overlong draft fails here (draft restored) instead of surfacing
+    // as a queued-then-failed ghost row from the seal path.
+    if text.len() > crate::rpc::dispatch::MAX_BODY_BYTES {
+        app.set_draft(&text);
+        app.status_line = Some(format!(
+            "send: body exceeds limits.max_body_bytes ({})",
+            crate::rpc::dispatch::MAX_BODY_BYTES
+        ));
+        return Ok(());
+    }
     match backend.send(&chat_id, &text).await {
         Ok(ack) => app.push_outgoing(
             &chat_id,
@@ -485,15 +496,16 @@ fn compose_external(
 
 fn edit_in_editor() -> io::Result<Option<String>> {
     let editor = std::env::var("EDITOR").unwrap_or_else(|_| "vi".to_string());
-    let path = std::env::temp_dir().join(format!("cinder-draft-{}.txt", std::process::id()));
-    std::fs::write(&path, "")?;
-    let status = std::process::Command::new(&editor).arg(&path).status();
+    // NamedTempFile creates O_EXCL/0600 under the system temp dir — no
+    // predictable /tmp/<pid> path to pre-plant — and unlinks itself on
+    // drop, covering the early-return paths below.
+    let tmp = tempfile::NamedTempFile::new()?;
+    let status = std::process::Command::new(&editor).arg(tmp.path()).status();
     let body = match status {
-        Ok(s) if s.success() => std::fs::read_to_string(&path).ok(),
+        Ok(s) if s.success() => std::fs::read_to_string(tmp.path()).ok(),
         Ok(s) => return Err(io::Error::other(format!("editor exited {s}"))),
         Err(e) => return Err(e),
     };
-    let _ = std::fs::remove_file(&path);
     let trimmed = body.unwrap_or_default().trim().to_string();
     Ok((!trimmed.is_empty()).then_some(trimmed))
 }

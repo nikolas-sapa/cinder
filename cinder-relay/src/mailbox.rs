@@ -181,11 +181,22 @@ impl MailStore {
             }
             inner.boxes.remove(&mailbox_id);
         }
-        let owned = inner
-            .boxes
-            .values()
-            .filter(|mb| mb.owner_ip == ip && !mb.expired(now))
-            .count();
+        // Global cap first: per-IP alone can't bound store size under
+        // source-IP spray (each box holds up to mailbox_max_bytes).
+        let mut live = 0usize;
+        let mut owned = 0usize;
+        for mb in inner.boxes.values() {
+            if mb.expired(now) {
+                continue;
+            }
+            live += 1;
+            if mb.owner_ip == ip {
+                owned += 1;
+            }
+        }
+        if live >= cfg.mailboxes_global {
+            return Err((ErrorCode::RateLimited, "global mailbox count exceeded"));
+        }
         if owned >= cfg.mailboxes_per_ip {
             return Err((ErrorCode::RateLimited, "mailbox count per IP exceeded"));
         }
@@ -360,17 +371,27 @@ impl MailStore {
             }
             inner.invites.remove(&token);
         }
-        let per_conn = inner
-            .invites
-            .values()
-            .filter(|s| s.owner_conn == conn_id && s.expires_at > now)
-            .count();
-        let per_ip = inner
-            .invites
-            .values()
-            .filter(|s| s.owner_ip == ip && s.expires_at > now)
-            .count();
-        if per_conn >= cfg.invites_per_conn || per_ip >= cfg.invites_per_ip {
+        // Global cap joins the per-conn/per-IP ones — same spray argument
+        // as the mailbox store.
+        let mut live = 0usize;
+        let mut per_conn = 0usize;
+        let mut per_ip = 0usize;
+        for s in inner.invites.values() {
+            if s.expires_at <= now {
+                continue;
+            }
+            live += 1;
+            if s.owner_conn == conn_id {
+                per_conn += 1;
+            }
+            if s.owner_ip == ip {
+                per_ip += 1;
+            }
+        }
+        if live >= cfg.invites_global
+            || per_conn >= cfg.invites_per_conn
+            || per_ip >= cfg.invites_per_ip
+        {
             return Err((ErrorCode::RateLimited, "invite slot limit exceeded"));
         }
         let ttl = if ttl_secs == 0 {

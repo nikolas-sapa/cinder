@@ -30,7 +30,7 @@ pub async fn initiator(
         }
         None => link.send_handshake(to, hs_id, msg1).await?,
     }
-    let msg2 = wait_handshake(link, Some(hs_id), caps::HANDSHAKE_TIMEOUT).await?;
+    let msg2 = wait_handshake(link, to, Some(hs_id), caps::HANDSHAKE_TIMEOUT).await?;
     session.accept_handshake(msg2)?;
     session.verify_peer_id(expected)?;
     let msg3 = session.produce_handshake()?;
@@ -54,7 +54,7 @@ pub async fn responder(
     session.accept_handshake(msg1)?;
     let msg2 = session.produce_handshake()?;
     link.send_handshake(from, hs_id, msg2).await?;
-    let msg3 = wait_handshake(link, Some(hs_id), caps::HANDSHAKE_TIMEOUT).await?;
+    let msg3 = wait_handshake(link, from, Some(hs_id), caps::HANDSHAKE_TIMEOUT).await?;
     session.accept_handshake(msg3)?;
     let learned = session
         .remote_peer_id()
@@ -69,17 +69,25 @@ pub async fn responder(
     Ok(session)
 }
 
-/// Wait for a `Handshake` frame, optionally filtered by hs_id. Mismatched
-/// hs_ids are dropped per §6; a relay `Error` frame aborts the wait.
+/// Wait for a `Handshake` frame FROM `from`, optionally filtered by hs_id.
+/// Mismatched hs_ids are dropped per §6 — and so are frames from any other
+/// peer: hs_ids collide across concurrent handshakes, and only matching
+/// both fields proves the frame continues THIS exchange. A relay `Error`
+/// frame aborts the wait.
 async fn wait_handshake(
     link: &mut impl Link,
+    from: PeerId,
     want: Option<HsId>,
     within: Duration,
 ) -> Result<HandshakeMsg, Error> {
     let fut = async {
         loop {
             match link.recv().await? {
-                ClientEvent::Handshake { hs_id, body, .. } if want.is_none_or(|w| w == hs_id) => {
+                ClientEvent::Handshake {
+                    from: got,
+                    hs_id,
+                    body,
+                } if got == from && want.is_none_or(|w| w == hs_id) => {
                     return Ok(body);
                 }
                 ClientEvent::Error { code, detail } => {

@@ -184,8 +184,10 @@ between client and relay or between the two TCP hops. Controls DNS/routing.
   This is the standard trust-on-first-use window, and SAS verification
   (`ident.verify`) is the designated mitigation: H(`handshake_hash ‖
   min(pk_a,pk_b) ‖ max(pk_a,pk_b)`) rendered as 7 emoji (+ digit fallback),
-  compared out-of-band. A MITM'd link produces a SAS mismatch detectable on
-  any out-of-band channel.
+  compared out-of-band. The renderings differ in strength: digits carry
+  160 bits of the digest (the strong check), emoji 7 × 6 = 42 bits
+  (convenience display only). A MITM'd link produces a SAS mismatch
+  detectable on any out-of-band channel.
 
 ### 3.4 Malicious peer / contact
 
@@ -319,6 +321,20 @@ verified — a write op with real security weight).
   silent implementation would hang agents).
 - `ident.verify` is namespaced and explicit; an agent marking a bogus key
   verified is visible afterward in the contact's trust state.
+
+**Capabilities intentionally exposed to every connected client** (scoped by
+daemon OS permissions, not by the API — see AGENT-API §4.20/§4.11/§4.16
+advisories):
+
+- `file.send path=` reads any file the daemon's OS user can read — a
+  scoped arbitrary-read/exfiltration channel; `file.save dir=` is the
+  mirror scoped arbitrary-write.
+- `contact.add`/`invite.accept` accept an arbitrary `host:port` and make
+  the daemon dial it — an outbound-connect/reachability oracle.
+- `security.verification_needed`'s `sas_hint` hands the SAS (including the
+  strong digit rendering) to every subscriber: for an API-managed identity
+  the agent IS the verifier. Deployments requiring a human verifier must
+  compare out-of-band — the API cannot express "verified by a person".
 
 **Honest limit.** A malicious same-uid agent can do *anything you can do* —
 send messages as you, read all history, accept contact requests, verify a
@@ -486,6 +502,13 @@ RUSTSEC-2024-0344 (the dalek timing-signal advisory).
     a coerced deny is recovered only by manual DB surgery), so its
     irreversibility is itself the accepted weakness — a false deny can
     strand a contact until a human repairs the store.
+12. **Presence is a public oracle.** `PresenceSubscribe` takes up to 256
+    arbitrary peer-ids with no proof of contact or authorization — any
+    client of the relay can watch the online/offline status of any peer-id
+    it knows. Our own subscriptions disclose our contact watch-set to the
+    relay (folded into the §3.2 contact-graph residual). Accepted for v1:
+    presence is how cheap offline-gating works; gating subscriptions behind
+    per-peer tokens is a relay-side v2 consideration.
 
 ---
 
@@ -543,3 +566,16 @@ normative mechanism in PROTOCOL.md / AGENT-API.md. Changed:
   §11; rate limits → §12; contacts HMAC → PROTOCOL §6 pinning-root +
   PLAN C1–C4; terminal sanitization → now a PLAN M4 deliverable;
   daemon auth → AGENT-API §1.2; `trusted:false` → §6; gap events → §5.8.
+
+## Security review — 2026-11-19
+
+Second-wave hardening pass:
+
+- Added: explicit "capabilities intentionally exposed" list under §3.6 —
+  `file.send`/`file.save` scoped arbitrary read/write, `contact.add`/
+  `invite.accept` outbound-connect oracle, `sas_hint` disclosure (agent is
+  the verifier).
+- Added: §3.3 SAS rendering strength — digits 160 bits vs emoji 42 bits;
+  digits are the strong out-of-band check.
+- Added: §6 item 12 — `PresenceSubscribe` is a public oracle (≤256
+  arbitrary peer-ids, no contact proof required).

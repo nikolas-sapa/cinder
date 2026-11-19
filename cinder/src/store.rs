@@ -1062,7 +1062,9 @@ impl Store {
     }
 
     pub fn edit_message(&self, msg_id: &str, new_body: &str) -> Result<()> {
-        let affected = self.conn()?.execute(
+        let conn = self.conn()?;
+        let tx = conn.unchecked_transaction()?;
+        let affected = tx.execute(
             "UPDATE messages SET body = ?2, edited_at = ?3, revision = revision + 1
              WHERE msg_id = ?1 AND deleted = 0",
             params![msg_id, new_body, now_ms()],
@@ -1070,6 +1072,10 @@ impl Store {
         if affected == 0 {
             return Err(StoreError::NotFound(msg_id.to_string()));
         }
+        // The PRE-edit body lingers in the replay log — scrub it in the same
+        // tx (events_since must never serve an edited-away plaintext).
+        Self::scrub_event_body(&tx, msg_id)?;
+        tx.commit()?;
         Ok(())
     }
 
@@ -1077,7 +1083,9 @@ impl Store {
     /// inside the chat bound to that peer — a contact can never rewrite our
     /// outbound history or a row in another chat.
     pub fn apply_peer_edit(&self, msg_id: &str, chat_id: &str, new_body: &str) -> Result<()> {
-        let affected = self.conn()?.execute(
+        let conn = self.conn()?;
+        let tx = conn.unchecked_transaction()?;
+        let affected = tx.execute(
             "UPDATE messages SET body = ?3, edited_at = ?4, revision = revision + 1
              WHERE msg_id = ?1 AND chat_id = ?2 AND dir = 'in' AND deleted = 0",
             params![msg_id, chat_id, new_body, now_ms()],
@@ -1085,12 +1093,16 @@ impl Store {
         if affected == 0 {
             return Err(StoreError::NotFound(msg_id.to_string()));
         }
+        Self::scrub_event_body(&tx, msg_id)?;
+        tx.commit()?;
         Ok(())
     }
 
     /// Same scoping for peer tombstones: inbound-only, this peer's chat only.
     pub fn apply_peer_delete(&self, msg_id: &str, chat_id: &str) -> Result<()> {
-        let affected = self.conn()?.execute(
+        let conn = self.conn()?;
+        let tx = conn.unchecked_transaction()?;
+        let affected = tx.execute(
             "UPDATE messages SET deleted = 1, body = ''
              WHERE msg_id = ?1 AND chat_id = ?2 AND dir = 'in'",
             params![msg_id, chat_id],
@@ -1098,6 +1110,8 @@ impl Store {
         if affected == 0 {
             return Err(StoreError::NotFound(msg_id.to_string()));
         }
+        Self::scrub_event_body(&tx, msg_id)?;
+        tx.commit()?;
         Ok(())
     }
 
@@ -1156,15 +1170,37 @@ impl Store {
     }
 
     /// Tombstone: marks deleted and clears the body so plaintext does not
-    /// linger in history, FTS, or `chat.list` previews.
+    /// linger in history, FTS, `chat.list` previews — or the replay log,
+    /// whose `message.received` copy is scrubbed in the same transaction.
     pub fn soft_delete(&self, msg_id: &str) -> Result<()> {
-        let affected = self.conn()?.execute(
+        let conn = self.conn()?;
+        let tx = conn.unchecked_transaction()?;
+        let affected = tx.execute(
             "UPDATE messages SET deleted = 1, body = '' WHERE msg_id = ?1",
             [msg_id],
         )?;
         if affected == 0 {
             return Err(StoreError::NotFound(msg_id.to_string()));
         }
+        Self::scrub_event_body(&tx, msg_id)?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Every `message.received` event persists a COPY of the body inside
+    /// `$.message.body.text`. Tombstones/edits/expiry are all reversible
+    /// while `events_since` can still serve the plaintext — so each caller
+    /// scrubs the copy inside its own transaction (audit metadata survives;
+    /// the body is gone for good). The ≤16384-row ring keeps the
+    /// `json_extract` scan cheap enough that no `msg_id` column is
+    /// warranted.
+    fn scrub_event_body(conn: &Connection, msg_id: &str) -> Result<()> {
+        conn.execute(
+            "UPDATE event_log
+                SET payload = json_set(payload, '$.message.body.text', '')
+             WHERE json_extract(payload, '$.message.msg_id') = ?1",
+            [msg_id],
+        )?;
         Ok(())
     }
 
@@ -1226,12 +1262,7 @@ impl Store {
             // message.received payload — expiry is broken if events_since
             // can still serve the plaintext. Scrub it in the same tx so
             // audit metadata survives but the body is gone for good.
-            tx.execute(
-                "UPDATE event_log
-                    SET payload = json_set(payload, '$.message.body.text', '')
-                 WHERE json_extract(payload, '$.message.msg_id') = ?1",
-                [&msg_id],
-            )?;
+            Self::scrub_event_body(&tx, &msg_id)?;
             out.push((chat_id, msg_id));
         }
         tx.commit()?;
@@ -1533,6 +1564,8 @@ impl Store {
     }
 
     /// FTS5 search over message bodies, newest-first, limit-bounded.
+    /// Tombstoned and past-TTL rows are filtered — same contract as
+    /// `chat.history`, so search can't resurrect what the UI cannot show.
     // v2: FTS search is spec'd for a later protocol rev; exercised in tests
     #[allow(dead_code)]
     pub fn search(&self, query: &str, chat_id: Option<&str>, limit: u32) -> Result<Vec<Message>> {
@@ -1541,26 +1574,30 @@ impl Store {
                           m.client_msg_id, m.ts, m.revision, m.edited_at,
                           m.deleted, m.expires_at, m.chat_id
                    FROM messages_fts JOIN messages m ON m.rowid = messages_fts.rowid
-                   WHERE messages_fts MATCH ?1";
+                   WHERE messages_fts MATCH ?1
+                     AND m.deleted = 0
+                     AND (m.expires_at IS NULL OR m.expires_at > ?2)";
+        let now = now_ms();
         let tuples: Vec<(String, MsgRow)> = match chat_id {
             Some(cid) => {
                 let mut stmt = conn.prepare(&format!(
-                    "{sql} AND m.chat_id = ?2 ORDER BY m.ts DESC LIMIT ?3"
+                    "{sql} AND m.chat_id = ?3 ORDER BY m.ts DESC LIMIT ?4"
                 ))?;
                 let rows = stmt
                     .query_map(
-                        params![query, cid, limit.clamp(1, MAX_WINDOW) as i64],
+                        params![query, now, cid, limit.clamp(1, MAX_WINDOW) as i64],
                         |r| Ok((r.get::<_, String>(11)?, Self::msg_tuple_row(r)?)),
                     )?
                     .collect::<std::result::Result<Vec<_>, _>>()?;
                 rows
             }
             None => {
-                let mut stmt = conn.prepare(&format!("{sql} ORDER BY m.ts DESC LIMIT ?2"))?;
+                let mut stmt = conn.prepare(&format!("{sql} ORDER BY m.ts DESC LIMIT ?3"))?;
                 let rows = stmt
-                    .query_map(params![query, limit.clamp(1, MAX_WINDOW) as i64], |r| {
-                        Ok((r.get::<_, String>(11)?, Self::msg_tuple_row(r)?))
-                    })?
+                    .query_map(
+                        params![query, now, limit.clamp(1, MAX_WINDOW) as i64],
+                        |r| Ok((r.get::<_, String>(11)?, Self::msg_tuple_row(r)?)),
+                    )?
                     .collect::<std::result::Result<Vec<_>, _>>()?;
                 rows
             }

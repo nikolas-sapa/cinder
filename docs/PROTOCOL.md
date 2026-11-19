@@ -614,8 +614,11 @@ All state is bounded; every queue has a hard cap and a defined shed policy.
 | Handshake initiations (`InviteAccept` + `Handshake{Msg1}`) | 30 / 60 s / IP, burst 10 |
 | Pending handshakes (`pending_hs`, 10 s TTL) | 8 / IP, 512 global; at cap → `RateLimited` |
 | Handshake completion deadline | 10 s from Msg1 forward → evict + `HandshakeTimeout` |
-| Invite slots | 8 / connection, 64 / IP; ttl ≤ 72 h |
-| Mailboxes | 64 / IP; caps/TTL per §9 |
+| Invite slots | 8 / connection, 64 / IP, 2048 global; ttl ≤ 72 h |
+| Mailboxes | 64 / IP, 4096 global; caps/TTL per §9 |
+| Connections | 2048 global; over-cap → `RateLimited` then close (checked pre-`Hello`) |
+| IP state map | 65 536 entries; at cap evict oldest `last_seen` (prefer `pending_hs == 0`) |
+| Transport body | ≤ `MAX_PLAINTEXT + 18` B per `Transport`; over → `ProtocolViolation` close |
 | Mailbox deposits | 60 / min / mailbox → `RateLimited` |
 | Transport frames | 120 / s / connection → `RateLimited` |
 | Inbound queue per connection | 256 frames, then `RateLimited` |
@@ -624,7 +627,9 @@ All state is bounded; every queue has a hard cap and a defined shed policy.
 | Presence subscriptions | 4 frames / min / connection; ≤ 256 peers per set |
 
 Rate-limit accounting is per-IP for pre-auth surfaces (connect, handshake,
-slots, mailboxes) and per-connection for post-`Hello` traffic.
+slots, mailboxes) and per-connection for post-`Hello` traffic. IPv6 source
+addresses are bucketed by `/64` for all per-IP surfaces, so prefix rotation
+within one `/64` shares the same limits; IPv4 is accounted exactly.
 
 ## 13. What the relay can and cannot see
 

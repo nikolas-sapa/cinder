@@ -788,6 +788,72 @@ async fn driver_initiator_pin_mismatch_kills_session() {
     assert!(matches!(res, Err(Error::PeerIdMismatch { .. })));
 }
 
+// SEC-HS: wait_handshake must match `from` as well as `hs_id` — a forged
+// Handshake frame carrying the real hs_id but stamped from a DIFFERENT
+// peer must be dropped, never accepted into the exchange.
+#[tokio::test]
+async fn driver_drops_forged_same_hs_id_from_other_peer() {
+    let a_id = Identity::generate().unwrap();
+    let b_id = Identity::generate().unwrap();
+    let c_peer = PeerId::random(); // attacker — never completes a session
+    let a_peer = a_id.peer_id();
+    let b_peer = b_id.peer_id();
+    // Manual pair so the attacker holds a sender into the b→a lane.
+    let (tx_ab, rx_ab) = mpsc::unbounded_channel();
+    let (tx_ba, rx_ba) = mpsc::unbounded_channel();
+    let mut la = MemLink {
+        me: a_peer,
+        tx: tx_ab,
+        rx: rx_ba,
+    };
+    let mut lb = MemLink {
+        me: b_peer,
+        tx: tx_ba.clone(),
+        rx: rx_ab,
+    };
+    let attacker_tx = tx_ba; // writes into a's inbound queue stamped from:c_peer
+
+    let init = handshake_flow::initiator(&a_id, &mut la, b_peer, &b_peer, None);
+    // Drive the responder manually so the forged frame lands between Msg1
+    // and Msg2 — ahead of the real Msg3 in the initiator's queue.
+    let manual = async {
+        let (from, hs_id, msg1) = match lb.recv().await.unwrap() {
+            ClientEvent::Handshake { from, hs_id, body } => (from, hs_id, body),
+            other => panic!("expected Handshake, got {other:?}"),
+        };
+        assert_eq!(from, a_peer);
+        let mut b = Session::responder(&b_id).unwrap();
+        b.accept_handshake(msg1).unwrap();
+        let msg2 = b.produce_handshake().unwrap();
+        // Forged first: same hs_id, wrong peer, garbage body — if the
+        // initiator accepted it the handshake would error out.
+        attacker_tx
+            .send(ClientEvent::Handshake {
+                from: c_peer,
+                hs_id,
+                body: HandshakeMsg::Msg2(vec![0xAA; 24]),
+            })
+            .unwrap();
+        lb.send_handshake(from, hs_id, msg2).await.unwrap();
+        // If the forged frame was accepted the initiator is already dead —
+        // bound the Msg3 wait so a regression fails fast instead of hanging.
+        let msg3 = match tokio::time::timeout(std::time::Duration::from_secs(5), lb.recv()).await {
+            Ok(Ok(ClientEvent::Handshake { body, .. })) => body,
+            Ok(Ok(other)) => panic!("expected Handshake, got {other:?}"),
+            Ok(Err(e)) => panic!("link died: {e}"),
+            Err(_) => panic!("initiator never produced Msg3 — forged frame was accepted"),
+        };
+        b.accept_handshake(msg3).unwrap();
+        b.accept_learned_peer().unwrap();
+        b.finish_handshake().unwrap();
+        b
+    };
+    let (ra, b) = tokio::join!(init, manual);
+    let a = ra.unwrap();
+    assert_eq!(a.state(), SessionState::Trusted(b_peer));
+    assert_eq!(b.state(), SessionState::Trusted(a_peer));
+}
+
 // ---- real relay E2E ---------------------------------------------------------------
 
 #[tokio::test]

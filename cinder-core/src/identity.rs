@@ -1,6 +1,7 @@
 use std::path::Path;
 
 use secrecy::{ExposeSecret, SecretSlice};
+use snow::resolvers::CryptoResolver;
 use zeroize::Zeroize;
 
 use crate::error::Error;
@@ -33,6 +34,18 @@ impl Identity {
                 "identity blob is {} bytes, expected {IDENTITY_BLOB_LEN}",
                 blob.len()
             )));
+        }
+        // The pub half is trusted blind today — a corrupted/rolled blob would
+        // load silently and sign/DH under a keypair that doesn't match our
+        // advertised peer-id. Derive X25519(priv) and refuse on mismatch.
+        let mut dh = snow::resolvers::DefaultResolver
+            .resolve_dh(&snow::params::DHChoice::Curve25519)
+            .ok_or_else(|| Error::IdentityStore("no x25519 resolver".into()))?;
+        dh.set(&blob[..32]);
+        if dh.pubkey() != &blob[32..] {
+            return Err(Error::IdentityStore(
+                "identity blob corrupt: stored public key does not match private key".into(),
+            ));
         }
         Ok(Self {
             keypair: snow::Keypair {

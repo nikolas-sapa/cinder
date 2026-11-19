@@ -202,7 +202,7 @@ fn p_msg_send() -> Value {
         json!({
             "to": {"type": "string", "description": "contact:, chat:, or peer: id; resolved to the 1:1 chat"},
             "body": {"type": "string", "maxLength": 8192, "description": "UTF-8, <= limits.max_body_bytes"},
-            "client_msg_id": {"type": "string", "minLength": 1, "description": "client-chosen idempotency key; a retry returns the same msg_id with deduped:true"},
+            "client_msg_id": {"type": "string", "minLength": 1, "maxLength": 128, "description": "client-chosen idempotency key; a retry returns the same msg_id with deduped:true"},
             "ttl_ms": {"type": "integer", "minimum": 0, "description": "optional disappearing-message TTL in ms; absent = the chat's local set_disappearing default applies, 0 = explicitly non-expiring"},
         }),
     )
@@ -227,7 +227,7 @@ fn p_msg_edit() -> Value {
         json!({
             "msg_id": id_prop("msg:", "message to edit (own messages only)"),
             "body": {"type": "string", "maxLength": 8192},
-            "client_op_id": {"type": "string", "description": "idempotency key, same semantics as client_msg_id"},
+            "client_op_id": {"type": "string", "maxLength": 128, "description": "idempotency key, same semantics as client_msg_id"},
         }),
     )
 }
@@ -245,7 +245,7 @@ fn p_msg_delete() -> Value {
         json!({
             "msg_id": id_prop("msg:", ""),
             "scope": {"enum": ["local", "everyone"], "default": "local", "description": "everyone propagates deletion to the peer (own messages only)"},
-            "client_op_id": {"type": "string"},
+            "client_op_id": {"type": "string", "maxLength": 128},
         }),
     )
 }
@@ -585,7 +585,7 @@ fn p_file_send() -> Value {
             "kind": {"enum": ["file", "image", "voice"], "default": "file", "description": "image attempts a thumbnail; voice requires audio"},
             "audio": {"type": "object", "required": ["duration_ms", "codec"], "properties": {"duration_ms": {"type": "integer", "maximum": 300000}, "codec": {"type": "string", "maxLength": 32}, "sample_rate_hz": {"type": "integer"}, "channels": {"type": "integer"}}, "description": "required when kind:voice; duration_ms <= file_voice_max_ms"},
             "caption": {"type": "string", "maxLength": 1024, "description": "chat-visible caption, <=1024 B"},
-            "client_xfer_id": {"type": "string", "minLength": 1, "description": "idempotency key, same semantics as client_msg_id: replay returns the same file_id with deduped:true"},
+            "client_xfer_id": {"type": "string", "minLength": 1, "maxLength": 128, "description": "idempotency key, same semantics as client_msg_id: replay returns the same file_id with deduped:true"},
         }),
     )
 }
@@ -696,7 +696,7 @@ fn p_call_ring() -> Value {
         json!({
             "to": {"type": "string", "description": "contact:/peer:/chat: id of the callee"},
             "media": {"enum": ["audio"], "default": "audio", "description": "only 'audio' exists in Phase A"},
-            "client_call_id": {"type": "string", "description": "idempotency key like client_msg_id; replays return the stored result"},
+            "client_call_id": {"type": "string", "maxLength": 128, "description": "idempotency key like client_msg_id; replays return the stored result"},
         }),
     )
 }
@@ -875,7 +875,7 @@ fn e_msg_state() -> Value {
         &["msg_id", "client_msg_id", "chat_id", "state", "reason"],
         json!({
             "msg_id": id_prop("msg:", ""),
-            "client_msg_id": {"type": "string", "description": "send's idempotency key; correlates before msg_id is known"},
+            "client_msg_id": {"type": "string", "maxLength": 128, "description": "send's idempotency key; correlates before msg_id is known"},
             "chat_id": id_prop("chat:", ""),
             "state": {"enum": ["queued", "sent", "delivered", "read", "failed"], "description": "valid transitions only; read is reserved and never emitted in v1"},
             "reason": {"enum": ["peer_offline", "mailbox_full", "key_changed_blocked", "contact_blocked", "denied", "expired", "internal", null], "description": "set on failed; denied = peer was contact.deny'd mid-flight"},

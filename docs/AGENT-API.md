@@ -178,6 +178,14 @@ capability-scoped tokens carrying a subset without changing the shape:
 | `admin` | `shutdown.request` |
 | `*` | wildcard — all of the above. Granted by every v1 transport |
 
+In v1 these scopes are **advisory**: every transport grants `["*"]`, so the
+scope strings shape how v2 will subset access rather than enforce a boundary
+today. The real v1 security boundary is the transport credential check plus
+socket permissions (§3.1 — process ownership for stdio, peer-uid match and
+`0700`/`0600` file modes for the daemon socket). Anything that can reach the
+API can use the full surface; treat scope grants as capability declarations,
+not confinement.
+
 `capabilities` result shape (v1):
 
 ```json
@@ -659,6 +667,13 @@ consumed — rendezvous tokens are one-time; or contact already exists),
 `-32010`/`not_connected` (relay unreachable — contact stays `pending_out`
 with `substate:"retry"`).
 
+> **Advisory:** `link` carries an arbitrary `host:port` — the daemon dials
+> whatever relay address the URI names. Any client that can call this method
+> can make the daemon initiate outbound TCP to an attacker-chosen endpoint
+> and observe success/failure via `substate` (an outbound-connect /
+> reachability oracle). Intended — dialing named relays is the feature; the
+> socket perimeter (§3.1) is the control.
+
 **Scope:** `contacts`.
 
 ---
@@ -766,6 +781,9 @@ display/confirmation.
 addresses), `-32018`/`conflict` (token consumed/expired — one-time use,
 intercepted links die here), `-32010`/`not_connected`.
 
+> **Advisory:** same outbound-connect surface as `contact.add` (§4.11) —
+> the link's `host:port` is dialed unconditionally.
+
 **Scope:** `contacts`.
 
 ---
@@ -781,6 +799,21 @@ is per-session and changes on every re-handshake (expected, not an alarm;
 see `sas_hint`). A wrong value is an error, never a silent rebind. Once
 `verified`, the status persists across reconnects while the pinned key
 holds; only `security.identity_changed` revokes it.
+
+**SAS strength:** the two renderings are NOT equivalent checks. The digit
+form renders 20 bytes (160 bits) of the SAS digest and is the strong
+out-of-band comparison; the emoji form renders only 7 × 6 = 42 bits of the
+same digest — a convenience display adequate for casual matching but far
+weaker against a deliberate forgery. When the comparison matters, compare
+digits.
+
+**Advisory:** for an API-managed identity the *agent itself is the
+verifier* — `ident.verify` asserts that SOMEONE compared the SAS, and the
+SAS is handed to every connected client via
+`security.verification_needed`'s `sas_hint` (§5.7). A deployment that needs
+a *human* in the loop must have the human compare the SAS out-of-band
+against a rendering the agent does not control (e.g. the TUI), not via this
+API.
 
 **Params**
 
@@ -926,6 +959,15 @@ not delivery — `file_state` events carry the lifecycle. Inbound transfers
 auto-accept per the `files.auto_accept` account meta (`contacts` default;
 `verified` restricts to verified contacts, `manual` requires `file.accept`).
 
+> **Filesystem advisory:** `file.send path=` is a *scoped arbitrary-read* —
+> the daemon reads any file its OS user can read and transmits it; combined
+> with `file.info`/`file_state` sizes that is a local-file exfiltration
+> channel. `file.save dir=` is the mirror *scoped arbitrary-write* — peer
+> bytes can be written anywhere the daemon's OS user may create a file.
+> Both are the intended capability (a file-transfer API must move bytes),
+> bounded only by the daemon's filesystem permissions — the socket
+> perimeter (§3.1) is the access control, not the parameters.
+
 #### `file.send` — scope `send`
 
 | Field | Type | Req | Description |
@@ -969,8 +1011,9 @@ inflight caps); `-32018` conflict.
 
 **Params:** `{file_id, dir?, name?}`. Only `state:"complete"` inbound rows;
 rehashes the staged bytes before writing. The untrusted `name` is
-basename-sanitized; `dir` must be an existing non-symlink directory;
-collisions get a `-N` suffix. → `{file_id, path, bytes}`.
+basename-sanitized; `dir` must be an existing non-symlink directory but is
+otherwise unrestricted — see the §4.20 filesystem advisory (scoped
+arbitrary-write). Collisions get a `-N` suffix. → `{file_id, path, bytes}`.
 
 #### `file.thumb` — scope `read`
 
@@ -1333,6 +1376,12 @@ call. `sas_hint` is the SAS of the most recent completed handshake — it
 changes if the session is re-established (expected, not an alarm). Only
 `security.identity_changed` (a fingerprint change) indicates a different key.
 
+**Disclosure note:** `sas_hint` carries BOTH renderings — including the
+strong 160-bit digit string — to every subscribed client. That is
+intentional: for API-managed identities the agent *is* the verification
+surface (§4.16 advisory). Deployments requiring a human verifier must
+compare out-of-band and not rely on the agent channel at all.
+
 ```json
 {"jsonrpc":"2.0","method":"security.verification_needed","params":{"subscription_id":"sub:1","seq":1205,"ts":"2026-11-18T16:10:09Z","contact_id":"contact:b21e08","peer_id":"peer:z4mk...","sas_hint":{"emoji":"🦊🌊🔥🌵⚓🌙🍄","digits":"44-19-07-82-56"}}}
 ```
@@ -1580,6 +1629,7 @@ On `shutdown.request` acceptance (or SIGTERM / stdin EOF):
 |---|---|
 | Line/frame | 4 MiB hard cap |
 | Message body | 8 KiB UTF-8 (`limits.max_body_bytes`) |
+| Idempotency keys | 128 B (`client_msg_id`/`client_op_id`/`client_xfer_id`/`client_call_id`) |
 | Send queue | 1024 frames/client |
 | History page | ≤ 500 messages |
 | Replay log | bounded, advertised (`replay_log_max_events`) |
@@ -1645,3 +1695,21 @@ Pre-implementation spec audit against BRIEF.md. Checked / changed:
 - Verified: every event/error schema carries no secret material — the only
   security-adjacent payloads (fingerprints, `sas_hint`, `link`) are either
   public-by-design or intentionally returned to the local owner.
+
+## Security review — 2026-11-19
+
+Second-wave hardening pass; this doc gained normative/advisory text only:
+
+- Added: v1 scopes are advisory — `["*"]` on every transport; the real
+  boundary is peer credentials + socket permissions (§3.2).
+- Added: `contact.add`/`invite.accept` outbound-connect oracle advisory —
+  `host:port` in the link is dialed unconditionally (§4.11, §4.15).
+- Added: `ident.verify`/`security.verification_needed` disclosure notes —
+  `sas_hint` exposes the SAS to all subscribers; the agent IS the verifier,
+  human verification must compare out-of-band (§4.16, §5.7).
+- Added: digit-vs-emoji SAS strength — digits carry 160 bits of the digest,
+  emoji 42 bits; digits are the strong check (§4.16).
+- Added: `file.send`/`file.save` filesystem advisory — scoped
+  arbitrary-read and arbitrary-write within daemon OS permissions (§4.20).
+- Added: idempotency-key bound — all `client_*` keys capped at 128 B,
+  enforced at the RPC edge and in `rpc.describe` `maxLength` (§8.4).

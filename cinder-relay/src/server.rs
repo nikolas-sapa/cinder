@@ -5,7 +5,7 @@ use cinder_core::proto::{
 use futures::{SinkExt, StreamExt};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::net::{IpAddr, SocketAddr};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::net::{TcpListener, TcpStream};
@@ -104,6 +104,17 @@ pub struct RelayConfig {
     pub invite_default_ttl: Duration,
     /// Invite TTL upper clamp (72 h).
     pub invite_max_ttl: Duration,
+    /// Live mailboxes global (4096) — per-IP caps alone can't bound store
+    /// size under source-IP spray.
+    pub mailboxes_global: usize,
+    /// Live invite slots global (2048).
+    pub invites_global: usize,
+    /// Concurrent TCP connections global (2048); each conn costs a task +
+    /// codec buffers, so the count must be capped, not just rate-limited.
+    pub conns_global: usize,
+    /// Max tracked per-IP(/64) rate-state entries (65536); evict-oldest on
+    /// insert so an IP spray can't grow the map unbounded.
+    pub ips_map_max: usize,
 }
 
 impl Default for RelayConfig {
@@ -154,6 +165,10 @@ impl Default for RelayConfig {
             },
             invite_default_ttl: Duration::from_secs(24 * 3600),
             invite_max_ttl: Duration::from_secs(caps::INVITE_MAX_TTL as u64),
+            mailboxes_global: 4096,
+            invites_global: 2048,
+            conns_global: 2048,
+            ips_map_max: 65536,
         }
     }
 }
@@ -249,6 +264,10 @@ impl OutboundQueue {
         self.inner.lock().unwrap().q.pop_front()
     }
 
+    fn has_pending(&self) -> bool {
+        !self.inner.lock().unwrap().q.is_empty()
+    }
+
     fn is_dead(&self) -> bool {
         let inner = self.inner.lock().unwrap();
         inner.closed && inner.q.is_empty()
@@ -289,6 +308,50 @@ struct Pending {
     at: Instant,
 }
 
+/// Decrements the global live-connection count on drop. The count is taken
+/// before `Hello` so pre-auth connection spray is bounded too.
+struct ActiveConn(Arc<RelayState>);
+
+impl Drop for ActiveConn {
+    fn drop(&mut self) {
+        self.0.conns_active.fetch_sub(1, Ordering::Relaxed);
+    }
+}
+
+/// Per-IP accounting key: IPv4 stays exact; IPv6 collapses to its /64
+/// prefix — per-address caps are meaningless when a spray can mint a fresh
+/// address per connection inside one delegated prefix.
+fn ip_key(ip: IpAddr) -> IpAddr {
+    match ip {
+        IpAddr::V4(_) => ip,
+        IpAddr::V6(v6) => {
+            let mut octets = v6.octets();
+            octets[8..].fill(0);
+            IpAddr::V6(octets.into())
+        }
+    }
+}
+
+/// Bounded `ips` insert: at `ips_map_max`, evict the oldest-`last_seen`
+/// entry — preferring ones holding no pending handshakes — so the map size
+/// stays capped under source-IP spray.
+fn ip_state<'a>(
+    ips: &'a mut HashMap<IpAddr, IpState>,
+    cfg: &RelayConfig,
+    key: IpAddr,
+) -> &'a mut IpState {
+    if !ips.contains_key(&key) && ips.len() >= cfg.ips_map_max {
+        if let Some(victim) = ips
+            .iter()
+            .min_by_key(|(_, e)| (e.pending_hs > 0, e.last_seen))
+            .map(|(k, _)| *k)
+        {
+            ips.remove(&victim);
+        }
+    }
+    ips.entry(key).or_insert_with(|| IpState::new(cfg))
+}
+
 struct ConnState {
     out: Arc<OutboundQueue>,
     subscribed: Mutex<HashSet<PeerId>>,
@@ -301,9 +364,13 @@ struct RelayState {
     peers: Mutex<HashMap<PeerId, Arc<OutboundQueue>>>,
     conns: Mutex<HashMap<u64, Arc<ConnState>>>,
     subs: Mutex<HashMap<PeerId, HashSet<u64>>>,
-    pending: Mutex<HashMap<HsId, Pending>>,
+    /// Keyed `(initiator conn_id, hs_id)` — an hs_id alone can collide
+    /// across conns, and a blind `insert` would evict the original attempt
+    /// while leaving the original initiator's `pending_hs` slot burned.
+    pending: Mutex<HashMap<(u64, HsId), Pending>>,
     ips: Mutex<HashMap<IpAddr, IpState>>,
     mail: crate::mailbox::MailStore,
+    conns_active: AtomicUsize,
 }
 
 impl RelayState {
@@ -316,6 +383,7 @@ impl RelayState {
             pending: Mutex::new(HashMap::new()),
             ips: Mutex::new(HashMap::new()),
             mail: crate::mailbox::MailStore::new(),
+            conns_active: AtomicUsize::new(0),
         }
     }
 
@@ -339,6 +407,10 @@ impl RelayState {
 }
 
 static NEXT_CONN: AtomicU64 = AtomicU64::new(1);
+
+/// Max outbound frames written per notify wake — bounds one wake's work so
+/// a flooded queue can't monopolize the conn loop under unbiased select.
+const OUT_DRAIN_BATCH: usize = 64;
 
 fn now_unix() -> u64 {
     SystemTime::now()
@@ -437,16 +509,31 @@ impl Conn {
 
 fn register_ip_conn(state: &RelayState, ip: IpAddr) -> bool {
     let mut ips = state.ips.lock().unwrap();
-    let e = ips.entry(ip).or_insert_with(|| IpState::new(&state.cfg));
+    let e = ip_state(&mut ips, &state.cfg, ip);
     e.last_seen = Instant::now();
     e.conn_bucket.allow()
 }
 
 async fn handle_conn(state: Arc<RelayState>, stream: TcpStream, addr: SocketAddr) {
-    let ip = addr.ip();
+    let ip = ip_key(addr.ip());
     let (rh, wh) = stream.into_split();
     let mut writer = tokio_util::codec::FramedWrite::new(wh, FrameCodec::<ServerMsg>::transport());
     let mut reader = tokio_util::codec::FramedRead::new(rh, FrameCodec::<ClientMsg>::pre_hello());
+
+    // Global connection cap first: the per-IP rate below can't bound total
+    // conns under source-IP spray, and every conn costs a task + buffers.
+    if state.conns_active.fetch_add(1, Ordering::Relaxed) >= state.cfg.conns_global {
+        state.conns_active.fetch_sub(1, Ordering::Relaxed);
+        let _ = writer
+            .send(ServerMsg::err(
+                ErrorCode::RateLimited,
+                "relay connection capacity reached",
+            ))
+            .await;
+        let _ = writer.flush().await;
+        return;
+    }
+    let _active = ActiveConn(state.clone());
 
     if !register_ip_conn(&state, ip) {
         let _ = writer
@@ -558,11 +645,15 @@ async fn handle_conn(state: Arc<RelayState>, stream: TcpStream, addr: SocketAddr
     let mut last_frame = Instant::now();
     loop {
         let idle_at = TokioInstant::from_std(last_frame + state.cfg.idle_timeout);
+        // No `biased`: a steady stream of forwarded frames must not pin the
+        // notify branch and starve the reader + idle branches (conn would
+        // livelock — never reading, never timing out). The drain is also
+        // bounded per wake so one wake can't monopolize the loop.
         let act = tokio::select! {
-            biased;
             _ = out.notify.notified() => {
                 let mut io_err = false;
-                while let Some(msg) = out.pop() {
+                for _ in 0..OUT_DRAIN_BATCH {
+                    let Some(msg) = out.pop() else { break };
                     if writer.feed(msg).await.is_err() {
                         io_err = true;
                         break;
@@ -570,6 +661,12 @@ async fn handle_conn(state: Arc<RelayState>, stream: TcpStream, addr: SocketAddr
                 }
                 if io_err || writer.flush().await.is_err() || out.is_dead() {
                     break;
+                }
+                // The batch cap may leave frames queued after the consumed
+                // permit — re-arm so the queue can't stall; unbiased
+                // polling still lets reader/idle branches interleave.
+                if out.has_pending() {
+                    out.notify.notify_one();
                 }
                 Act::Keep
             }
@@ -590,8 +687,21 @@ async fn handle_conn(state: Arc<RelayState>, stream: TcpStream, addr: SocketAddr
         match act {
             Act::Keep => {}
             Act::SendErrorThenClose(code, detail) => {
-                let _ = writer.send(ServerMsg::err(code, detail)).await;
-                let _ = writer.flush().await;
+                // Flush already-queued outbound first (bounded at the queue
+                // cap): a close must not silently drop the error trail
+                // behind it — e.g. the strike series that triggered it.
+                let mut io_err = false;
+                for _ in 0..out.cap {
+                    let Some(m) = out.pop() else { break };
+                    if writer.feed(m).await.is_err() {
+                        io_err = true;
+                        break;
+                    }
+                }
+                if !io_err {
+                    let _ = writer.send(ServerMsg::err(code, detail)).await;
+                    let _ = writer.flush().await;
+                }
                 break;
             }
             Act::SendNow(msgs) => {
@@ -625,8 +735,8 @@ fn cleanup(state: &RelayState, conn: &Conn) {
     {
         let mut pending = state.pending.lock().unwrap();
         let mut ips = state.ips.lock().unwrap();
-        pending.retain(|_, p| {
-            if Arc::ptr_eq(&p.initiator, &conn.out) {
+        pending.retain(|(cid, _), p| {
+            if *cid == conn.id {
                 if let Some(e) = ips.get_mut(&p.ip) {
                     e.pending_hs = e.pending_hs.saturating_sub(1);
                 }
@@ -666,18 +776,22 @@ fn cleanup(state: &RelayState, conn: &Conn) {
 fn admit_initiation(state: &RelayState, conn: &Conn, hs_id: HsId) -> bool {
     let mut pending = state.pending.lock().unwrap();
     let mut ips = state.ips.lock().unwrap();
-    let e = ips
-        .entry(conn.ip)
-        .or_insert_with(|| IpState::new(&state.cfg));
+    let e = ip_state(&mut ips, &state.cfg, conn.ip);
     e.last_seen = Instant::now();
     let under_caps =
         e.pending_hs < state.cfg.pending_hs_per_ip && pending.len() < state.cfg.pending_hs_global;
     if !(e.hs_bucket.allow() && under_caps) {
         return false;
     }
+    // Refuse hs_id reuse on this conn rather than evicting the live attempt
+    // (an evicted entry would never free its pending_hs slot nor fire its
+    // HandshakeTimeout — a wedge at pending_hs_per_ip reuses).
+    if pending.contains_key(&(conn.id, hs_id)) {
+        return false;
+    }
     e.pending_hs += 1;
     pending.insert(
-        hs_id,
+        (conn.id, hs_id),
         Pending {
             initiator: conn.out.clone(),
             ip: conn.ip,
@@ -691,16 +805,12 @@ fn admit_initiation(state: &RelayState, conn: &Conn, hs_id: HsId) -> bool {
 /// before any forward (e.g. InviteAccept with a dead token).
 fn abort_initiation(state: &RelayState, conn: &Conn, hs_id: HsId) {
     let mut pending = state.pending.lock().unwrap();
-    let Some(p) = pending.remove(&hs_id) else {
+    let Some(p) = pending.remove(&(conn.id, hs_id)) else {
         return;
     };
-    if Arc::ptr_eq(&p.initiator, &conn.out) {
-        let mut ips = state.ips.lock().unwrap();
-        if let Some(e) = ips.get_mut(&p.ip) {
-            e.pending_hs = e.pending_hs.saturating_sub(1);
-        }
-    } else {
-        pending.insert(hs_id, p);
+    let mut ips = state.ips.lock().unwrap();
+    if let Some(e) = ips.get_mut(&p.ip) {
+        e.pending_hs = e.pending_hs.saturating_sub(1);
     }
 }
 
@@ -708,9 +818,7 @@ fn abort_initiation(state: &RelayState, conn: &Conn, hs_id: HsId) {
 fn bad_token(state: &RelayState, conn: &mut Conn, detail: &'static str) -> Act {
     let close = {
         let mut ips = state.ips.lock().unwrap();
-        let e = ips
-            .entry(conn.ip)
-            .or_insert_with(|| IpState::new(&state.cfg));
+        let e = ip_state(&mut ips, &state.cfg, conn.ip);
         e.last_seen = Instant::now();
         let now = Instant::now();
         e.bad_tokens.push_back(now);
@@ -773,7 +881,9 @@ fn dispatch(state: &Arc<RelayState>, conn: &mut Conn, cs: &Arc<ConnState>, msg: 
                 }
             } else if matches!(body, HandshakeMsg::Msg3(_)) {
                 let mut pending = state.pending.lock().unwrap();
-                if let Some(p) = pending.remove(&hs_id) {
+                // Msg3 comes from the initiator, so conn.id scopes the key
+                // back to the exact attempt that Msg1 registered.
+                if let Some(p) = pending.remove(&(conn.id, hs_id)) {
                     let mut ips = state.ips.lock().unwrap();
                     if let Some(e) = ips.get_mut(&p.ip) {
                         e.pending_hs = e.pending_hs.saturating_sub(1);
@@ -795,6 +905,15 @@ fn dispatch(state: &Arc<RelayState>, conn: &mut Conn, cs: &Arc<ConnState>, msg: 
             session_id,
             body,
         } => {
+            // §2 semantic cap: the codec bounds the whole frame at 16 KiB
+            // but a transport ciphertext must stay ≤ 8210 B — an oversized
+            // body is a ProtocolViolation close, not just dead ciphertext.
+            if body.len() > crate::mailbox::MAX_ENVELOPE_BODY {
+                return Act::SendErrorThenClose(
+                    ErrorCode::ProtocolViolation,
+                    "transport body exceeds 8210 B",
+                );
+            }
             state.forward(
                 &to,
                 ServerMsg::Transport {
@@ -928,6 +1047,10 @@ fn dispatch(state: &Arc<RelayState>, conn: &mut Conn, cs: &Arc<ConnState>, msg: 
             }
         }
         ClientMsg::PresenceSubscribe { peers } => {
+            // Intentional presence oracle (PROTOCOL §13 lists interest sets
+            // as relay-visible metadata): any client may watch arbitrary
+            // peer-ids' online status — that IS the contact-presence
+            // feature. Bounded by presence_rate + the set cap below.
             if !conn.presence_bucket.allow() {
                 return conn.strike(state, "presence subscribe rate exceeded");
             }
@@ -967,5 +1090,70 @@ fn dispatch(state: &Arc<RelayState>, conn: &mut Conn, cs: &Arc<ConnState>, msg: 
             conn.out.push(ServerMsg::Pong { nonce });
             Act::Keep
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::net::Ipv4Addr;
+
+    #[test]
+    fn ip_key_buckets_ipv6_by_slash64() {
+        let a: IpAddr = "2001:db8:1:2::1".parse().unwrap();
+        let b: IpAddr = "2001:db8:1:2:ffff:ffff:ffff:ffff".parse().unwrap();
+        let c: IpAddr = "2001:db8:1:3::1".parse().unwrap();
+        // Same /64 → same bucket (rotation inside a prefix shares limits).
+        assert_eq!(ip_key(a), ip_key(b));
+        // Different /64 → different bucket.
+        assert_ne!(ip_key(a), ip_key(c));
+        // IPv4 stays exact.
+        let v4 = IpAddr::V4(Ipv4Addr::new(203, 0, 113, 7));
+        assert_eq!(ip_key(v4), v4);
+    }
+
+    #[test]
+    fn ip_state_evicts_oldest_at_map_cap() {
+        let cfg = RelayConfig {
+            ips_map_max: 3,
+            ..RelayConfig::default()
+        };
+        let mut ips = HashMap::new();
+        for i in 0..3u8 {
+            let key = IpAddr::V4(Ipv4Addr::new(10, 0, 0, i));
+            let mut e = IpState::new(&cfg);
+            // Distinct ages: 10.0.0.0 is the oldest.
+            e.last_seen = Instant::now() - Duration::from_secs(10 - u64::from(i));
+            ips.insert(key, e);
+        }
+        let new_key = IpAddr::V4(Ipv4Addr::new(10, 0, 0, 9));
+        let _ = ip_state(&mut ips, &cfg, new_key);
+        assert_eq!(ips.len(), 3);
+        assert!(ips.contains_key(&new_key));
+        assert!(!ips.contains_key(&IpAddr::V4(Ipv4Addr::new(10, 0, 0, 0))));
+    }
+
+    #[test]
+    fn ip_state_prefers_evicting_idle_entries() {
+        let cfg = RelayConfig {
+            ips_map_max: 2,
+            ..RelayConfig::default()
+        };
+        let mut ips = HashMap::new();
+        // Older entry holds a pending handshake — the fresher idle one is
+        // the correct victim.
+        let busy = IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1));
+        let idle = IpAddr::V4(Ipv4Addr::new(10, 0, 0, 2));
+        let mut e = IpState::new(&cfg);
+        e.last_seen = Instant::now() - Duration::from_secs(10);
+        e.pending_hs = 1;
+        ips.insert(busy, e);
+        let mut e = IpState::new(&cfg);
+        e.last_seen = Instant::now();
+        ips.insert(idle, e);
+        let new_key = IpAddr::V4(Ipv4Addr::new(10, 0, 0, 9));
+        let _ = ip_state(&mut ips, &cfg, new_key);
+        assert!(ips.contains_key(&busy));
+        assert!(!ips.contains_key(&idle));
     }
 }

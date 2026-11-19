@@ -43,6 +43,7 @@ image = { version = "0.25", default-features = false, features = [
     "webp",
 ] }
 mime_guess = "2"
+tempfile = "3"
 # Phase A voice calls (docs/plans/voice-video-calls.md): Opus codec rides the
 # existing Noise session — audiopus is the wire format, always linked (needs
 # libopus via pkg-config). cpal is the real mic/speaker backend, gated behind
@@ -67,4 +68,7 @@ objc2-local-authentication = { version = "0.3.2", default-features = false, feat
 block2 = "0.6.2"
 
 [dev-dependencies]
-tempfile = "3"
+# test-seams exposes cinder-core's hidden test helpers (e.g.
+# Session::test_set_local_sid) to this crate's integration tests only —
+# resolver = "2" keeps the feature out of non-test builds.
+cinder-core = { path = "../cinder-core", features = ["test-seams"] }

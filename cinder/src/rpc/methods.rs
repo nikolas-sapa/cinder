@@ -146,6 +146,22 @@ fn check_limit(eng: &Engine, limit: u32, field: &str) -> Result<(), RpcError> {
     }
 }
 
+/// Idempotency keys land in `DedupTable`'s HashMap verbatim, so they can't
+/// ride the 4 MiB frame cap unbounded — bound them at the RPC edge. The
+/// core enforces the same number for `client_xfer_id`; keeping the constant
+/// literal here mirrors how `limits_json` keeps xfer caps literal so the
+/// rpc tree compiles standalone under `#[path]` test includes.
+pub const IDEMPOTENCY_KEY_MAX_BYTES: usize = 128;
+
+fn check_idempotency_key(field: &str, key: &str) -> Result<(), RpcError> {
+    if key.is_empty() || key.len() > IDEMPOTENCY_KEY_MAX_BYTES {
+        return Err(RpcError::invalid_params(format!(
+            "'{field}' must be 1..={IDEMPOTENCY_KEY_MAX_BYTES} bytes"
+        )));
+    }
+    Ok(())
+}
+
 async fn session_hello(
     eng: &Engine,
     sess: &mut Session,
@@ -269,9 +285,7 @@ async fn msg_send(eng: &Engine, params: Option<Value>) -> Result<Value, RpcError
             eng.cfg.max_body_bytes
         )));
     }
-    if p.client_msg_id.is_empty() {
-        return Err(RpcError::invalid_params("client_msg_id must be non-empty"));
-    }
+    check_idempotency_key("client_msg_id", &p.client_msg_id)?;
     let fingerprint =
         json!({"m": "msg.send", "to": p.to, "body": p.body, "ttl_ms": p.ttl_ms}).to_string();
     match eng.dedup_lookup(&p.client_msg_id, &fingerprint) {
@@ -334,6 +348,7 @@ where
     let Some(key) = op_key else {
         return call().await;
     };
+    check_idempotency_key("client_op_id", &key)?;
     let fp = fingerprint.to_string();
     match eng.dedup_lookup(&key, &fp) {
         DedupHit::Replay(result) => return Ok(result),
@@ -852,9 +867,7 @@ async fn file_send(eng: &Engine, params: Option<Value>) -> Result<Value, RpcErro
             return Err(RpcError::invalid_params("audio.codec must be 1..=32 bytes"));
         }
     }
-    if p.client_xfer_id.is_empty() {
-        return Err(RpcError::invalid_params("client_xfer_id must be non-empty"));
-    }
+    check_idempotency_key("client_xfer_id", &p.client_xfer_id)?;
     // Fingerprint hashes `data` so the dedup record stays small.
     let data_fp = p.data.as_ref().map(|d| {
         use sha2::Digest;
@@ -983,9 +996,7 @@ async fn call_ring(eng: &Engine, params: Option<Value>) -> Result<Value, RpcErro
     // `client_call_id` dedup mirrors msg.send: same key+payload replays the
     // stored result; same key different payload → -32018.
     if let Some(cid) = p.client_call_id.clone() {
-        if cid.is_empty() {
-            return Err(RpcError::invalid_params("client_call_id must be non-empty"));
-        }
+        check_idempotency_key("client_call_id", &cid)?;
         let fingerprint = json!({"m": "call.ring", "to": p.to, "media": p.media}).to_string();
         match eng.dedup_lookup(&cid, &fingerprint) {
             DedupHit::Replay(mut result) => {

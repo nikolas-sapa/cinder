@@ -22,6 +22,26 @@ and foreign-sid tombstone poisoning during responder install. The
 "SUSPECTED" list below remains open (lower confidence); see
 `docs/CODE-AUDIT.md` for the parallel security findings, also resolved.
 
+### Second wave (2026-11-19)
+
+A follow-up hardening pass closed a second set of findings, at a high
+level: replay-log plaintext retention on tombstone/edit/expiry (event
+payloads now scrubbed in the same transaction as the message mutation);
+`Store::search` now filters tombstoned/past-TTL rows; RPC idempotency keys
+(`client_msg_id`/`client_op_id`/`client_xfer_id`/`client_call_id`) are
+bounded at 128 B at the RPC edge and in `rpc.describe` schemas; the TUI
+external-editor draft file moved to `tempfile::NamedTempFile` (no
+predictable `/tmp` path, drop-guaranteed cleanup) and `/files` overlay
+names go through the same sanitizer as `file_label`; cinder-core's
+`Session::test_set_local_sid` is now behind the `test-seams` feature;
+`Identity::from_stored_blob` verifies `pub == X25519(priv)`; keystore
+keyring/age paths no longer move secrets through unmanaged `String`/`Vec`;
+`wait_handshake` matches the sender's peer-id as well as `hs_id`.
+Documentation advisories (intended exposures now explicit — filesystem
+read/write, outbound-connect oracle, `sas_hint` disclosure, advisory
+scopes, emoji-vs-digit SAS strength, presence oracle) landed in
+`AGENT-API.md`/`THREAT-MODEL.md`.
+
 ## Findings, ranked by likelihood × severity
 
 ### 1. CONFIRMED — `mailbox_drain` self-deadlocks `op_lock`; all relay request ops freeze

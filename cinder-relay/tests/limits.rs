@@ -3,7 +3,7 @@ mod common;
 use cinder_core::proto::{ClientMsg, ErrorCode, HandshakeMsg, HsId, PeerId, ServerMsg};
 use cinder_relay::server::{RateLimit, RelayConfig};
 use common::*;
-use futures::SinkExt;
+use futures::{SinkExt, StreamExt};
 use std::time::Duration;
 
 fn msg1() -> HandshakeMsg {
@@ -351,4 +351,155 @@ async fn rate_strikes_close_connection() {
         errors >= 5,
         "expected >=5 RateLimited errors, got {errors}: {msgs:?}"
     );
+}
+
+#[tokio::test]
+async fn mailboxes_global_cap() {
+    let cfg = RelayConfig {
+        mailboxes_global: 2,
+        ..RelayConfig::default()
+    };
+    let addr = spawn_relay(cfg).await;
+    let mut a = TestClient::hello(addr, PeerId::random()).await;
+    let h = || cinder_core::proto::Token::random();
+    let th = |t: &cinder_core::proto::Token| {
+        use sha2::{Digest, Sha256};
+        cinder_core::proto::TokenHash::from(Into::<[u8; 32]>::into(Sha256::digest(t.as_bytes())))
+    };
+
+    for _ in 0..2 {
+        a.send(ClientMsg::MailboxOpen {
+            mailbox_id: cinder_core::proto::MailboxId::random(),
+            h_deposit: th(&h()),
+            h_fetch: th(&h()),
+            ttl_secs: 60,
+        })
+        .await;
+        assert!(matches!(a.recv().await, ServerMsg::MailboxOpened { .. }));
+    }
+    a.send(ClientMsg::MailboxOpen {
+        mailbox_id: cinder_core::proto::MailboxId::random(),
+        h_deposit: th(&h()),
+        h_fetch: th(&h()),
+        ttl_secs: 60,
+    })
+    .await;
+    let (code, _) = a.recv_error().await;
+    assert_eq!(code, ErrorCode::RateLimited);
+}
+
+#[tokio::test]
+async fn invites_global_cap() {
+    let cfg = RelayConfig {
+        invites_global: 2,
+        ..RelayConfig::default()
+    };
+    let addr = spawn_relay(cfg).await;
+    let mut a = TestClient::hello(addr, PeerId::random()).await;
+
+    for _ in 0..2 {
+        a.send(ClientMsg::InviteCreate {
+            token: cinder_core::proto::InviteToken::random(),
+            ttl_secs: 3600,
+        })
+        .await;
+        assert!(matches!(a.recv().await, ServerMsg::InviteCreated { .. }));
+    }
+    a.send(ClientMsg::InviteCreate {
+        token: cinder_core::proto::InviteToken::random(),
+        ttl_secs: 3600,
+    })
+    .await;
+    let (code, _) = a.recv_error().await;
+    assert_eq!(code, ErrorCode::RateLimited);
+}
+
+#[tokio::test]
+async fn conns_global_cap_rejects_excess() {
+    let cfg = RelayConfig {
+        conns_global: 1,
+        ..RelayConfig::default()
+    };
+    let addr = spawn_relay(cfg).await;
+    let _held = TestClient::hello(addr, PeerId::random()).await;
+
+    // Second concurrent conn is over the global cap → RateLimited + close,
+    // even though its per-IP connect bucket still has budget.
+    let (mut rd, _wr) = connect(addr).await;
+    match rd.next().await {
+        Some(Ok(ServerMsg::Error {
+            code: ErrorCode::RateLimited,
+            ..
+        })) => {}
+        other => panic!("expected RateLimited, got {other:?}"),
+    }
+    match tokio::time::timeout(Duration::from_secs(2), rd.next()).await {
+        Ok(None) | Ok(Some(Err(_))) => {}
+        other => panic!("expected closed connection, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn pending_hs_id_collision_refused() {
+    let cfg = RelayConfig {
+        handshake_timeout: Duration::from_millis(200),
+        sweep_interval: Duration::from_millis(20),
+        handshake_rate: RateLimit {
+            count: 1000,
+            per: Duration::from_secs(60),
+            burst: 1000,
+        },
+        ..RelayConfig::default()
+    };
+    let addr = spawn_relay(cfg).await;
+    let mut a = TestClient::hello(addr, PeerId::random()).await;
+
+    let hs_id = HsId::random();
+    a.send(ClientMsg::Handshake {
+        to: PeerId::random(),
+        hs_id,
+        body: msg1(),
+    })
+    .await;
+    // Re-using the live hs_id on the same conn is refused, not overwritten.
+    a.send(ClientMsg::Handshake {
+        to: PeerId::random(),
+        hs_id,
+        body: msg1(),
+    })
+    .await;
+    let (code, _) = a.recv_error().await;
+    assert_eq!(code, ErrorCode::RateLimited);
+
+    // The original attempt survived the collision: it still dies by
+    // HandshakeTimeout, and its pending_hs slot is freed.
+    let (code, _) = a.recv_error().await;
+    assert_eq!(code, ErrorCode::HandshakeTimeout);
+
+    a.send(ClientMsg::Ping { nonce: 7 }).await;
+    assert!(matches!(a.recv().await, ServerMsg::Pong { nonce: 7 }));
+}
+
+#[tokio::test]
+async fn oversized_transport_body_closes() {
+    let addr = spawn_relay(RelayConfig::default()).await;
+    let mut a = TestClient::hello(addr, PeerId::random()).await;
+
+    // Frame fits under the 16 KiB codec cap but the transport ciphertext
+    // exceeds the spec's 8210 B → ProtocolViolation close.
+    a.send(ClientMsg::Transport {
+        to: PeerId::random(),
+        session_id: cinder_core::proto::SessionId::random(),
+        body: vec![0xAB; 8211],
+    })
+    .await;
+    let msgs = a.drain(Duration::from_secs(2)).await;
+    assert_eq!(msgs.len(), 1);
+    assert!(matches!(
+        msgs[0],
+        ServerMsg::Error {
+            code: ErrorCode::ProtocolViolation,
+            ..
+        }
+    ));
 }

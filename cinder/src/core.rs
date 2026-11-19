@@ -46,6 +46,24 @@ use crate::tui::backend as tb;
 use crate::xfer::{self, AudioMeta, FileCancelReason, FileKind, FileState, XferCaps};
 
 const PENDING_OUT_CAP: usize = 64;
+/// Wire-attempt bound for one queued item: an item that fails to seal for
+/// LOCAL reasons (encode/padding — never transport) this many times is
+/// poison, not unlucky; `Failed` and dropped instead of wedging the queue.
+const PENDING_MAX_ATTEMPTS: u32 = 5;
+/// Per-peer ordered outbound lane depth (F1/F2): one bounded mpsc per peer
+/// carrying UNSEALED jobs, drained FIFO by a per-peer worker that seals
+/// under the session and pushes ct+ctrl to `cmd_tx`. Wire order == seal
+/// order across every lane (chat, file, call ctrl, media, deposits).
+const OUTBOX_CAP: usize = 64;
+/// Tombstone bound — when full, the OLDEST live entry is evicted so a fresh
+/// tombstone always lands (a skipped insert is a no-resurrection hole).
+pub(crate) const DEAD_SIDS_CAP: usize = 8192;
+/// Un-accepted `PendingIn` metas are free to mint (sybil flood bound):
+/// cap them, evicting the oldest. Active/PendingOut/terminal rows are
+/// never evicted — they are user-initiated or decided.
+pub(crate) const NONCONTACT_META_CAP: usize = 1024;
+/// meta key holding the persisted non-Text outbound backlog (v1).
+const PENDING_KEY: &str = "pending_out.v1";
 const CMD_CHANNEL_CAP: usize = 256;
 const HS_CHANNEL_CAP: usize = 8;
 const INBOUND_CAP: usize = 64;
@@ -122,6 +140,18 @@ pub fn chat_str(p: &PeerId) -> String {
 
 fn new_msg_id() -> String {
     format!("msg:{}", b32(HsId::random().as_bytes()))
+}
+
+/// Deterministic re-anchor for an inbound msg_id that claimed a row it
+/// may not dedupe against (typically one of OUR outbound ids): derived
+/// from (peer, claimed) so the peer's retransmits dedupe against the
+/// re-anchored row instead of minting a fresh duplicate each time.
+fn anchor_msg_id(peer: &PeerId, claimed: &str) -> String {
+    let mut h = Sha256::new();
+    h.update(peer.as_bytes());
+    h.update(claimed.as_bytes());
+    let digest: [u8; 32] = h.finalize().into();
+    format!("msg:rx:{}", b32(&digest))
 }
 
 fn new_file_id() -> ([u8; 32], String) {
@@ -466,6 +496,56 @@ struct MailboxPersist {
 struct PendingMsg {
     app: AppMsg,
     msg_id: Option<String>,
+    /// Local seal failures only — transport/session failures are
+    /// environmental and don't count (a link-down bounce isn't poison).
+    attempts: u32,
+}
+
+/// Durable shape of one pending_out item on disk (`PENDING_KEY`). The AppMsg
+/// persists as bincode bytes — the wire shape IS the durable shape.
+#[derive(Serialize, Deserialize)]
+struct PendingItemPersist {
+    /// BASE64(bincode(AppMsg)).
+    app: String,
+    msg_id: Option<String>,
+    #[serde(default)]
+    attempts: u32,
+}
+
+/// One job on a peer's ordered outbound lane. Every lane — chat replies,
+/// file control/chunks, call signalling, call media, durable-queue drains —
+/// flows through the same FIFO so ciphertext wire order matches seal order.
+enum OutJob {
+    /// Reliable item (chat/file control/ack/grant/wipe): `deliver_now`
+    /// verdict semantics — Sent completes it, Deposited/MailboxFull/Failed
+    /// re-queue to `pending_out`, BadItem counts a poison attempt.
+    App {
+        item: PendingMsg,
+        /// Optional completion (chat.wipe reports whether a copy went out).
+        verdict: Option<oneshot::Sender<Delivered>>,
+    },
+    /// File-chunk lane: same path, verdict reported back to the pump so it
+    /// can park on MailboxFull or kick a handshake on NoPath.
+    Xfer {
+        app: AppMsg,
+        verdict: oneshot::Sender<XferSend>,
+    },
+    /// Call lane (signalling + media): `pin` is checked at EXECUTION —
+    /// a frame whose session generation has moved on drops BEFORE sealing
+    /// so it cannot burn a nonce on the wrong stream. Never deposits.
+    Call {
+        app: AppMsg,
+        pin: SessionId,
+        verdict: Option<oneshot::Sender<bool>>,
+    },
+    /// Kick: drain one bounded pass over `pending_out` on the lane.
+    Flush,
+    /// Fire-and-forget on the lane: sealed + sent but NEVER re-queued on
+    /// failure (chat.wipe's notice is single-shot by design).
+    Once {
+        item: PendingMsg,
+        verdict: oneshot::Sender<Delivered>,
+    },
 }
 
 /// Per-transfer runtime state (the durable half lives in `files` rows).
@@ -486,8 +566,6 @@ struct Xfer {
     violations: u8,
     /// Verified-but-unflushed chunk count → FileHave cadence.
     since_have: u32,
-    /// Pump parked on MailboxFull.
-    mbox_full: bool,
     /// file_state emit throttle: last state + stamp.
     last_state: Option<FileState>,
     last_emit: Option<Instant>,
@@ -503,7 +581,6 @@ impl Xfer {
             nudge: Arc::new(Notify::new()),
             violations: 0,
             since_have: 0,
-            mbox_full: false,
             last_state: None,
             last_emit: None,
         }
@@ -529,13 +606,21 @@ enum DepositResult {
 /// `Sent`: a mailbox acceptance proves nothing about delivery (the sealed
 /// generation may be dead by drain time), so queued copies are retained
 /// and only a live-wire send or the peer's Ack advances the message.
+#[derive(Clone, Copy, PartialEq, Eq)]
 enum Delivered {
     /// On the wire over a live session.
     Sent,
     /// Accepted into the peer's mailbox — unproven; retained for re-drive.
     Deposited,
-    /// No usable path (no session, encrypt failure, closed channel).
+    /// Receiver mailbox refused the deposit as full — self-limiting; the
+    /// item re-queues for the next live path without counting an attempt.
+    MailboxFull,
+    /// No usable path (no session, crypto-fatal seal, closed channel) —
+    /// environmental; the item is retried and a handshake is kicked.
     Failed,
+    /// Local encode/padding failure — the ITEM is poison (the session is
+    /// unharmed); counted against `PENDING_MAX_ATTEMPTS`.
+    BadItem,
 }
 
 enum SealOutcome {
@@ -546,7 +631,10 @@ enum SealOutcome {
         deposit: bool,
     },
     NoSession,
+    /// Crypto-fatal seal — the session was dropped inside `seal_with`.
     Failed,
+    /// Local encode/padding failure — session unharmed, item is poison.
+    Unsealable,
 }
 
 struct PeerSession {
@@ -557,6 +645,12 @@ struct PeerSession {
     /// session (relay-stamps `from`, so the binding is authentic). One-shot:
     /// a frame under any other sid while bound is dropped without decrypt.
     remote_sid: Mutex<Option<SessionId>>,
+    /// Set once any frame is sealed as a mailbox deposit under THIS
+    /// generation: the deposit lives off-stream on the receiver's side,
+    /// so a later live send under the same generation could interleave
+    /// with it. Everything after the first deposit stays deposit-bound —
+    /// only a fresh generation (re-handshake) restores the live path.
+    mailbox_only: std::sync::atomic::AtomicBool,
 }
 
 struct Shared {
@@ -580,9 +674,20 @@ struct Shared {
     /// Inbound responder drivers in flight, keyed by the frame's claimed
     /// peer-id: one responder per peer + RESPONDER_CAP globally.
     responders: HashSet<PeerId>,
-    /// Peers currently inside on_session_ready (post-handshake install
-    /// window) — part of the `early` parking predicate.
-    installing: HashSet<PeerId>,
+    /// Install windows open per peer (refcounted — XX-crossing can run
+    /// two on_session_ready calls concurrently). >0 ⇒ every inbound
+    /// frame for the peer parks in `early` FIFO: a post-install arrival
+    /// that decrypts ahead of an earlier parked frame desyncs the
+    /// sequential transport nonces (fatal).
+    installing: HashMap<PeerId, u32>,
+    /// Frames that replayed through an early-drain but could not bind yet
+    /// (they belong to a generation whose install has not landed). They
+    /// wait here — never back in `early`, which would livelock the
+    /// drain's empty-check — and merge ahead of `early` at the next drain.
+    late: HashMap<PeerId, VecDeque<(SessionId, Vec<u8>)>>,
+    /// One early-drain at a time per peer: concurrent generations queue
+    /// on this mutex so replayed batches can never interleave.
+    drain_locks: HashMap<PeerId, Arc<tokio::sync::Mutex<()>>>,
     /// Frames/messages dropped because the contact is declined or blocked —
     /// counted so the drop is observable, not silent.
     dropped_inbound: u64,
@@ -596,6 +701,12 @@ struct Shared {
     /// own (a denied peer's attempts vs. generic declined/blocked noise).
     denied_drops: u64,
     pending_out: HashMap<PeerId, VecDeque<PendingMsg>>,
+    /// Per-peer ordered outbound lanes (F1/F2): each sender feeds a worker
+    /// task that seals FIFO under the live session and pushes ct+ctrl onto
+    /// `cmd_tx` as one contiguous pair. Route/pump code only `try_send`s —
+    /// it never awaits the lane — so inbound progress can never wedge on a
+    /// saturated `cmd_tx` (the pump is its only consumer).
+    outbox: HashMap<PeerId, mpsc::Sender<OutJob>>,
     hs_inflight: HashSet<PeerId>,
     meta: HashMap<PeerId, ContactMeta>,
     presence: HashMap<PeerId, bool>,
@@ -801,8 +912,9 @@ pub struct Core {
     ui_tx: broadcast::Sender<tb::Event>,
     /// Serializes relay request ops. NOT reentrant: `request()` takes it, so
     /// any caller holding it must drop the guard before calling `request()`.
+    /// Never taken on inbound (pump/route) paths — relay requests there are
+    /// issued by the per-peer outbox workers or task-context callers.
     op_lock: tokio::sync::Mutex<()>,
-    send_locks: Mutex<HashMap<PeerId, Arc<tokio::sync::Mutex<()>>>>,
     shutdown: Notify,
     relay_host: Mutex<Option<String>>,
     peer_id_str: String,
@@ -935,11 +1047,14 @@ impl Core {
                 early: HashMap::new(),
                 early_total: 0,
                 responders: HashSet::new(),
-                installing: HashSet::new(),
+                installing: HashMap::new(),
+                late: HashMap::new(),
+                drain_locks: HashMap::new(),
                 dropped_inbound: 0,
                 denied,
                 denied_drops: 0,
                 pending_out: HashMap::new(),
+                outbox: HashMap::new(),
                 hs_inflight: HashSet::new(),
                 meta,
                 presence: HashMap::new(),
@@ -962,7 +1077,6 @@ impl Core {
             event_sink: RwLock::new(None),
             ui_tx,
             op_lock: tokio::sync::Mutex::new(()),
-            send_locks: Mutex::new(HashMap::new()),
             shutdown: Notify::new(),
             relay_host: Mutex::new(None),
             peer_id_str,
@@ -975,39 +1089,122 @@ impl Core {
 
         // Restart recovery (§11): rows still `queued` when the last process
         // died re-enter pending_out — the first link-up sees the backlog,
-        // kicks a handshake per peer, and flush_pending re-drives them.
-        // File anchors are covered by resume_xfers' offer re-emit instead.
+        // kicks a handshake per peer, and the lane's Flush job re-drives
+        // them. File anchors are covered by resume_xfers' offer re-emit
+        // instead.
         let queued = {
             let s = core.store.clone();
             tokio::task::spawn_blocking(move || s.queued_out_texts()).await??
         };
-        let denied_rows = {
-            let mut sh = core.sh();
-            let mut denied_rows: Vec<String> = Vec::new();
-            for (chat_id, msg_id, body, expires_at) in queued {
-                let Ok(peer) = peer_of_chat(&chat_id) else {
-                    continue;
-                };
-                if sh.denied.contains(&peer) {
-                    // A denied contact's backlog must not re-arm a dead lane
-                    // on restart — fail the rows once instead.
-                    denied_rows.push(msg_id);
-                    continue;
+        // `PENDING_KEY` mirrors the whole queue in order (Text included):
+        // the persisted list drives restoration order so cross-type
+        // interleaving survives a restart; the `queued` rows above gate
+        // whether a Text mirror is still owed a send.
+        let persisted_pending: HashMap<PeerId, Vec<PendingItemPersist>> = {
+            let s = core.store.clone();
+            tokio::task::spawn_blocking(move || {
+                let raw: HashMap<String, Vec<PendingItemPersist>> = s
+                    .meta(PENDING_KEY)
+                    .ok()
+                    .flatten()
+                    .and_then(|v| serde_json::from_str(&v).ok())
+                    .unwrap_or_default();
+                // Keys persist as b32(peer) strings — decode explicitly;
+                // PeerId's serde shape ([u8;32]) would reject a map key.
+                raw.into_iter()
+                    .filter_map(|(k, v)| b32_decode_32(&k).map(|b| (PeerId::from_bytes(b), v)))
+                    .collect()
+            })
+            .await?
+        };
+        let denied_rows =
+            {
+                let mut sh = core.sh();
+                let mut denied_rows: Vec<String> = Vec::new();
+                // `queued` rows keyed by msg_id so the persisted order can drive
+                // the merge: PENDING_KEY holds EVERY item in queue order (Text
+                // included), so walking it preserves cross-type interleaving —
+                // a FileAccept must stay ahead of the chunks it re-arms, an
+                // edit ahead of the delete for the same message.
+                let mut rows_by_id: HashMap<String, (PeerId, String, Option<i64>)> = HashMap::new();
+                for (chat_id, msg_id, body, expires_at) in queued {
+                    let Ok(peer) = peer_of_chat(&chat_id) else {
+                        continue;
+                    };
+                    if sh.denied.contains(&peer) {
+                        // A denied contact's backlog must not re-arm a dead lane
+                        // on restart — fail the rows once instead.
+                        denied_rows.push(msg_id);
+                        continue;
+                    }
+                    rows_by_id.insert(msg_id, (peer, body, expires_at));
                 }
-                sh.pending_out
-                    .entry(peer)
-                    .or_default()
-                    .push_back(PendingMsg {
+                let mut restored: HashSet<String> = HashSet::new();
+                for (peer, items) in persisted_pending {
+                    if sh.denied.contains(&peer) {
+                        continue;
+                    }
+                    let q = sh.pending_out.entry(peer).or_default();
+                    for it in items {
+                        if q.len() >= PENDING_OUT_CAP {
+                            break;
+                        }
+                        let Ok(raw) = data_encoding::BASE64.decode(it.app.as_bytes()) else {
+                            continue;
+                        };
+                        let Ok(app) = wire_deserialize::<AppMsg>(&raw) else {
+                            continue;
+                        };
+                        if matches!(app, AppMsg::Text { .. }) {
+                            // Text items live in both sources: the persisted copy
+                            // carries the wire body, but the row is authoritative
+                            // for "still queued" — a sent/acked row must not
+                            // re-arm off the stale mirror.
+                            match it.msg_id.as_deref().and_then(|id| {
+                                rows_by_id.get(id).map(|(p, _, _)| (*p, id.to_string()))
+                            }) {
+                                Some((row_peer, id)) if row_peer == peer => {
+                                    restored.insert(id);
+                                    q.push_back(PendingMsg {
+                                        app,
+                                        msg_id: it.msg_id.clone(),
+                                        attempts: it.attempts,
+                                    });
+                                }
+                                _ => continue,
+                            }
+                        } else {
+                            q.push_back(PendingMsg {
+                                app,
+                                msg_id: it.msg_id,
+                                attempts: it.attempts,
+                            });
+                        }
+                    }
+                }
+                // Rows with no persisted entry (written before PENDING_KEY
+                // landed, or queued while the persist task was still in flight)
+                // re-arm after the mirrored ones.
+                for (msg_id, (peer, body, expires_at)) in rows_by_id {
+                    if restored.contains(&msg_id) {
+                        continue;
+                    }
+                    let q = sh.pending_out.entry(peer).or_default();
+                    if q.len() >= PENDING_OUT_CAP {
+                        continue;
+                    }
+                    q.push_back(PendingMsg {
                         app: AppMsg::Text {
                             msg_id: msg_id.clone(),
                             body,
                             expires_at: expires_at.map(|e| e.max(0) as u64),
                         },
                         msg_id: Some(msg_id),
+                        attempts: 0,
                     });
-            }
-            denied_rows
-        };
+                }
+                denied_rows
+            };
         if !denied_rows.is_empty() {
             let _ = core
                 .sblk(move |s| {
@@ -1143,6 +1340,7 @@ impl Core {
                 .entry(*peer)
                 .or_insert_with(|| ContactMeta::new(state, None));
             m.state = state;
+            Self::cap_noncontact_meta(&mut sh);
         }
         self.persist_meta();
     }
@@ -1306,6 +1504,150 @@ impl Core {
             .sessions
             .get(peer)
             .and_then(|ps| *ps.remote_sid.lock().unwrap_or_else(|e| e.into_inner()))
+    }
+
+    /// Test seam: is the live session for `peer` pinned mailbox-only?
+    /// (§11 batch-consistency regression — a deposited generation must not
+    /// take live sends again.)
+    #[cfg(test)]
+    #[allow(dead_code)]
+    pub fn test_mailbox_only(&self, peer: &PeerId) -> Option<bool> {
+        self.sh()
+            .sessions
+            .get(peer)
+            .map(|ps| ps.mailbox_only.load(std::sync::atomic::Ordering::Relaxed))
+    }
+
+    /// Test seam: dead-sid tombstone count (eviction regression).
+    #[cfg(test)]
+    #[allow(dead_code)]
+    pub fn test_dead_sid_len(&self) -> usize {
+        self.sh().dead_sids.len()
+    }
+
+    /// Test seam: is `sid` tombstoned?
+    #[cfg(test)]
+    #[allow(dead_code)]
+    pub fn test_dead_sid_has(&self, sid: SessionId) -> bool {
+        self.sh().dead_sids.contains_key(&sid)
+    }
+
+    /// Test seam: push `n` tombstones (saturation path: the newest insert
+    /// must always land even at cap).
+    #[cfg(test)]
+    #[allow(dead_code)]
+    pub fn test_tombstone_fill(&self, n: usize) -> SessionId {
+        let mut sh = self.sh();
+        let mut last = SessionId::from_bytes([0u8; 16]);
+        for _ in 0..n {
+            last = SessionId::random();
+            Self::tombstone(&mut sh, last);
+        }
+        last
+    }
+
+    /// Test seam: frames parked for `peer` (early-queue depth — failed-
+    /// handshake flush regression).
+    #[cfg(test)]
+    #[allow(dead_code)]
+    pub fn test_early_len(&self, peer: &PeerId) -> usize {
+        self.sh().early.get(peer).map(|q| q.len()).unwrap_or(0)
+    }
+
+    /// Test seam: park one frame as if it arrived mid-handshake.
+    #[cfg(test)]
+    #[allow(dead_code)]
+    pub fn test_park_early(&self, peer: &PeerId, sid: SessionId) {
+        let mut sh = self.sh();
+        sh.early
+            .entry(*peer)
+            .or_default()
+            .push_back((sid, vec![0u8]));
+        sh.early_total += 1;
+    }
+
+    /// Test seam: drive a REAL outbound handshake attempt to failure
+    /// (no relay: the initiator waits out HANDSHAKE_TIMEOUT → the Err
+    /// branch runs the production failed-generation cleanup).
+    #[cfg(test)]
+    #[allow(dead_code)]
+    pub async fn test_outbound_handshake(self: &Arc<Self>, peer: PeerId) {
+        self.outbound_handshake(peer, None).await;
+    }
+
+    /// Test seam: outbox lane depth for `peer` (media-shed / fallback
+    /// assertions). Depth = capacity used (max - remaining).
+    #[cfg(test)]
+    #[allow(dead_code)]
+    pub fn test_outbox_len(&self, peer: &PeerId) -> usize {
+        self.sh()
+            .outbox
+            .get(peer)
+            .map(|tx| tx.max_capacity().saturating_sub(tx.capacity()))
+            .unwrap_or(0)
+    }
+
+    /// Test seam: OUR wire sid for `peer`'s live session (call-pin checks).
+    #[cfg(test)]
+    #[allow(dead_code)]
+    pub fn test_local_sid(&self, peer: &PeerId) -> Option<SessionId> {
+        self.sh().sessions.get(peer).map(|ps| ps.session_id)
+    }
+
+    /// Test seam: drive the media path — a pinned Call job on the peer's
+    /// lane, verdict awaited (pre-seal pin miss sheds without a nonce burn).
+    #[cfg(test)]
+    #[allow(dead_code)]
+    pub async fn test_send_call_frame(&self, peer: PeerId, app: AppMsg, pin: SessionId) -> bool {
+        self.send_call_frame(peer, app, pin).await
+    }
+
+    /// Test seam: one unsealed App job through the lane, awaited at
+    /// enqueue — sequential calls therefore order deterministically ON
+    /// the lane, so a test can assert wire order without relay timing.
+    #[cfg(test)]
+    #[allow(dead_code)]
+    pub async fn test_deliver_or_queue(self: &Arc<Self>, peer: PeerId, app: AppMsg) {
+        self.deliver_or_queue(
+            peer,
+            PendingMsg {
+                app,
+                msg_id: None,
+                attempts: 0,
+            },
+        )
+        .await;
+    }
+
+    /// Test seam: enqueue a Flush job — awaited at enqueue, so sequential
+    /// calls drive one bounded pending_out pass per call, in order.
+    #[cfg(test)]
+    #[allow(dead_code)]
+    pub async fn test_flush_pending(&self, peer: &PeerId) {
+        self.flush_pending(*peer).await;
+    }
+
+    /// Test seam: un-accepted PendingIn metas in play (sybil-cap check).
+    #[cfg(test)]
+    #[allow(dead_code)]
+    pub fn test_pending_in_len(&self) -> usize {
+        self.sh()
+            .meta
+            .values()
+            .filter(|m| m.state == MetaState::PendingIn)
+            .count()
+    }
+
+    /// Test seam: pending_out depth + lane depth (total un-dispatched work).
+    #[cfg(test)]
+    #[allow(dead_code)]
+    pub fn test_backlog_len(&self, peer: &PeerId) -> usize {
+        self.sh()
+            .pending_out
+            .get(peer)
+            .map(|q| q.len())
+            .unwrap_or(0)
+            + self.test_outbox_len(peer)
     }
 
     /// Test seam: inject an inbound transport frame (the HIGH-1 foreign-
@@ -1586,7 +1928,10 @@ impl Core {
                     .get(&hs_id)
                     .cloned();
                 if let Some(tx) = waiter {
-                    let _ = tx.send(ClientEvent::Handshake { from, hs_id, body }).await;
+                    // Never await on the pump: a stalled hs driver with a full
+                    // waiter channel would wedge routing permanently. Dropped
+                    // handshake frames are retried by the peer's driver.
+                    let _ = tx.try_send(ClientEvent::Handshake { from, hs_id, body });
                 } else if matches!(body, HandshakeMsg::Msg1(_)) {
                     let _ =
                         self.link
@@ -1841,8 +2186,13 @@ impl Core {
             sh.sessions.clear();
             sh.sid_index.clear();
             sh.early.clear();
+            sh.late.clear();
             sh.early_total = 0;
             sh.presence.clear();
+            // Outbound lanes die with the link too: dropping the senders
+            // makes every worker drain-and-exit (each job's exec fails —
+            // session gone — and the intent re-queues to pending_out).
+            sh.outbox.clear();
         }
         // §4: link death is session death — every pinned call ends failed.
         {
@@ -2116,6 +2466,7 @@ impl Core {
             session: Mutex::new(session),
             session_id: sid,
             remote_sid: Mutex::new(remote),
+            mailbox_only: std::sync::atomic::AtomicBool::new(false),
         });
         if let Some(old) = sh.sessions.insert(peer, ps.clone()) {
             // The replaced session's inbound id is dead: tombstone it so
@@ -2146,15 +2497,73 @@ impl Core {
 
     /// Bounded tombstone (~8192 entries, 10 min): enough to cover any in-
     /// flight reorder window without growing unbounded under junk frames.
+    /// At cap, the OLDEST live entry is evicted — a skipped insert is a
+    /// no-resurrection hole (a replayed old-sid frame would bind to a fresh
+    /// session and DecryptFatal it).
     fn tombstone(sh: &mut Shared, sid: SessionId) {
-        if sh.dead_sids.len() >= 8192 {
+        if sh.dead_sids.len() >= DEAD_SIDS_CAP {
             let cutoff = Instant::now() - Duration::from_secs(600);
             sh.dead_sids.retain(|_, t| *t > cutoff);
-            if sh.dead_sids.len() >= 8192 {
-                return;
+            while sh.dead_sids.len() >= DEAD_SIDS_CAP {
+                let Some((&oldest, _)) = sh.dead_sids.iter().min_by_key(|(_, t)| *t) else {
+                    break;
+                };
+                sh.dead_sids.remove(&oldest);
             }
         }
         sh.dead_sids.insert(sid, Instant::now());
+    }
+
+    /// Drop every frame parked for `peer` (failed-generation leftovers —
+    /// they must never bind to the next handshake's stream).
+    fn clear_early(&self, peer: &PeerId) {
+        let mut sh = self.sh();
+        if let Some(q) = sh.early.remove(peer) {
+            sh.early_total = sh.early_total.saturating_sub(q.len());
+        }
+        if let Some(q) = sh.late.remove(peer) {
+            sh.early_total = sh.early_total.saturating_sub(q.len());
+        }
+    }
+
+    /// Open an install window: inbound frames for `peer` park until the
+    /// matching `install_exit` (the early-drain's final lock).
+    fn install_enter(sh: &mut Shared, peer: &PeerId) {
+        *sh.installing.entry(*peer).or_insert(0) += 1;
+    }
+
+    fn install_exit(sh: &mut Shared, peer: &PeerId) {
+        if let Some(n) = sh.installing.get_mut(peer) {
+            *n -= 1;
+            if *n == 0 {
+                sh.installing.remove(peer);
+            }
+        }
+    }
+
+    /// Sybil bound (§growth): un-accepted `PendingIn` metas are free to
+    /// mint — cap them, evicting the oldest first. Active / PendingOut /
+    /// terminal metas are never evicted (user-initiated or decided).
+    fn cap_noncontact_meta(sh: &mut Shared) {
+        let overflow = sh
+            .meta
+            .values()
+            .filter(|m| m.state == MetaState::PendingIn)
+            .count()
+            .saturating_sub(NONCONTACT_META_CAP);
+        if overflow == 0 {
+            return;
+        }
+        let mut pending: Vec<(PeerId, i64)> = sh
+            .meta
+            .iter()
+            .filter(|(_, m)| m.state == MetaState::PendingIn)
+            .map(|(p, m)| (*p, m.created_at))
+            .collect();
+        pending.sort_by_key(|(_, t)| *t);
+        for (p, _) in pending.into_iter().take(overflow) {
+            sh.meta.remove(&p);
+        }
     }
 
     fn drop_session(&self, peer: &PeerId) {
@@ -2229,13 +2638,133 @@ impl Core {
             .await;
     }
 
-    fn send_lock(&self, peer: &PeerId) -> Arc<tokio::sync::Mutex<()>> {
-        self.send_locks
+    /// Get-or-create the peer's ordered outbound lane; lazily spawns the
+    /// worker that drains it. Sync + non-blocking, safe from route context.
+    fn outbox(&self, peer: &PeerId) -> mpsc::Sender<OutJob> {
+        let mut sh = self.sh();
+        if let Some(tx) = sh.outbox.get(peer) {
+            return tx.clone();
+        }
+        let (tx, rx) = mpsc::channel(OUTBOX_CAP);
+        sh.outbox.insert(*peer, tx.clone());
+        drop(sh);
+        let me = self.arc();
+        let p = *peer;
+        self.tasks
             .lock()
             .unwrap_or_else(|e| e.into_inner())
-            .entry(*peer)
-            .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(())))
-            .clone()
+            .push(tokio::spawn(async move { me.outbox_worker(p, rx).await }));
+        tx
+    }
+
+    /// The one outbound consumer per peer (F1/F2): drains unsealed jobs
+    /// FIFO, seals each under the live session, and pushes ct+ctrl onto
+    /// `cmd_tx` contiguously — no other lane can interleave around a rekey
+    /// boundary. After every wire action an idle-point pass re-drives the
+    /// durable queue: a lane that just proved live is exactly when the
+    /// backlog should heal. Exits when every sender is dropped (the map
+    /// entry is cleared on link-down / shutdown).
+    async fn outbox_worker(self: Arc<Self>, peer: PeerId, mut rx: mpsc::Receiver<OutJob>) {
+        loop {
+            if self.shutdown_requested() {
+                return;
+            }
+            match rx.recv().await {
+                Some(OutJob::App { item, verdict }) => {
+                    self.exec_app(peer, item, verdict).await;
+                }
+                Some(OutJob::Xfer { app, verdict }) => {
+                    let v = self.exec_xfer(peer, &app).await;
+                    let _ = verdict.send(v);
+                }
+                Some(OutJob::Call { app, pin, verdict }) => {
+                    let v = self.exec_call(peer, &app, pin).await;
+                    if let Some(tx) = verdict {
+                        let _ = tx.send(v);
+                    }
+                }
+                Some(OutJob::Flush) => {
+                    self.flush_pending_once(peer).await;
+                }
+                Some(OutJob::Once { item, verdict }) => {
+                    let d = self.deliver_now(peer, &item).await;
+                    let _ = verdict.send(d);
+                }
+                None => return,
+            }
+            if rx.is_empty() {
+                self.flush_pending_once(peer).await;
+            }
+        }
+    }
+
+    /// `deliver_or_queue` verdict semantics, applied INSIDE the lane:
+    /// Sent completes; Deposited/MailboxFull keep the item in the durable
+    /// queue (unproven — only the peer's Ack or a live send may advance
+    /// it); BadItem counts a poison attempt; environmental Failed re-queues
+    /// and kicks a handshake.
+    async fn exec_app(
+        &self,
+        peer: PeerId,
+        mut item: PendingMsg,
+        verdict: Option<oneshot::Sender<Delivered>>,
+    ) {
+        let d = self.deliver_now(peer, &item).await;
+        if let Some(v) = verdict {
+            let _ = v.send(d);
+        }
+        match d {
+            Delivered::Sent => {}
+            Delivered::Deposited | Delivered::MailboxFull => {
+                self.queue_pending(peer, item);
+            }
+            Delivered::BadItem => {
+                item.attempts += 1;
+                if item.attempts >= PENDING_MAX_ATTEMPTS {
+                    if let Some(id) = item.msg_id {
+                        self.transition(&id, MsgState::Failed, Some("internal".into()))
+                            .await;
+                    }
+                } else {
+                    self.queue_pending(peer, item);
+                }
+            }
+            Delivered::Failed => {
+                // A deny that landed mid-flight must fail the item, never
+                // queue it — nothing will ever flush a denied peer's backlog.
+                if Self::denied(&self.sh(), &peer) {
+                    if let Some(id) = item.msg_id {
+                        self.transition(&id, MsgState::Failed, Some("denied".into()))
+                            .await;
+                    }
+                    return;
+                }
+                self.queue_pending(peer, item);
+                self.arc().ensure_handshake(peer);
+            }
+        }
+    }
+
+    /// One bounded pass over `pending_out`, run on the peer's lane so the
+    /// backlog's wire order interleaves correctly with fresh jobs. The pass
+    /// is bound by the queue depth at pass start — items that bounce back
+    /// (deposits, transport failures) are not re-popped this pass.
+    async fn flush_pending_once(&self, peer: PeerId) {
+        let budget = self
+            .sh()
+            .pending_out
+            .get(&peer)
+            .map(|q| q.len())
+            .unwrap_or(0);
+        for _ in 0..budget {
+            let item = {
+                let mut sh = self.sh();
+                sh.pending_out.get_mut(&peer).and_then(|q| q.pop_front())
+            };
+            let Some(item) = item else { break };
+            self.exec_app(peer, item, None).await;
+        }
+        self.persist_pending();
     }
 
     /// Post-handshake convergence: pin store, meta, session install, mailbox
@@ -2264,7 +2793,10 @@ impl Core {
         let sas_emoji = session.sas().map(|s| s.emoji());
         let sas_digits = session.sas().map(|s| s.digits());
         let remote_static = session.remote_static();
-        self.sh().installing.insert(peer);
+        {
+            let mut sh = self.sh();
+            Self::install_enter(&mut sh, &peer);
+        }
 
         // Pin-store convergence + §11 key-change detection on EVERY XX
         // (new contact → FirstSeen record; same peer-id, new static → loud
@@ -2293,7 +2825,8 @@ impl Core {
                 {
                     Some((t, kc, o, s)) => (t, kc, o, s),
                     None => {
-                        self.sh().installing.remove(&peer);
+                        let mut sh = self.sh();
+                        Self::install_exit(&mut sh, &peer);
                         return;
                     }
                 }
@@ -2308,24 +2841,62 @@ impl Core {
         }
 
         if self.install_session(peer, session).is_none() {
-            self.sh().installing.remove(&peer);
+            let mut sh = self.sh();
+            Self::install_exit(&mut sh, &peer);
             return;
         }
 
         // Frames that beat the install (grant/ack races) replay through the
-        // normal bind path now that the session exists.
-        let parked: Vec<(SessionId, Vec<u8>)> = {
+        // normal bind path now that the session exists. The drain runs to
+        // EMPTY, not a snapshot: arrivals during the replay still park
+        // (the `installing` barrier is held for this whole window), and a
+        // parked-forever frame is a lost nonce — the next live frame
+        // decrypts at the wrong counter and kills the session. The per-peer
+        // mutex serializes concurrent generations (XX-crossing): each
+        // drains what is left, `late` frames merging in first. The window
+        // closes atomically with the empty check so no frame can slip
+        // between "queue empty" and "barrier down".
+        let drain_lock = {
             let mut sh = self.sh();
-            match sh.early.remove(&peer) {
-                Some(q) => {
-                    sh.early_total = sh.early_total.saturating_sub(q.len());
-                    q.into_iter().collect()
-                }
-                None => Vec::new(),
-            }
+            Arc::clone(
+                sh.drain_locks
+                    .entry(peer)
+                    .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(()))),
+            )
         };
-        for (sid, body) in parked {
-            self.handle_transport(peer, sid, body).await;
+        {
+            let _drain_guard = drain_lock.lock().await;
+            // `late` frames predate everything parked this window — they
+            // replay first.
+            {
+                let mut sh = self.sh();
+                if let Some(mut late) = sh.late.remove(&peer) {
+                    let early = sh.early.entry(peer).or_default();
+                    late.append(early);
+                    std::mem::swap(early, &mut late);
+                }
+            }
+            loop {
+                let parked: Vec<(SessionId, Vec<u8>)> = {
+                    let mut sh = self.sh();
+                    match sh.early.remove(&peer) {
+                        Some(q) if !q.is_empty() => {
+                            sh.early_total = sh.early_total.saturating_sub(q.len());
+                            q.into_iter().collect()
+                        }
+                        _ => {
+                            Self::install_exit(&mut sh, &peer);
+                            Vec::new()
+                        }
+                    }
+                };
+                if parked.is_empty() {
+                    break;
+                }
+                for (sid, body) in parked {
+                    self.dispatch_transport(peer, sid, body, true).await;
+                }
+            }
         }
 
         let mut became_active = false;
@@ -2352,6 +2923,7 @@ impl Core {
                 meta.substate = None;
                 became_active = true;
             }
+            Self::cap_noncontact_meta(&mut sh);
         }
         self.persist_meta();
         let verified = matches!(trust, Some(TrustState::Verified));
@@ -2369,14 +2941,15 @@ impl Core {
             .as_ref()
             .map(|m| (*m.id.as_bytes(), *m.deposit_token.as_bytes()));
         if let Some((mid, dtok)) = our_grant {
-            self.deliver_now(
+            self.deliver_or_queue(
                 peer,
-                &PendingMsg {
+                PendingMsg {
                     app: AppMsg::Grant {
                         mailbox_id: mid,
                         deposit_token: dtok,
                     },
                     msg_id: None,
+                    attempts: 0,
                 },
             )
             .await;
@@ -2435,7 +3008,6 @@ impl Core {
         if key_changed {
             self.maybe_emit_verification(&peer, &trust);
         }
-        self.sh().installing.remove(&peer);
     }
 
     fn maybe_emit_verification(&self, peer: &PeerId, trust: &Option<TrustState>) {
@@ -2480,7 +3052,7 @@ impl Core {
         self.seal_with(peer, ps, app)
     }
 
-    /// `seal_app` on a caller-resolved session. Call-media callers pin to a
+    /// `seal_app` on a caller-resolved session. Call-lane callers pin to a
     /// generation BEFORE sealing: encrypting under a session that is about
     /// to be rejected burns a nonce and desyncs the stream for its real
     /// owner.
@@ -2489,13 +3061,14 @@ impl Core {
             Ok(p) => p,
             Err(e) => {
                 tracing::debug!(%e, "seal_app: AppMsg encode failed");
-                return SealOutcome::Failed;
+                return SealOutcome::Unsealable;
             }
         };
         let deposit = {
             let sh = self.sh();
-            sh.presence.get(peer).map(|o| !*o).unwrap_or(false)
-                && sh.meta.get(peer).and_then(|m| m.grant.as_ref()).is_some()
+            ps.mailbox_only.load(std::sync::atomic::Ordering::Relaxed)
+                || (sh.presence.get(peer).map(|o| !*o).unwrap_or(false)
+                    && sh.meta.get(peer).and_then(|m| m.grant.as_ref()).is_some())
         };
         let (ct, ctrl) = {
             let mut s = ps.session.lock().unwrap_or_else(|e| e.into_inner());
@@ -2513,14 +3086,34 @@ impl Core {
                     },
                 ),
                 Err(e) => {
-                    tracing::debug!(%e, "seal_app: encrypt failed; dropping session");
-                    drop(s);
-                    drop(ps);
-                    self.drop_session(peer);
-                    return SealOutcome::Failed;
+                    // Only crypto-fatal seals kill the session — and `encrypt`
+                    // already closed it internally on those. Local failures
+                    // (padding: oversize plaintext) leave the stream intact;
+                    // the ITEM is poison, not the generation.
+                    if matches!(e, NetErr::Noise(_)) {
+                        tracing::debug!(%e, "seal_app: crypto seal failed; dropping session");
+                        drop(s);
+                        drop(ps);
+                        self.drop_session(peer);
+                        return SealOutcome::Failed;
+                    }
+                    tracing::debug!(%e, "seal_app: local seal error; item is undeliverable");
+                    return if matches!(e, NetErr::Padding) {
+                        SealOutcome::Unsealable
+                    } else {
+                        SealOutcome::Failed
+                    };
                 }
             }
         };
+        if deposit {
+            // Once a frame is sealed as a deposit under this generation it
+            // lives off-stream on the receiver's side — any later live send
+            // could interleave with it. Pin the whole generation to mailbox
+            // mode; only a fresh session restores the live path.
+            ps.mailbox_only
+                .store(true, std::sync::atomic::Ordering::Relaxed);
+        }
         SealOutcome::Sealed {
             ps,
             ct,
@@ -2529,19 +3122,69 @@ impl Core {
         }
     }
 
-    /// Encrypt + send on a live session. For a known-offline peer with a
-    /// mailbox grant, deposits the frame into their mailbox instead — a
-    /// `Deposited` verdict, never `Sent` (see `Delivered`). `Failed` when
-    /// no usable path exists (caller queues/retries).
+    /// Does a fresh seal on `ps` take the mailbox path? Call-lane jobs read
+    /// this BEFORE enqueueing/sealing so a deposit-bound generation drops
+    /// frames pre-seal (a call frame must never ride a mailbox, and a
+    /// post-seal drop burns the nonce).
+    fn deposit_would(&self, peer: &PeerId, ps: &PeerSession) -> bool {
+        ps.mailbox_only.load(std::sync::atomic::Ordering::Relaxed) || {
+            let sh = self.sh();
+            sh.presence.get(peer).map(|o| !*o).unwrap_or(false)
+                && sh.meta.get(peer).and_then(|m| m.grant.as_ref()).is_some()
+        }
+    }
+
+    /// Push ct then the (optional) rekey ctrl frame onto the relay lane as
+    /// one contiguous pair — called only from the peer's outbox worker, so
+    /// no other lane can interleave between the two sends.
+    async fn wire_send(
+        &self,
+        peer: PeerId,
+        session_id: SessionId,
+        ct: Vec<u8>,
+        ctrl: Option<Vec<u8>>,
+    ) -> bool {
+        if self
+            .link
+            .cmd_tx
+            .send(ClientMsg::Transport {
+                to: peer,
+                session_id,
+                body: ct,
+            })
+            .await
+            .is_err()
+        {
+            return false;
+        }
+        if let Some(ctrl) = ctrl {
+            let _ = self
+                .link
+                .cmd_tx
+                .send(ClientMsg::Transport {
+                    to: peer,
+                    session_id,
+                    body: ctrl,
+                })
+                .await;
+        }
+        true
+    }
+
+    /// Encrypt + send on a live session — the worker-side primitive behind
+    /// every `App` job. For a known-offline peer with a mailbox grant (or a
+    /// generation pinned mailbox-only), deposits the frame instead — a
+    /// `Deposited` verdict, never `Sent` (see `Delivered`).
     async fn deliver_now(&self, peer: PeerId, item: &PendingMsg) -> Delivered {
-        let SealOutcome::Sealed {
-            ps,
-            ct,
-            ctrl,
-            deposit,
-        } = self.seal_app(&peer, &item.app)
-        else {
-            return Delivered::Failed;
+        let (ps, ct, ctrl, deposit) = match self.seal_app(&peer, &item.app) {
+            SealOutcome::Sealed {
+                ps,
+                ct,
+                ctrl,
+                deposit,
+            } => (ps, ct, ctrl, deposit),
+            SealOutcome::Unsealable => return Delivered::BadItem,
+            _ => return Delivered::Failed,
         };
         if deposit {
             // A mailbox deposit is NOT a delivery: the frame was sealed
@@ -2553,34 +3196,12 @@ impl Core {
             // MailboxFull is self-limiting.
             return match self.deposit_env(peer, ps.session_id, ct).await {
                 DepositResult::Ok => Delivered::Deposited,
-                // Full/failed deposits are Failed — flush_pending re-queues
-                // at the head and stops hammering the mailbox.
-                DepositResult::MailboxFull | DepositResult::Failed => Delivered::Failed,
+                DepositResult::MailboxFull => Delivered::MailboxFull,
+                DepositResult::Failed => Delivered::Failed,
             };
         }
-        if self
-            .link
-            .cmd_tx
-            .send(ClientMsg::Transport {
-                to: peer,
-                session_id: ps.session_id,
-                body: ct,
-            })
-            .await
-            .is_err()
-        {
+        if !self.wire_send(peer, ps.session_id, ct, ctrl).await {
             return Delivered::Failed;
-        }
-        if let Some(ctrl) = ctrl {
-            let _ = self
-                .link
-                .cmd_tx
-                .send(ClientMsg::Transport {
-                    to: peer,
-                    session_id: ps.session_id,
-                    body: ctrl,
-                })
-                .await;
         }
         if let Some(id) = &item.msg_id {
             self.transition(id, MsgState::Sent, None).await;
@@ -2588,50 +3209,76 @@ impl Core {
         Delivered::Sent
     }
 
-    /// Chunk-lane delivery: same seal/send as `deliver_now` but reports
-    /// MailboxFull so the pump parks instead of failing the transfer.
-    async fn deliver_xfer(&self, peer: PeerId, app: &AppMsg) -> XferSend {
+    /// Chunk-lane exec inside the worker: same seal/send path as
+    /// `deliver_now`, verdict mapped so the pump can park on MailboxFull.
+    async fn exec_xfer(&self, peer: PeerId, app: &AppMsg) -> XferSend {
+        match self.seal_app(&peer, app) {
+            SealOutcome::Sealed {
+                ps,
+                ct,
+                ctrl,
+                deposit,
+            } => {
+                if deposit {
+                    match self.deposit_env(peer, ps.session_id, ct).await {
+                        DepositResult::Ok => XferSend::Sent,
+                        DepositResult::MailboxFull => XferSend::MailboxFull,
+                        DepositResult::Failed => XferSend::NoPath,
+                    }
+                } else if self.wire_send(peer, ps.session_id, ct, ctrl).await {
+                    XferSend::Sent
+                } else {
+                    XferSend::NoPath
+                }
+            }
+            _ => XferSend::NoPath,
+        }
+    }
+
+    /// Call-lane exec inside the worker (F2/§4): the pinned generation is
+    /// re-checked at the moment of sealing — a stale frame drops BEFORE
+    /// consuming a nonce, and a generation that turned deposit-bound drops
+    /// pre-seal too (call frames never ride mailboxes). The pin check and
+    /// the seal both run inside the single worker, so no other lane can
+    /// slide a frame between the check and the encrypt.
+    async fn exec_call(&self, peer: PeerId, app: &AppMsg, pin: SessionId) -> bool {
+        let Some(ps) = self.session(&peer) else {
+            return false;
+        };
+        if ps.session_id != pin || self.deposit_would(&peer, &ps) {
+            return false;
+        }
         let SealOutcome::Sealed {
             ps,
             ct,
             ctrl,
             deposit,
-        } = self.seal_app(&peer, app)
+        } = self.seal_with(&peer, ps, app)
         else {
-            return XferSend::NoPath;
+            return false;
         };
         if deposit {
-            return match self.deposit_env(peer, ps.session_id, ct).await {
-                DepositResult::Ok => XferSend::Sent,
-                DepositResult::MailboxFull => XferSend::MailboxFull,
-                DepositResult::Failed => XferSend::NoPath,
-            };
+            // Presence flipped between the pre-check and the seal: the
+            // nonce is consumed and the generation is now mailbox-pinned.
+            // Dropping the ct would leave a permanent hole, so it goes to
+            // the mailbox (dead-on-arrival for a call, but stream-safe);
+            // the verdict stays false — the call is functionally dead.
+            let _ = self.deposit_env(peer, ps.session_id, ct).await;
+            return false;
         }
-        if self
-            .link
-            .cmd_tx
-            .send(ClientMsg::Transport {
-                to: peer,
-                session_id: ps.session_id,
-                body: ct,
-            })
-            .await
-            .is_err()
-        {
+        self.wire_send(peer, ps.session_id, ct, ctrl).await
+    }
+
+    /// Chunk-lane enqueue: parks a `Xfer` job on the peer's ordered lane and
+    /// awaits the worker's verdict. Task-context callers only (the pump) —
+    /// never route.
+    async fn deliver_xfer(&self, peer: PeerId, app: AppMsg) -> XferSend {
+        let tx = self.outbox(&peer);
+        let (vtx, vrx) = oneshot::channel();
+        if tx.send(OutJob::Xfer { app, verdict: vtx }).await.is_err() {
             return XferSend::NoPath;
         }
-        if let Some(ctrl) = ctrl {
-            let _ = self
-                .link
-                .cmd_tx
-                .send(ClientMsg::Transport {
-                    to: peer,
-                    session_id: ps.session_id,
-                    body: ctrl,
-                })
-                .await;
-        }
-        XferSend::Sent
+        vrx.await.unwrap_or(XferSend::NoPath)
     }
 
     /// Mailbox deposit primitive; the grant lookup + op + reply-matching
@@ -2674,77 +3321,165 @@ impl Core {
         }
     }
 
-    /// Queue-or-send: on a live-wire send the item is done; a deposit or a
-    /// failure keeps it in pending_out (a deposit proves nothing — it must
-    /// be re-driven until a live path or the peer's Ack lands it) and a
-    /// handshake attempt is kicked off.
-    async fn deliver_or_queue(self: &Arc<Self>, peer: PeerId, item: PendingMsg) {
-        let send = self.send_lock(&peer);
-        let _send = send.lock().await;
-        if matches!(self.deliver_now(peer, &item).await, Delivered::Sent) {
-            return;
-        }
+    /// Push `item` onto the durable per-peer queue; the worker's idle-point
+    /// pass and Flush jobs re-drive it. Over-cap items fail their row —
+    /// `pending_out` is a durability backstop, not an unbounded buffer.
+    fn queue_pending(&self, peer: PeerId, item: PendingMsg) {
         let item_id = item.msg_id.clone();
-        // A deny that landed mid-send must fail the item, never queue it —
-        // nothing will ever flush a denied peer's backlog.
-        if Self::denied(&self.sh(), &peer) {
+        let over = {
+            let mut sh = self.sh();
+            let q = sh.pending_out.entry(peer).or_default();
+            if q.len() < PENDING_OUT_CAP {
+                q.push_back(item);
+                false
+            } else {
+                true
+            }
+        };
+        self.persist_pending();
+        if over {
             if let Some(id) = item_id {
+                let me = self.arc();
+                tokio::spawn(async move {
+                    me.transition(&id, MsgState::Failed, Some("internal".into()))
+                        .await;
+                });
+            }
+        }
+    }
+
+    /// Persist `pending_out` under `PENDING_KEY` (fire-and-forget, same
+    /// shape as `persist_meta`). AppMsgs store as bincode — the wire shape
+    /// is the durable shape.
+    fn persist_pending(&self) {
+        let raw = {
+            let sh = self.sh();
+            let map: HashMap<String, Vec<PendingItemPersist>> = sh
+                .pending_out
+                .iter()
+                .map(|(p, q)| {
+                    (
+                        b32(p.as_bytes()),
+                        q.iter()
+                            .filter_map(|it| {
+                                wire_serialize(&it.app).ok().map(|raw| PendingItemPersist {
+                                    app: data_encoding::BASE64.encode(&raw),
+                                    msg_id: it.msg_id.clone(),
+                                    attempts: it.attempts,
+                                })
+                            })
+                            .collect(),
+                    )
+                })
+                .collect();
+            match serde_json::to_string(&map) {
+                Ok(v) => v,
+                Err(_) => return,
+            }
+        };
+        let store = self.store.clone();
+        tokio::task::spawn_blocking(move || {
+            let _ = store.set_meta(PENDING_KEY, &raw);
+        });
+    }
+
+    /// Rewrite retained `message.received` payloads for `msg_id` in the
+    /// live replay mirror (F4): the sqlite half is scrubbed inside the
+    /// store op itself, but the in-memory mirror would replay the old
+    /// body forever otherwise. `new_text: None` tombstones to "".
+    fn replay_scrub_msg(&self, msg_id: &str, new_text: Option<&str>) {
+        let Some(m) = replay_mirror(&self.store) else {
+            return;
+        };
+        let mut evs = m.events.lock().unwrap_or_else(|e| e.into_inner());
+        for e in evs.iter_mut() {
+            if e.payload["message"]["msg_id"].as_str() != Some(msg_id) {
+                continue;
+            }
+            if let Some(t) = e.payload.pointer_mut("/message/body/text") {
+                *t = Value::String(new_text.unwrap_or("").to_string());
+            }
+        }
+    }
+
+    /// Drop every retained event for `chat_id` from the live mirror (F4) —
+    /// mirrors `wipe_chat`'s `DELETE FROM event_log WHERE chat_id = ?`.
+    fn replay_scrub_chat(&self, chat_id: &str) {
+        let Some(m) = replay_mirror(&self.store) else {
+            return;
+        };
+        m.events
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .retain(|e| e.chat_id.as_deref() != Some(chat_id));
+    }
+
+    /// Route-context enqueue (F1): NEVER awaits the wire — the pump owns
+    /// `cmd_rx` and is this code's caller, so a blocking send could
+    /// self-deadlock. A saturated lane falls back to the durable queue,
+    /// which the worker re-drives on its next idle point or Flush.
+    fn enqueue_reply(&self, peer: PeerId, item: PendingMsg) {
+        let tx = self.outbox(&peer);
+        match tx.try_send(OutJob::App {
+            item,
+            verdict: None,
+        }) {
+            Ok(()) => {}
+            Err(mpsc::error::TrySendError::Full(OutJob::App { item, .. }))
+            | Err(mpsc::error::TrySendError::Closed(OutJob::App { item, .. })) => {
+                self.queue_pending(peer, item);
+            }
+            Err(_) => {}
+        }
+    }
+
+    /// Route-context call-control reply (ring busy/ended answers): same
+    /// non-blocking contract as `enqueue_reply`; a saturated lane drops the
+    /// reply (call signalling is soft — timers converge both ends).
+    fn enqueue_call_reply(&self, peer: PeerId, app: AppMsg, pin: SessionId) {
+        let tx = self.outbox(&peer);
+        let _ = tx.try_send(OutJob::Call {
+            app,
+            pin,
+            verdict: None,
+        });
+    }
+
+    /// Queue-or-send (F1/F2): the item joins the peer's ordered lane as an
+    /// unsealed `App` job; the worker applies the old deliver-then-queue
+    /// semantics inside the lane (deposit/failure re-queue + handshake
+    /// kick). Blocking enqueue — callers are task-context spawns, never
+    /// route, so a bounded wait behind the worker is allowed.
+    async fn deliver_or_queue(self: &Arc<Self>, peer: PeerId, item: PendingMsg) {
+        if Self::denied(&self.sh(), &peer) {
+            if let Some(id) = item.msg_id {
                 self.transition(&id, MsgState::Failed, Some("denied".into()))
                     .await;
             }
             return;
         }
-        let full = {
-            let mut sh = self.sh();
-            let q = sh.pending_out.entry(peer).or_default();
-            if q.len() >= PENDING_OUT_CAP {
-                true
-            } else {
-                q.push_back(item);
-                false
-            }
-        };
-        if full {
-            if let Some(id) = item_id {
-                self.transition(&id, MsgState::Failed, Some("internal".into()))
-                    .await;
-            }
-            return;
+        let tx = self.outbox(&peer);
+        if let Err(e) = tx
+            .send(OutJob::App {
+                item,
+                verdict: None,
+            })
+            .await
+        {
+            // Lane closed mid-send (link-down clear raced): the durable
+            // queue keeps the intent until the next session/link-up.
+            let OutJob::App { item, .. } = e.0 else {
+                return;
+            };
+            self.queue_pending(peer, item);
         }
-        self.ensure_handshake(peer);
     }
 
+    /// Ask the peer's worker to drain one pass over `pending_out` on the
+    /// lane — ordering-safe because the drain happens between jobs.
     async fn flush_pending(&self, peer: PeerId) {
-        let send = self.send_lock(&peer);
-        let _send = send.lock().await;
-        // Items the mailbox just accepted are re-queued (once each) after
-        // the pass — a deposit is unproven delivery, never `Sent`.
-        let mut deposited: Vec<PendingMsg> = Vec::new();
-        loop {
-            let item = {
-                let mut sh = self.sh();
-                sh.pending_out.get_mut(&peer).and_then(|q| q.pop_front())
-            };
-            let Some(item) = item else { break };
-            match self.deliver_now(peer, &item).await {
-                Delivered::Sent => {}
-                Delivered::Deposited => deposited.push(item),
-                Delivered::Failed => {
-                    let mut sh = self.sh();
-                    sh.pending_out.entry(peer).or_default().push_front(item);
-                    break;
-                }
-            }
-        }
-        if !deposited.is_empty() {
-            let mut sh = self.sh();
-            let q = sh.pending_out.entry(peer).or_default();
-            for item in deposited {
-                if q.len() < PENDING_OUT_CAP {
-                    q.push_back(item);
-                }
-            }
-        }
+        let tx = self.outbox(&peer);
+        let _ = tx.send(OutJob::Flush).await;
     }
 
     async fn fail_pending(&self, peer: PeerId, reason: &str) {
@@ -2755,6 +3490,7 @@ impl Core {
                 .map(|q| q.into_iter().collect())
                 .unwrap_or_default()
         };
+        self.persist_pending();
         for item in items {
             if let Some(id) = item.msg_id {
                 self.transition(&id, MsgState::Failed, Some(reason.into()))
@@ -2841,120 +3577,51 @@ impl Core {
     /// deposit route — calls never ride mailboxes (§8, CA18).
     fn call_live_path(&self, peer: &PeerId) -> Option<Arc<PeerSession>> {
         let ps = self.session(peer)?;
-        let deposit_would = {
-            let sh = self.sh();
-            sh.presence.get(peer).map(|o| !*o).unwrap_or(false)
-                && sh.meta.get(peer).and_then(|m| m.grant.as_ref()).is_some()
-        };
-        if deposit_would {
+        if self.deposit_would(peer, &ps) {
             return None;
         }
         Some(ps)
     }
 
-    /// Call signalling: seal on the pinned session, NEVER deposit, send
-    /// reliably on cmd_tx (control messages are low-rate). The pin is
-    /// checked BEFORE sealing — encrypting under a generation that is
-    /// about to be rejected burns a nonce and desyncs its real owner.
-    async fn send_call_ctrl(&self, peer: PeerId, app: &AppMsg, pinned_sid: SessionId) -> bool {
-        let Some(ps) = self.session(&peer) else {
-            return false;
-        };
-        if ps.session_id != pinned_sid {
-            return false;
-        }
-        let SealOutcome::Sealed {
-            ps,
-            ct,
-            ctrl,
-            deposit,
-        } = self.seal_with(&peer, ps, app)
-        else {
-            return false;
-        };
-        if deposit {
-            return false;
-        }
-        if self
-            .link
-            .cmd_tx
-            .send(ClientMsg::Transport {
-                to: peer,
-                session_id: ps.session_id,
-                body: ct,
+    /// Call signalling (control lane): the frame joins the peer's ordered
+    /// outbound lane as a pinned `Call` job — the worker re-checks the pin
+    /// at seal time (a stale generation drops pre-seal; no nonce burns on
+    /// the wrong stream) and never deposits. Task-context callers only —
+    /// route-context answers use `enqueue_call_reply`.
+    async fn send_call_ctrl(&self, peer: PeerId, app: AppMsg, pinned_sid: SessionId) -> bool {
+        let tx = self.outbox(&peer);
+        let (vtx, vrx) = oneshot::channel();
+        if tx
+            .send(OutJob::Call {
+                app,
+                pin: pinned_sid,
+                verdict: Some(vtx),
             })
             .await
             .is_err()
         {
             return false;
         }
-        if let Some(ctrl) = ctrl {
-            let _ = self
-                .link
-                .cmd_tx
-                .send(ClientMsg::Transport {
-                    to: peer,
-                    session_id: ps.session_id,
-                    body: ctrl,
-                })
-                .await;
-        }
-        true
+        vrx.await.unwrap_or(false)
     }
 
-    /// Media lane: seal on the pinned session, send via try_send so a
-    /// saturated channel drops the frame (isochronous) instead of
-    /// queueing behind chat. The pin is checked BEFORE sealing (a stale
-    /// generation must not consume a nonce), and a rekey control unit —
-    /// the last frame under the old egress key — goes on the wire AFTER
-    /// the data frame it follows and via a blocking send so the rotation
-    /// boundary can never be reordered or dropped mid-stream.
-    async fn send_call_frame(&self, peer: PeerId, app: &AppMsg, pinned_sid: SessionId) -> bool {
-        let Some(ps) = self.session(&peer) else {
-            return false;
-        };
-        if ps.session_id != pinned_sid {
-            return false;
+    /// Media lane (lossy): `try_send` sheds the UNSEALED frame when the
+    /// lane is full — isochronous media must drop pre-seal, never post-seal
+    /// (a dropped sealed frame desyncs sequential nonces and
+    /// DecryptFatal-destroys the session). The pin check happens at seal
+    /// time inside the worker; accepted jobs report the verdict so tx/drop
+    /// counters stay honest.
+    async fn send_call_frame(&self, peer: PeerId, app: AppMsg, pinned_sid: SessionId) -> bool {
+        let tx = self.outbox(&peer);
+        let (vtx, vrx) = oneshot::channel();
+        match tx.try_send(OutJob::Call {
+            app,
+            pin: pinned_sid,
+            verdict: Some(vtx),
+        }) {
+            Ok(()) => vrx.await.unwrap_or(false),
+            Err(_) => false,
         }
-        let SealOutcome::Sealed {
-            ps,
-            ct,
-            ctrl,
-            deposit,
-        } = self.seal_with(&peer, ps, app)
-        else {
-            return false;
-        };
-        if deposit {
-            return false;
-        }
-        // Media backpressure must resolve at out_q (pre-seal drop-oldest),
-        // never post-seal: a dropped sealed frame desyncs the receiver's
-        // sequential nonces and DecryptFatal-destroys the session. Block on
-        // cmd_tx like every other lane — a full channel stalls only this
-        // drain task while out_q sheds the excess upstream of sealing.
-        let sent = self
-            .link
-            .cmd_tx
-            .send(ClientMsg::Transport {
-                to: peer,
-                session_id: ps.session_id,
-                body: ct,
-            })
-            .await
-            .is_ok();
-        if let Some(ctrl) = ctrl {
-            let _ = self
-                .link
-                .cmd_tx
-                .send(ClientMsg::Transport {
-                    to: peer,
-                    session_id: ps.session_id,
-                    body: ctrl,
-                })
-                .await;
-        }
-        sent
     }
 
     fn emit_call_state(&self, c: &Call, reason: Option<EndReason>) {
@@ -3032,7 +3699,7 @@ impl Core {
             let _ = self
                 .send_call_ctrl(
                     call.peer,
-                    &AppMsg::CallEnd {
+                    AppMsg::CallEnd {
                         call_id: *call_id,
                         reason: reason.to_u8(),
                     },
@@ -3191,7 +3858,7 @@ impl Core {
                     let sent = me
                         .send_call_frame(
                             peer,
-                            &AppMsg::CallFrame {
+                            AppMsg::CallFrame {
                                 call_id,
                                 seq,
                                 ts_ms,
@@ -3264,7 +3931,6 @@ impl Core {
             tokio::time::sleep(tick).await;
             let caps = self.call_caps();
             let now = Instant::now();
-            let today = now_ms() / 86_400_000;
             // Re-ring throttle cleanup alongside the call sweeps.
             {
                 let mut sh = self.sh();
@@ -3291,7 +3957,6 @@ impl Core {
                     }
                 }
             }
-            let _ = today;
             for c in self.live_calls() {
                 // Session-pin: any mismatch with the generation the call was
                 // created on = dead call (§4 "a dead session ends the call").
@@ -3418,24 +4083,20 @@ impl Core {
             if existing.state == CallState::Ringing
                 && sid.map(|s| s == existing.local_sid).unwrap_or(true)
             {
-                let _ = self
-                    .send_call_ctrl(peer, &AppMsg::CallRinging { call_id }, existing.local_sid)
-                    .await;
+                self.enqueue_call_reply(peer, AppMsg::CallRinging { call_id }, existing.local_sid);
             }
             return;
         }
         // Unsupported media → explicit decline path.
         if media & call::CAP_AUDIO_OPUS48K == 0 {
-            let _ = self
-                .send_call_ctrl(
-                    peer,
-                    &AppMsg::CallEnd {
-                        call_id,
-                        reason: EndReason::Failed.to_u8(),
-                    },
-                    pin,
-                )
-                .await;
+            self.enqueue_call_reply(
+                peer,
+                AppMsg::CallEnd {
+                    call_id,
+                    reason: EndReason::Failed.to_u8(),
+                },
+                pin,
+            );
             return;
         }
         // Expired ring → dead on arrival.
@@ -3486,22 +4147,18 @@ impl Core {
             }
         };
         let Some(c) = c else {
-            let _ = self
-                .send_call_ctrl(
-                    peer,
-                    &AppMsg::CallEnd {
-                        call_id,
-                        reason: EndReason::Busy.to_u8(),
-                    },
-                    pin,
-                )
-                .await;
+            self.enqueue_call_reply(
+                peer,
+                AppMsg::CallEnd {
+                    call_id,
+                    reason: EndReason::Busy.to_u8(),
+                },
+                pin,
+            );
             return;
         };
         self.emit_call_incoming(&c);
-        let _ = self
-            .send_call_ctrl(peer, &AppMsg::CallRinging { call_id }, pin)
-            .await;
+        self.enqueue_call_reply(peer, AppMsg::CallRinging { call_id }, pin);
         self.emit_call_state(&c, None);
     }
 
@@ -3770,7 +4427,7 @@ impl Core {
         let Some(peer) = peer_of_chat(&row.chat_id).ok() else {
             return;
         };
-        self.deliver_or_queue(
+        self.enqueue_reply(
             peer,
             PendingMsg {
                 app: AppMsg::FileAccept {
@@ -3778,9 +4435,9 @@ impl Core {
                     ranges,
                 },
                 msg_id: None,
+                attempts: 0,
             },
-        )
-        .await;
+        );
     }
 
     /// Accept path shared by the auto-accept policy and `file.accept`:
@@ -3865,7 +4522,7 @@ impl Core {
                 let _ = self.sblk(move |s| s.set_file_have(&fid2, &full)).await;
                 self.xfer_set_state(row, FileState::Complete, None).await;
                 let sha: [u8; 32] = d;
-                self.deliver_or_queue(
+                self.enqueue_reply(
                     peer,
                     PendingMsg {
                         app: AppMsg::FileDone {
@@ -3873,25 +4530,25 @@ impl Core {
                             sha256: sha,
                         },
                         msg_id: None,
+                        attempts: 0,
                     },
-                )
-                .await;
+                );
                 // The anchor message's in-band ack.
                 let mid = row.msg_id.clone();
-                self.deliver_or_queue(
+                self.enqueue_reply(
                     peer,
                     PendingMsg {
                         app: AppMsg::Ack { msg_ids: vec![mid] },
                         msg_id: None,
+                        attempts: 0,
                     },
-                )
-                .await;
+                );
             }
             (Some(_), Some(fid)) => {
                 self.xfer_set_state(row, FileState::Failed, Some("hash_mismatch"))
                     .await;
                 self.xfer_unlink(row).await;
-                self.deliver_or_queue(
+                self.enqueue_reply(
                     peer,
                     PendingMsg {
                         app: AppMsg::FileCancel {
@@ -3899,9 +4556,9 @@ impl Core {
                             reason: FileCancelReason::HashMismatch,
                         },
                         msg_id: None,
+                        attempts: 0,
                     },
-                )
-                .await;
+                );
             }
             _ => {
                 self.xfer_set_state(row, FileState::Failed, Some("internal"))
@@ -4016,16 +4673,17 @@ impl Core {
         } else {
             format!("[{tag}] {name} · {}", xfer::fmt_size(size))
         };
-        let (mid, deduped) = self
+        let (mut mid, mut deduped) = self
             .sblk({
                 let cid = chat_id.clone();
+                let b = body.clone();
                 move |s| {
                     s.insert_message(&NewMessage {
                         msg_id: reply_msg,
                         chat_id: cid,
                         dir: Dir::In,
                         kind: MsgKind::File,
-                        body,
+                        body: b,
                         state: Some(MsgState::Delivered),
                         client_msg_id: None,
                         ts: now_ms(),
@@ -4037,6 +4695,46 @@ impl Core {
             .unwrap_or_else(|_| (String::new(), true));
         if mid.is_empty() {
             return;
+        }
+        if deduped {
+            // `reply_msg` is sender-supplied: stamping one of OUR outbound
+            // msg ids makes the dedupe bind the file anchor to the wrong
+            // row. Only an inbound row in this chat may stand as anchor —
+            // anything else gets a fresh, locally-minted id.
+            let claimed = self
+                .sblk({
+                    let m = mid.clone();
+                    move |s| s.get_message(&m)
+                })
+                .await;
+            let valid = matches!(claimed, Ok(Some(m)) if m.dir == Dir::In && m.chat_id == chat_id);
+            if !valid {
+                let anchor = anchor_msg_id(&peer, &mid);
+                let cid = chat_id.clone();
+                let a = anchor.clone();
+                let re = self
+                    .sblk(move |s| {
+                        s.insert_message(&NewMessage {
+                            msg_id: a,
+                            chat_id: cid,
+                            dir: Dir::In,
+                            kind: MsgKind::File,
+                            body,
+                            state: Some(MsgState::Delivered),
+                            client_msg_id: None,
+                            ts: now_ms(),
+                            expires_at: None,
+                        })
+                    })
+                    .await;
+                match re {
+                    Ok((m, d)) if !m.is_empty() => {
+                        mid = m;
+                        deduped = d;
+                    }
+                    _ => return,
+                }
+            }
         }
         let new_file = NewFile {
             file_id: file_id_s.clone(),
@@ -4116,14 +4814,14 @@ impl Core {
         self.xfer_set_state(row, FileState::Declined, Some(reason))
             .await;
         if let Some(fid) = file_id_raw(&row.file_id) {
-            self.deliver_or_queue(
+            self.enqueue_reply(
                 peer,
                 PendingMsg {
                     app: AppMsg::FileDecline { file_id: fid },
                     msg_id: None,
+                    attempts: 0,
                 },
-            )
-            .await;
+            );
         }
     }
 
@@ -4181,7 +4879,7 @@ impl Core {
                 self.xfer_set_state(&row, FileState::Failed, Some("policy"))
                     .await;
                 self.xfer_unlink(&row).await;
-                self.deliver_or_queue(
+                self.enqueue_reply(
                     peer,
                     PendingMsg {
                         app: AppMsg::FileCancel {
@@ -4189,9 +4887,9 @@ impl Core {
                             reason: FileCancelReason::Policy,
                         },
                         msg_id: None,
+                        attempts: 0,
                     },
-                )
-                .await;
+                );
             }
             return;
         }
@@ -4247,7 +4945,7 @@ impl Core {
                             .map(|x| xfer::ranges_of(&x.have, total))
                             .unwrap_or_default()
                     };
-                    self.deliver_or_queue(
+                    self.enqueue_reply(
                         peer,
                         PendingMsg {
                             app: AppMsg::FileHave {
@@ -4255,9 +4953,9 @@ impl Core {
                                 ranges,
                             },
                             msg_id: None,
+                            attempts: 0,
                         },
-                    )
-                    .await;
+                    );
                 }
             }
         }
@@ -4326,7 +5024,6 @@ impl Core {
                 for i in 0..x.have.len() {
                     x.sent[i] &= x.have[i];
                 }
-                x.mbox_full = false;
             }
         }
         let fid = file_id_s.clone();
@@ -4390,14 +5087,14 @@ impl Core {
             .await;
         self.xfer_unlink(&row).await;
         let mid = row.msg_id.clone();
-        self.deliver_or_queue(
+        self.enqueue_reply(
             peer,
             PendingMsg {
                 app: AppMsg::Ack { msg_ids: vec![mid] },
                 msg_id: None,
+                attempts: 0,
             },
-        )
-        .await;
+        );
     }
 
     async fn on_file_decline(&self, peer: PeerId, file_id: [u8; 32]) {
@@ -4440,7 +5137,13 @@ impl Core {
         else {
             return;
         };
+        // The peer is always the transfer's other endpoint: for our
+        // outbound row it is the receiver aborting, for our inbound row
+        // it is the sender aborting — both are lawful. The chat binding
+        // is the forgery check: a cancel aimed at another chat's row is
+        // dropped + counted.
         if row.chat_id != chat_str(&peer) {
+            self.sh().dropped_inbound += 1;
             return;
         }
         if FileState::parse(&row.state)
@@ -4578,7 +5281,7 @@ impl Core {
                 let verdict = self
                     .deliver_xfer(
                         peer,
-                        &AppMsg::FileChunk {
+                        AppMsg::FileChunk {
                             file_id: fid_raw,
                             index: idx,
                             data,
@@ -4596,12 +5299,6 @@ impl Core {
                         tokio::time::sleep(caps.send_pace).await;
                     }
                     XferSend::MailboxFull => {
-                        {
-                            let mut sh = self.sh();
-                            if let Some(x) = sh.xfers.get_mut(&file_id) {
-                                x.mbox_full = true;
-                            }
-                        }
                         stalled = true;
                         break;
                     }
@@ -4665,8 +5362,15 @@ impl Core {
                 | (Dir::Out, Some(FileState::Transferring)) => {
                     let offer = self.offer_app(&row);
                     if let Some(app) = offer {
-                        self.deliver_or_queue(peer, PendingMsg { app, msg_id: None })
-                            .await;
+                        self.deliver_or_queue(
+                            peer,
+                            PendingMsg {
+                                app,
+                                msg_id: None,
+                                attempts: 0,
+                            },
+                        )
+                        .await;
                     }
                     self.xfer_pump_start(&row.file_id, peer);
                 }
@@ -4825,8 +5529,15 @@ impl Core {
         {
             let mut sh = self.sh();
             // Denied peers never re-handshake — no exception for queued
-            // backlog, presence flips, or post-decrypt resyncs.
-            if Self::denied(&sh, &peer) {
+            // backlog, presence flips, or post-decrypt resyncs. Declined /
+            // blocked contacts share the gate: a hand-patched meta or a
+            // just-declined row must not re-arm a dead lane either.
+            if Self::denied(&sh, &peer)
+                || matches!(
+                    sh.meta.get(&peer).map(|m| m.state),
+                    Some(MetaState::Declined) | Some(MetaState::Blocked)
+                )
+            {
                 return;
             }
             if !sh.hs_inflight.insert(peer) {
@@ -4842,16 +5553,22 @@ impl Core {
     async fn outbound_handshake(self: &Arc<Self>, peer: PeerId, invite: Option<InviteToken>) {
         let mut dl = DemuxLink::new(self.link.cmd_tx.clone(), self.link.hs_waiters.clone());
         let result = handshake_flow::initiator(&self.identity, &mut dl, peer, &peer, invite).await;
-        self.sh().hs_inflight.remove(&peer);
         match result {
             Ok(session) => {
+                // hs_inflight stays set through the install window: it is
+                // in every `early` park predicate, so frames that race the
+                // install wait instead of hitting the foreign-sid
+                // tombstone and poisoning the fresh stream id.
                 self.on_session_ready(peer, session, true).await;
+                self.sh().hs_inflight.remove(&peer);
             }
             Err(NetErr::PeerIdMismatch {
                 actual,
                 actual_static,
                 ..
             }) => {
+                self.sh().hs_inflight.remove(&peer);
+                self.clear_early(&peer);
                 // The remote static changed under a pinned peer-id: record
                 // it (loud — is_send_blocked gates sends until dismissed),
                 // never a silent rebind.
@@ -4880,6 +5597,10 @@ impl Core {
             }
             Err(e) => {
                 tracing::debug!(%e, "outbound handshake failed");
+                self.sh().hs_inflight.remove(&peer);
+                // Frames parked during THIS failed attempt belong to the
+                // dead generation — flushed, never bound to the next one.
+                self.clear_early(&peer);
                 // Transient failures (offline, timeout, dead link) keep the
                 // queue: a later PeerStatus{online} or link-up re-arms the
                 // handshake and flush_pending delivers. Only terminal errors
@@ -4956,6 +5677,7 @@ impl Core {
                 continue;
             };
             for (chat_id, msg_id) in expired {
+                self.replay_scrub_msg(&msg_id, None);
                 self.emit(
                     "msg.expired",
                     Some(&chat_id),
@@ -5003,6 +5725,9 @@ impl Core {
             let c = self.clone();
             tokio::spawn(async move {
                 c.respond(ev).await;
+                // Frames parked while THIS attempt was in flight belong to
+                // the dead generation — flush them before the slot frees.
+                c.clear_early(&from);
                 c.sh().responders.remove(&from);
             });
         }
@@ -5045,6 +5770,46 @@ impl Core {
         from: PeerId,
         session_id: SessionId,
         body: Vec<u8>,
+    ) {
+        // Ordered-install barrier: while an install window for `from` is
+        // open (handshake done → early-drain empty), EVERY inbound frame
+        // parks FIFO — a post-install arrival that decrypts ahead of an
+        // earlier parked frame desyncs the sequential transport nonces
+        // (fatal). The check+park is one lock, atomic with the drain's
+        // empty-check+window-close, so no frame can slip between "queue
+        // empty" and "barrier down" into a permanently-parked slot.
+        {
+            let mut sh = self.sh();
+            if sh.installing.contains_key(&from) {
+                if sh.early_total >= EARLY_GLOBAL_CAP {
+                    tracing::debug!(%from, ?session_id, "early global cap; frame dropped");
+                } else {
+                    let q = sh.early.entry(from).or_default();
+                    if q.len() < 8 {
+                        q.push_back((session_id, body));
+                        sh.early_total += 1;
+                    } else {
+                        tracing::debug!(%from, ?session_id, "early queue full; frame dropped");
+                    }
+                }
+                return;
+            }
+        }
+        self.dispatch_transport(from, session_id, body, false).await;
+    }
+
+    /// Transport routing/decrypt for one inbound frame — reached either
+    /// straight past the install barrier (live path, `replayed=false`) or
+    /// from the on_session_ready early-drain (`replayed=true`, which owns
+    /// the ordering and must bypass the barrier). A replayed frame that
+    /// still cannot bind waits in `late` for the NEXT generation — it must
+    /// not re-enter `early` or the drain's empty-check would livelock.
+    async fn dispatch_transport(
+        self: &Arc<Self>,
+        from: PeerId,
+        session_id: SessionId,
+        body: Vec<u8>,
+        replayed: bool,
     ) {
         // Routing: bound sid → its session. Unbound sid → the peer's session
         // binds lazily (each side stamps a random local sid, learned here).
@@ -5112,10 +5877,13 @@ impl Core {
                         // coming (Noise sessions never resume), so the frame
                         // is a dead-generation leftover: drop it. Feeding it
                         // to a LATER session's drain would bind a foreign sid
-                        // and kill that session on decrypt-fail.
+                        // and kill that session on decrypt-fail. Replayed
+                        // frames wait in `late` instead: a not-yet-installed
+                        // generation can still claim them, but they never
+                        // re-enter `early` mid-drain.
                         let in_flight = sh.hs_inflight.contains(&from)
                             || sh.responders.contains(&from)
-                            || sh.installing.contains(&from);
+                            || replayed;
                         if !in_flight {
                             sh.dropped_inbound += 1;
                             tracing::debug!(%from, ?session_id, "no session or handshake in flight; frame dropped");
@@ -5128,7 +5896,11 @@ impl Core {
                             tracing::debug!(%from, ?session_id, "early global cap; frame dropped");
                             return;
                         }
-                        let q = sh.early.entry(from).or_default();
+                        let q = if replayed {
+                            sh.late.entry(from).or_default()
+                        } else {
+                            sh.early.entry(from).or_default()
+                        };
                         if q.len() < 8 {
                             q.push_back((session_id, body));
                             sh.early_total += 1;
@@ -5152,12 +5924,19 @@ impl Core {
                             // the new sid here would poison that generation
                             // permanently. Park it like `early` does and let
                             // the post-install drain bind it to the fresh
-                            // session.
+                            // session. A REPLAYED frame takes the `late`
+                            // queue: its generation's install is still in
+                            // flight, but re-entering `early` here would
+                            // livelock the drain's empty-check.
                             let in_flight = sh.hs_inflight.contains(&from)
                                 || sh.responders.contains(&from)
-                                || sh.installing.contains(&from);
+                                || replayed;
                             if in_flight && sh.early_total < EARLY_GLOBAL_CAP {
-                                let q = sh.early.entry(from).or_default();
+                                let q = if replayed {
+                                    sh.late.entry(from).or_default()
+                                } else {
+                                    sh.early.entry(from).or_default()
+                                };
                                 if q.len() < 8 {
                                     q.push_back((session_id, body));
                                     sh.early_total += 1;
@@ -5244,6 +6023,14 @@ impl Core {
                 body,
                 expires_at,
             } => {
+                // Sender-supplied ids are dedupe keys — bound them like the
+                // FileOffer anchor does (a garbage id is cheap to mint and
+                // lands a junk row).
+                if msg_id.len() > 128 || !msg_id.starts_with("msg:") {
+                    self.sh().dropped_inbound += 1;
+                    tracing::debug!(%peer, "malformed Text msg_id; dropped");
+                    return;
+                }
                 let verified = self.contact_verified(&peer).await;
                 let _ = self
                     .sblk({
@@ -5274,63 +6061,171 @@ impl Core {
                         }
                     })
                     .await;
-                let Ok((id, deduped)) = inserted else { return };
-                if !deduped {
-                    if let Ok(Some(m)) = self
+                let Ok((mut id, deduped)) = inserted else {
+                    return;
+                };
+                if deduped {
+                    // Same rule as FileOffer anchors: a sender msg_id may
+                    // only dedupe against an inbound row in THIS chat. Any
+                    // other claim — typically one of OUR outbound ids, where
+                    // the body would silently drop and the Ack below would
+                    // mark our row delivered — re-anchors under the derived
+                    // id so retransmits still dedupe.
+                    let claimed = self
                         .sblk({
-                            let id = id.clone();
-                            move |s| s.get_message(&id)
-                        })
-                        .await
-                    {
-                        if m.deleted {
-                            // Deadline already passed on receipt: persisted
-                            // as a tombstone for audit, never displayed.
-                            self.emit(
-                                "msg.expired",
-                                Some(&m.chat_id),
-                                json!({"chat_id": m.chat_id, "msg_id": m.msg_id}),
-                            );
-                        } else {
-                            self.emit(
-                                "message.received",
-                                Some(&m.chat_id),
-                                json!({
-                                    "chat_id": m.chat_id,
-                                    "message": message_json(&m, &peer, &self.peer_id_str, None),
-                                }),
-                            );
-                        }
-                    }
-                }
-                self.deliver_now(
-                    peer,
-                    &PendingMsg {
-                        app: AppMsg::Ack { msg_ids: vec![id] },
-                        msg_id: None,
-                    },
-                )
-                .await;
-            }
-            AppMsg::Ack { msg_ids } => {
-                for id in msg_ids {
-                    let cur = self
-                        .sblk({
-                            let id = id.clone();
-                            move |s| s.get_message(&id)
+                            let i = id.clone();
+                            move |s| s.get_message(&i)
                         })
                         .await;
-                    if let Ok(Some(m)) = cur {
-                        // Acks only advance OUR outbound rows in THIS chat —
-                        // a peer can't ack another chat's ids or their own
-                        // inbound copies.
-                        if m.chat_id == chat_id
-                            && m.dir == Dir::Out
-                            && matches!(m.state, Some(MsgState::Queued) | Some(MsgState::Sent))
-                        {
-                            self.transition(&m.msg_id, MsgState::Delivered, None).await;
+                    let valid =
+                        matches!(claimed, Ok(Some(m)) if m.dir == Dir::In && m.chat_id == chat_id);
+                    if !valid {
+                        let anchor = anchor_msg_id(&peer, &id);
+                        let cid = chat_id.clone();
+                        let a = anchor.clone();
+                        let b = body.clone();
+                        let re = self
+                            .sblk(move |s| {
+                                s.insert_message(&NewMessage {
+                                    msg_id: a,
+                                    chat_id: cid,
+                                    dir: Dir::In,
+                                    kind: MsgKind::Text,
+                                    body: b,
+                                    state: Some(MsgState::Delivered),
+                                    client_msg_id: None,
+                                    ts: now_ms(),
+                                    expires_at,
+                                })
+                            })
+                            .await;
+                        match re {
+                            Ok((mid2, d)) if !mid2.is_empty() => {
+                                id = mid2;
+                                if d {
+                                    // Derived anchor already exists (a
+                                    // retransmit that raced us): nothing
+                                    // new to emit, just re-ack.
+                                    self.enqueue_reply(
+                                        peer,
+                                        PendingMsg {
+                                            app: AppMsg::Ack {
+                                                msg_ids: vec![msg_id],
+                                            },
+                                            msg_id: None,
+                                            attempts: 0,
+                                        },
+                                    );
+                                    return;
+                                }
+                                if let Ok(Some(m)) = self.sblk(move |s| s.get_message(&id)).await {
+                                    if m.deleted {
+                                        self.emit(
+                                            "msg.expired",
+                                            Some(&m.chat_id),
+                                            json!({"chat_id": m.chat_id, "msg_id": m.msg_id}),
+                                        );
+                                    } else {
+                                        self.emit(
+                                            "message.received",
+                                            Some(&m.chat_id),
+                                            json!({
+                                                "chat_id": m.chat_id,
+                                                "message": message_json(&m, &peer, &self.peer_id_str, None),
+                                            }),
+                                        );
+                                    }
+                                }
+                                // The Ack carries the SENDER's id so their
+                                // pending row clears; our stored anchor is
+                                // local bookkeeping.
+                                self.enqueue_reply(
+                                    peer,
+                                    PendingMsg {
+                                        app: AppMsg::Ack {
+                                            msg_ids: vec![msg_id],
+                                        },
+                                        msg_id: None,
+                                        attempts: 0,
+                                    },
+                                );
+                                return;
+                            }
+                            _ => return,
                         }
                     }
+                } else if let Ok(Some(m)) = self
+                    .sblk({
+                        let id = id.clone();
+                        move |s| s.get_message(&id)
+                    })
+                    .await
+                {
+                    if m.deleted {
+                        // Deadline already passed on receipt: persisted
+                        // as a tombstone for audit, never displayed.
+                        self.emit(
+                            "msg.expired",
+                            Some(&m.chat_id),
+                            json!({"chat_id": m.chat_id, "msg_id": m.msg_id}),
+                        );
+                    } else {
+                        self.emit(
+                            "message.received",
+                            Some(&m.chat_id),
+                            json!({
+                                "chat_id": m.chat_id,
+                                "message": message_json(&m, &peer, &self.peer_id_str, None),
+                            }),
+                        );
+                    }
+                }
+                self.enqueue_reply(
+                    peer,
+                    PendingMsg {
+                        app: AppMsg::Ack { msg_ids: vec![id] },
+                        msg_id: None,
+                        attempts: 0,
+                    },
+                );
+            }
+            AppMsg::Ack { msg_ids } => {
+                // One blocking hop for the whole batch; the wire cap (≈256
+                // ids/frame) keeps a hostile fanout from chewing the store
+                // inside the pump. Acks only advance OUR outbound rows in
+                // THIS chat.
+                let ids: Vec<String> = msg_ids.into_iter().take(256).collect();
+                let cid = chat_id.clone();
+                let delivered = self
+                    .sblk(move |s| {
+                        let mut out = Vec::new();
+                        for id in &ids {
+                            let Ok(Some(m)) = s.get_message(id) else {
+                                continue;
+                            };
+                            if m.chat_id == cid
+                                && m.dir == Dir::Out
+                                && matches!(m.state, Some(MsgState::Queued) | Some(MsgState::Sent))
+                                && s.update_state(&m.msg_id, MsgState::Delivered).is_ok()
+                            {
+                                out.push(m);
+                            }
+                        }
+                        Ok(out)
+                    })
+                    .await
+                    .unwrap_or_default();
+                for m in delivered {
+                    self.emit(
+                        "msg_state",
+                        Some(&m.chat_id),
+                        json!({
+                            "chat_id": m.chat_id,
+                            "msg_id": m.msg_id,
+                            "client_msg_id": m.client_msg_id,
+                            "state": "delivered",
+                        }),
+                    );
                 }
             }
             AppMsg::Grant {
@@ -5349,6 +6244,7 @@ impl Core {
                         mailbox_id,
                         deposit_token,
                     });
+                    Self::cap_noncontact_meta(&mut sh);
                 }
                 self.persist_meta();
                 let _ = self
@@ -5376,6 +6272,7 @@ impl Core {
                     })
                     .await;
                 if r.is_ok() {
+                    self.replay_scrub_msg(&msg_id, Some(&body));
                     if let Ok(Some(m)) = self.sblk(move |s| s.get_message(&msg_id)).await {
                         self.emit(
                             "message.received",
@@ -5397,6 +6294,7 @@ impl Core {
                     })
                     .await;
                 if r.is_ok() {
+                    self.replay_scrub_msg(&msg_id, None);
                     if let Ok(Some(m)) = self.sblk(move |s| s.get_message(&msg_id)).await {
                         self.emit(
                             "message.received",
@@ -5657,6 +6555,22 @@ impl Core {
         let ts = now_ms();
         let expires_at = ttl_ms.filter(|t| *t > 0).map(|t| ts.saturating_add(t));
         let mid = new_msg_id();
+        // Deterministic wire bound: a body that can't fit one plaintext
+        // frame is rejected HERE (InvalidParams), not sealed-and-failed in
+        // the lane where a poison item would wedge the queue behind it.
+        let wire_ok = wire_serialize(&AppMsg::Text {
+            msg_id: mid.clone(),
+            body: body.to_string(),
+            expires_at: expires_at.map(|e| e.max(0) as u64),
+        })
+        .map(|b| b.len() <= cinder_core::proto::caps::MAX_PLAINTEXT)
+        .unwrap_or(false);
+        if !wire_ok {
+            return Err(RpcError::new(
+                ErrorKind::InvalidParams,
+                "body exceeds the wire plaintext budget",
+            ));
+        }
         let inserted = self
             .sblk({
                 let chat_id = chat_id.clone();
@@ -5711,6 +6625,7 @@ impl Core {
                 expires_at: expires_at.map(|e| e.max(0) as u64),
             },
             msg_id: Some(mid.clone()),
+            attempts: 0,
         };
         let chat_id2 = chat_id.clone();
         tokio::spawn(async move {
@@ -5835,6 +6750,9 @@ impl Core {
             // Frames parked for an in-flight install die with the deny —
             // they must never drain into a later gate's judgment.
             if let Some(q) = sh.early.remove(peer) {
+                sh.early_total = sh.early_total.saturating_sub(q.len());
+            }
+            if let Some(q) = sh.late.remove(peer) {
                 sh.early_total = sh.early_total.saturating_sub(q.len());
             }
             if let Some(m) = sh.meta.get_mut(peer) {
@@ -5992,6 +6910,7 @@ impl Core {
                 }
             }
         }
+        self.persist_pending();
         let cid = chat_id.to_string();
         let wiped = match self.sblk(move |s| s.wipe_chat(&cid)).await {
             Ok((existed, staged)) => {
@@ -6009,6 +6928,7 @@ impl Core {
         if !wiped {
             return;
         }
+        self.replay_scrub_chat(chat_id);
         self.emit(
             "chat.wiped",
             Some(chat_id),
@@ -6331,6 +7251,18 @@ impl CinderCore for Core {
         }
         let peer = peer_of_chat(&m.chat_id)?;
         self.check_send_allowed(&peer).await?;
+        let wire_ok = wire_serialize(&AppMsg::Edit {
+            msg_id: p.msg_id.clone(),
+            body: p.body.clone(),
+        })
+        .map(|b| b.len() <= cinder_core::proto::caps::MAX_PLAINTEXT)
+        .unwrap_or(false);
+        if !wire_ok {
+            return Err(RpcError::new(
+                ErrorKind::InvalidParams,
+                "body exceeds the wire plaintext budget",
+            ));
+        }
         self.sblk({
             let id = p.msg_id.clone();
             let body = p.body.clone();
@@ -6338,6 +7270,7 @@ impl CinderCore for Core {
         })
         .await
         .map_err(store_rpc)?;
+        self.replay_scrub_msg(&p.msg_id, Some(&p.body));
         let revision = self
             .sblk({
                 let id = p.msg_id.clone();
@@ -6357,6 +7290,7 @@ impl CinderCore for Core {
                         body: p.body.clone(),
                     },
                     msg_id: Some(msg_id),
+                    attempts: 0,
                 },
             )
             .await;
@@ -6403,6 +7337,7 @@ impl CinderCore for Core {
         })
         .await
         .map_err(store_rpc)?;
+        self.replay_scrub_msg(&p.msg_id, None);
         if scope == "everyone" {
             let peer = peer_of_chat(&m.chat_id)?;
             let me = self.arc();
@@ -6415,6 +7350,7 @@ impl CinderCore for Core {
                             msg_id: msg_id.clone(),
                         },
                         msg_id: Some(msg_id),
+                        attempts: 0,
                     },
                 )
                 .await;
@@ -6487,6 +7423,7 @@ impl CinderCore for Core {
                         emoji: p.emoji.clone(),
                     },
                     msg_id: Some(msg_id),
+                    attempts: 0,
                 },
             )
             .await;
@@ -6637,21 +7574,22 @@ impl CinderCore for Core {
         if !exists {
             return Err(RpcError::new(ErrorKind::NotFound, "chat not found"));
         }
-        let notified = match self
-            .deliver_now(
-                peer,
-                &PendingMsg {
+        let (vtx, vrx) = oneshot::channel();
+        let sent = self
+            .outbox(&peer)
+            .send(OutJob::Once {
+                item: PendingMsg {
                     app: AppMsg::ChatWipe {
                         chat_id: p.chat_id.clone(),
                     },
                     msg_id: None,
+                    attempts: 0,
                 },
-            )
+                verdict: vtx,
+            })
             .await
-        {
-            Delivered::Sent | Delivered::Deposited => true,
-            Delivered::Failed => false,
-        };
+            .is_ok();
+        let notified = sent && matches!(vrx.await, Ok(Delivered::Sent) | Ok(Delivered::Deposited));
         self.arc().wipe_chat_local(&p.chat_id, "local").await;
         Ok(json!({
             "chat_id": p.chat_id,
@@ -7299,6 +8237,7 @@ impl CinderCore for Core {
                 PendingMsg {
                     app: offer,
                     msg_id: Some(mid2),
+                    attempts: 0,
                 },
             )
             .await;
@@ -7390,6 +8329,7 @@ impl CinderCore for Core {
                             reason: FileCancelReason::User,
                         },
                         msg_id: None,
+                        attempts: 0,
                     },
                 )
                 .await;
@@ -7681,7 +8621,7 @@ impl CinderCore for Core {
         let sent = self
             .send_call_ctrl(
                 peer,
-                &AppMsg::CallRing {
+                AppMsg::CallRing {
                     call_id,
                     media: call::MEDIA_AUDIO,
                     cap: call::CAP_AUDIO_OPUS48K,
@@ -7733,7 +8673,7 @@ impl CinderCore for Core {
             let _ = self
                 .send_call_ctrl(
                     call.peer,
-                    &AppMsg::CallEnd {
+                    AppMsg::CallEnd {
                         call_id: call.id,
                         reason: EndReason::Failed.to_u8(),
                     },
@@ -7749,7 +8689,7 @@ impl CinderCore for Core {
         let sent = self
             .send_call_ctrl(
                 call.peer,
-                &AppMsg::CallAccept {
+                AppMsg::CallAccept {
                     call_id: call.id,
                     cap: negotiated,
                 },
@@ -7792,7 +8732,7 @@ impl CinderCore for Core {
         let _ = self
             .send_call_ctrl(
                 call.peer,
-                &AppMsg::CallEnd {
+                AppMsg::CallEnd {
                     call_id: call.id,
                     reason: EndReason::Decline.to_u8(),
                 },
@@ -7820,7 +8760,7 @@ impl CinderCore for Core {
         let _ = self
             .send_call_ctrl(
                 call.peer,
-                &AppMsg::CallEnd {
+                AppMsg::CallEnd {
                     call_id: call.id,
                     reason: EndReason::Hangup.to_u8(),
                 },
@@ -8449,13 +9389,38 @@ impl tb::Backend for TuiBackend {
 
 // ---------- sqlite-backed replay log --------------------------------------------
 
+/// The live memory mirror behind `SqliteReplayLog` — shared through a
+/// store-keyed registry so the engine can scrub rows it rewrote (expiry
+/// tombstoned the body, an edit/deleted flag changed the text, a wipe
+/// removed the chat). Without this, replay of `message.received` events
+/// would serve plaintext the store itself no longer holds (F4).
+struct ReplayMirror {
+    cap: usize,
+    events: Mutex<VecDeque<EventRecord>>,
+    latest: std::sync::atomic::AtomicU64,
+}
+
+fn replay_registry() -> &'static Mutex<HashMap<usize, Weak<ReplayMirror>>> {
+    static REGISTRY: std::sync::OnceLock<Mutex<HashMap<usize, Weak<ReplayMirror>>>> =
+        std::sync::OnceLock::new();
+    REGISTRY.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// Live replay mirror registered for `store`, if any (identity-compared —
+/// one store, one log).
+fn replay_mirror(store: &Arc<Store>) -> Option<Arc<ReplayMirror>> {
+    replay_registry()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .get(&(Arc::as_ptr(store) as usize))
+        .and_then(|w| w.upgrade())
+}
+
 /// Bounded, ordered replay log persisted to `store.event_log`. Reads come
 /// from a memory mirror warmed at open; appends write through to sqlite on a
 /// writer task so the engine's `emit` never blocks on disk.
 pub struct SqliteReplayLog {
-    cap: usize,
-    events: VecDeque<EventRecord>,
-    latest: u64,
+    mirror: Arc<ReplayMirror>,
     tx: mpsc::UnboundedSender<EventRecord>,
 }
 
@@ -8482,6 +9447,17 @@ impl SqliteReplayLog {
             .await
             .expect("store task panicked")?
         };
+        let mirror = Arc::new(ReplayMirror {
+            cap: cap.max(1),
+            events: Mutex::new(events),
+            latest: std::sync::atomic::AtomicU64::new(latest),
+        });
+        // Register by store identity so Core::replay_scrub_* reaches THIS
+        // mirror without the engine owning the log (RPC owns the manager).
+        replay_registry()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(Arc::as_ptr(&store) as usize, Arc::downgrade(&mirror));
         let (tx, mut rx) = mpsc::unbounded_channel::<EventRecord>();
         tokio::spawn(async move {
             while let Some(rec) = rx.recv().await {
@@ -8492,35 +9468,44 @@ impl SqliteReplayLog {
                 .await;
             }
         });
-        Ok(Self {
-            cap: cap.max(1),
-            events,
-            latest,
-            tx,
-        })
+        Ok(Self { mirror, tx })
     }
 }
 
 impl ReplayLog for SqliteReplayLog {
     fn append(&mut self, record: EventRecord) {
-        self.latest = self.latest.max(record.seq);
+        self.mirror
+            .latest
+            .fetch_max(record.seq, std::sync::atomic::Ordering::Relaxed);
         let _ = self.tx.send(record.clone());
-        self.events.push_back(record);
-        while self.events.len() > self.cap {
-            self.events.pop_front();
+        let mut evs = self.mirror.events.lock().unwrap_or_else(|e| e.into_inner());
+        evs.push_back(record);
+        while evs.len() > self.mirror.cap {
+            evs.pop_front();
         }
     }
 
     fn oldest_seq(&self) -> u64 {
-        self.events.front().map(|e| e.seq).unwrap_or(0)
+        self.mirror
+            .events
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .front()
+            .map(|e| e.seq)
+            .unwrap_or(0)
     }
 
     fn latest_seq(&self) -> u64 {
-        self.latest
+        self.mirror
+            .latest
+            .load(std::sync::atomic::Ordering::Relaxed)
     }
 
     fn since(&self, since: u64) -> Vec<EventRecord> {
-        self.events
+        self.mirror
+            .events
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
             .iter()
             .filter(|e| e.seq > since)
             .cloned()

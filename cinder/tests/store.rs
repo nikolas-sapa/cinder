@@ -727,3 +727,155 @@ fn chat_disappearing_default_roundtrip() {
         Err(StoreError::NotFound(_))
     ));
 }
+
+// SEC-M1 follow-up: every body-clearing/rewriting mutation must scrub the
+// replay-log copy in the SAME transaction — soft_delete (local tombstone),
+// apply_peer_delete (peer tombstone), edit_message and apply_peer_edit.
+// Otherwise events_since serves plaintext the store no longer holds.
+#[test]
+fn delete_and_edit_scrub_replay_payload() {
+    let dir = TempDir::new().unwrap();
+    let s = open(&dir);
+    s.upsert_chat("chat:a", &PEER, None, false).unwrap();
+    let now = now_ms();
+
+    // Same payload shape the core emits for message.received.
+    let ev = |msg_id: &str, text: &str| {
+        s.append_event(
+            "message.received",
+            Some("chat:a"),
+            &json!({
+                "chat_id": "chat:a",
+                "message": {
+                    "msg_id": msg_id,
+                    "chat_id": "chat:a",
+                    "dir": "in",
+                    "body": {"text": text, "trusted": false},
+                    "ts_ms": now,
+                },
+            }),
+        )
+        .unwrap();
+    };
+
+    s.insert_message(&msg("msg:del", "chat:a", Dir::In, "secret-del", now))
+        .unwrap();
+    s.insert_message(&msg("msg:pdel", "chat:a", Dir::In, "secret-pdel", now))
+        .unwrap();
+    s.insert_message(&msg("msg:edit", "chat:a", Dir::In, "secret-preedit", now))
+        .unwrap();
+    s.insert_message(&msg("msg:pedit", "chat:a", Dir::In, "secret-prepeer", now))
+        .unwrap();
+    s.insert_message(&msg("msg:keep", "chat:a", Dir::In, "unrelated", now))
+        .unwrap();
+    for (id, text) in [
+        ("msg:del", "secret-del"),
+        ("msg:pdel", "secret-pdel"),
+        ("msg:edit", "secret-preedit"),
+        ("msg:pedit", "secret-prepeer"),
+        ("msg:keep", "unrelated"),
+    ] {
+        ev(id, text);
+    }
+
+    s.soft_delete("msg:del").unwrap();
+    s.apply_peer_delete("msg:pdel", "chat:a").unwrap();
+    s.edit_message("msg:edit", "new text").unwrap();
+    s.apply_peer_edit("msg:pedit", "chat:a", "peer new text")
+        .unwrap();
+
+    let page = s.events_since(0, 50).unwrap();
+    let text_of = |mid: &str| {
+        page.events
+            .iter()
+            .find(|e| e.payload["message"]["msg_id"] == mid)
+            .map(|e| {
+                e.payload["message"]["body"]["text"]
+                    .as_str()
+                    .unwrap()
+                    .to_string()
+            })
+    };
+    assert_eq!(text_of("msg:del").as_deref(), Some(""), "tombstone leaked");
+    assert_eq!(
+        text_of("msg:pdel").as_deref(),
+        Some(""),
+        "peer tombstone leaked"
+    );
+    // Edits scrub to empty: the pre-edit copy dies; the event the core
+    // emits for the edit carries the new body.
+    assert_eq!(
+        text_of("msg:edit").as_deref(),
+        Some(""),
+        "pre-edit body leaked"
+    );
+    assert_eq!(
+        text_of("msg:pedit").as_deref(),
+        Some(""),
+        "peer pre-edit body leaked"
+    );
+    assert_eq!(
+        text_of("msg:keep").as_deref(),
+        Some("unrelated"),
+        "scrub must stay scoped to the mutated msg_id"
+    );
+
+    let dump =
+        serde_json::to_string(&page.events.iter().map(|e| &e.payload).collect::<Vec<_>>()).unwrap();
+    for secret in [
+        "secret-del",
+        "secret-pdel",
+        "secret-preedit",
+        "secret-prepeer",
+    ] {
+        assert!(!dump.contains(secret), "{secret} survived in replay");
+    }
+
+    // The mutations themselves still took.
+    let m = s.get_message("msg:edit").unwrap().unwrap();
+    assert_eq!(m.body, "new text");
+    let m = s.get_message("msg:pedit").unwrap().unwrap();
+    assert_eq!(m.body, "peer new text");
+}
+
+// Latent predicates: search must honor the same deleted/expiry contract as
+// chat.history — tombstoned and past-TTL rows stay out of results.
+#[test]
+fn search_filters_deleted_and_expired() {
+    let dir = TempDir::new().unwrap();
+    let s = open(&dir);
+    s.upsert_chat("chat:a", &PEER, None, false).unwrap();
+    let now = now_ms();
+
+    s.insert_message(&msg("msg:live", "chat:a", Dir::In, "needle live", now))
+        .unwrap();
+    let mut exp = msg("msg:past", "chat:a", Dir::In, "needle past", now);
+    exp.expires_at = Some(now - 1);
+    s.insert_message(&exp).unwrap();
+    let mut future = msg("msg:fut", "chat:a", Dir::In, "needle future", now);
+    future.expires_at = Some(now + 60_000);
+    s.insert_message(&future).unwrap();
+    s.insert_message(&msg("msg:tomb", "chat:a", Dir::In, "needle tomb", now))
+        .unwrap();
+    s.soft_delete("msg:tomb").unwrap();
+
+    let hits: Vec<String> = s
+        .search("needle", None, 50)
+        .unwrap()
+        .into_iter()
+        .map(|m| m.msg_id)
+        .collect();
+    assert!(hits.contains(&"msg:live".to_string()));
+    assert!(
+        hits.contains(&"msg:fut".to_string()),
+        "unexpired TTL row must still match"
+    );
+    assert!(
+        !hits.contains(&"msg:past".to_string()),
+        "expired row surfaced"
+    );
+    assert!(
+        !hits.contains(&"msg:tomb".to_string()),
+        "tombstone surfaced"
+    );
+}

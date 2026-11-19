@@ -404,6 +404,10 @@ impl Session {
     /// stamp into its handshake payloads, so an install-time sid-conflict
     /// can be driven with real XX frames. Never valid post-construction in
     /// production — an honest session draws `local_sid` once at `new()`.
+    /// Compiled only for this crate's own tests and dependents that opt in
+    /// via the `test-seams` feature (cinder's dev-dependency edge) — release
+    /// builds do not carry it.
+    #[cfg(any(test, feature = "test-seams"))]
     #[doc(hidden)]
     pub fn test_set_local_sid(&mut self, sid: SessionId) {
         self.local_sid = sid;

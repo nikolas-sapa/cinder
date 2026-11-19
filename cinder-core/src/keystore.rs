@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use secrecy::{ExposeSecret, SecretSlice, SecretString};
+use zeroize::Zeroize;
 
 use crate::error::Error;
 
@@ -49,10 +50,19 @@ impl KeyStore for KeyringStore {
     fn get(&self) -> Result<Option<SecretSlice<u8>>, Error> {
         match self.with_entry(|e| e.get_password()) {
             Ok(s) => {
-                let raw = data_encoding::BASE64.decode(s.as_bytes()).map_err(|_| {
+                // The keyring API only hands out a plain String — wrap it so
+                // base64(private) is zeroized on drop instead of lingering in
+                // the allocator until reuse.
+                let s = zeroize::Zeroizing::new(s);
+                let mut raw = data_encoding::BASE64.decode(s.as_bytes()).map_err(|_| {
                     Error::IdentityStore("keyring entry is not valid base64".into())
                 })?;
-                Ok(Some(raw.into()))
+                // Copy into the SecretBox, then zero the decode buffer —
+                // `Vec::into` could leave an unzeroed residual behind if a
+                // capacity-shrink reallocates.
+                let out = SecretSlice::<u8>::from(raw.as_slice().to_vec());
+                raw.zeroize();
+                Ok(Some(out))
             }
             Err(keyring::Error::NoEntry) => Ok(None),
             Err(e) => Err(Error::KeyUnavailable(e.to_string())),
@@ -60,7 +70,7 @@ impl KeyStore for KeyringStore {
     }
 
     fn put(&self, secret: &[u8]) -> Result<(), Error> {
-        let b64 = data_encoding::BASE64.encode(secret);
+        let b64 = zeroize::Zeroizing::new(data_encoding::BASE64.encode(secret));
         self.with_entry(move |e| e.set_password(&b64))
             .map_err(|e| Error::KeyUnavailable(e.to_string()))
     }
@@ -136,13 +146,21 @@ impl KeyStore for AgeFileStore {
             .map_err(|_| Error::KeyUnavailable("passphrase incorrect or file corrupt".into()))?;
         let mut plaintext = Vec::with_capacity(blob.len());
         reader.read_to_end(&mut plaintext)?;
-        Ok(Some(plaintext.into()))
+        // Same as KeyringStore::get: copy into SecretBox + zeroize the
+        // source buffer — no unzeroed residual from a capacity-shrink.
+        let out = SecretSlice::<u8>::from(plaintext.as_slice().to_vec());
+        plaintext.zeroize();
+        Ok(Some(out))
     }
 
     fn put(&self, secret: &[u8]) -> Result<(), Error> {
         if let Some(dir) = self.path.parent() {
             ensure_private_dir(dir)?;
         }
+        // `confirm` is only meaningful for a NEW store — it runs the
+        // strength floor + interactive double-entry. Opening (rewriting)
+        // an existing file stays on the passphrase set at creation so
+        // older weaker passphrases keep decrypting their own file.
         let pw = self.passphrase(!self.path.exists())?;
         let encryptor = age::Encryptor::with_user_passphrase(age::secrecy::SecretString::from(
             pw.expose_secret().to_owned(),

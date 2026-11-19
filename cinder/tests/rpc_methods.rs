@@ -578,3 +578,64 @@ async fn hello_backlog_notice() {
     assert_eq!(note["method"], "session.backlog");
     assert_eq!(note["params"]["summary"]["queued_outbound"], 2);
 }
+
+// SEC-D1 — idempotency keys are bounded at 128 B at the RPC edge: keys land
+// in the dedup HashMap verbatim, so a 4 MiB key must be a params error,
+// not a dedup entry. Boundary: exactly 128 B is accepted.
+#[tokio::test]
+async fn p_idempotency_keys_capped_at_128b() {
+    let mut h = harness();
+    hello(&mut h).await;
+
+    let big = "k".repeat(129);
+    let e = call_err(
+        &mut h,
+        2,
+        "msg.send",
+        json!({"to": CHAT, "body": "hi", "client_msg_id": big}),
+    )
+    .await;
+    assert_eq!(e["code"], -32602);
+    assert_eq!(e["data"]["kind"], "invalid_params");
+
+    let e = call_err(
+        &mut h,
+        3,
+        "msg.edit",
+        json!({"msg_id": "msg:m01", "body": "hi", "client_op_id": big}),
+    )
+    .await;
+    assert_eq!(e["code"], -32602);
+    assert_eq!(e["data"]["kind"], "invalid_params");
+
+    let e = call_err(
+        &mut h,
+        4,
+        "call.ring",
+        json!({"to": CONTACT, "client_call_id": big}),
+    )
+    .await;
+    assert_eq!(e["code"], -32602);
+    assert_eq!(e["data"]["kind"], "invalid_params");
+
+    let e = call_err(
+        &mut h,
+        5,
+        "file.send",
+        json!({"to": CHAT, "data": "aGk=", "client_xfer_id": big}),
+    )
+    .await;
+    assert_eq!(e["code"], -32602);
+    assert_eq!(e["data"]["kind"], "invalid_params");
+
+    // 128 B exactly: reaches the core mock (returns the queued result).
+    let r = call(
+        &mut h,
+        6,
+        "msg.send",
+        json!({"to": CHAT, "body": "hi", "client_msg_id": "k".repeat(128)}),
+    )
+    .await;
+    assert_eq!(r["state"], "queued");
+    assert_eq!(r["deduped"], false);
+}

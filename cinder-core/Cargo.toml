@@ -28,6 +28,12 @@ tempfile = "3.27.0"
 subtle = "2.6.1"
 serde_json = "1.0.154"
 
+[features]
+# Opt-in seam for cross-crate integration tests (cinder's #[path]/session
+# drivers can't see this crate's cfg(test) items). No production dep edge
+# enables it — release builds never carry the hidden helpers.
+test-seams = []
+
 [dev-dependencies]
 proptest = "1.12.0"
 tokio-test = "0.4"

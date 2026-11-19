@@ -232,6 +232,23 @@ at the peer boundary.
   `verified` contact is compromising the peer or their device. cinder
   cannot help with that beyond making the event visible.
 
+**Containment: `contact.deny` + `chat.wipe` (compromised peer-id).** When a
+contact's key is learned to be compromised, `contact.deny` inserts its
+peer-id into a persisted denylist (`denied_peers`, loaded into memory at
+open) and closes every lane: live calls and the session die (stream id
+tombstoned), queued outbound fails `denied`, the grant the peer issued us
+is cleared locally, our mailbox's deposit capability is rotated relay-side
+(their copy dies; honest contacts re-grant transparently), and thereafter
+inbound handshakes, transport frames, mailbox envelopes (dropped+acked),
+and all re-add/accept paths refuse the identity permanently — no un-deny
+RPC exists; recovery is deliberate manual surgery. `chat.wipe` hard-deletes
+a conversation locally (`secure_delete=ON`) and notifies the peer to do the
+same. **What this does not buy:** the wipe notice is client-honored — a
+compromised endpoint can ignore it or keep data already read; an offline
+peer may never receive it (never queued); and a denied peer's own wipe can
+never delete OUR copy — deny drops the frame before it is read, because a
+hostile "wipe" is exactly what an attacker holding the key would send.
+
 ### 3.5 Device compromise / co-resident malware
 
 **Capabilities considered:** a process running as your uid, or root, on the
@@ -343,6 +360,9 @@ you.
 | **Malicious-agent actions** | ⚠️ partial | Same-uid bound + schema hygiene only; full user capability by design |
 | **Disappearing messages vs. honest-client retention** | ⚠️ partial | `expires_at` rides inside the E2E payload (relay-invisible); each endpoint's sweep tombstones the row, clears the body, and drops it from history/previews — reduces at-rest exposure on both sides' stores and shrinks relay-mailbox dwell time. Enforced by each endpoint's own clock on its own store |
 | **Disappearing messages vs. the peer** | ❌ | A modified client can retain, log, screenshot, or forward a body before/without honoring the deadline. The feature is an honest-client retention contract, **not** cryptographic erasure — treat TTL'd content as fully readable by the recipient |
+| **Peer-key compromise — future traffic & impersonation** | ✅ (local) | `contact.deny`: persisted `denied_peers` set; sessions, mailbox envelopes, re-add/accept all refuse the peer-id permanently. Enforcement is local — the denylist protects THIS endpoint |
+| **Local conversation destruction** | ⚠️ partial | `chat.wipe` hard-deletes rows + staged blobs under `secure_delete=ON`; replay-log payloads for the chat die with it. Same residual as any DB delete: external backups/exports, OS-level copies, and the peer's own store are untouched |
+| **Conversation destruction on the peer's endpoint** | ❌ | The `ChatWipe` notice is client-honored and unqueued: offline peers get nothing (a session-sealed deposit dies if their session generation moved on), compromised endpoints ignore it, and v0 clients can't decode it. Honest-peer hygiene, never proof of remote erasure |
 
 ---
 
@@ -453,6 +473,19 @@ RUSTSEC-2024-0344 (the dalek timing-signal advisory).
     the common one, and the alternative (key-erasure schemes) does not
     survive the peer boundary anyway — but users must read it as a
     *tidiness* property, not secrecy against recipients.
+11. **Remote wipe is best-effort and asymmetric.** `chat.wipe`'s peer
+    notice is a single encrypted frame — live session, or a session-sealed
+    deposit the peer only decrypts if their generation still lives; it is
+    never queued, so an offline peer may never learn of the wipe. Even
+    delivered, honoring it is a client choice a compromised endpoint won't
+    make, and anything already read/exported survives regardless. The
+    asymmetry is deliberate: inbound wipes from a denied peer are dropped
+    unread, because a destructive command from a hostile key is an attack,
+    not a favor — destruction is always locally initiated. `contact.deny`
+    is likewise terminal and unrecoverable by design (no un-deny RPC;
+    a coerced deny is recovered only by manual DB surgery), so its
+    irreversibility is itself the accepted weakness — a false deny can
+    strand a contact until a human repairs the store.
 
 ---
 

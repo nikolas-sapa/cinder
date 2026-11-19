@@ -445,9 +445,18 @@ async fn chat_set_disappearing(eng: &Engine, params: Option<Value>) -> Result<Va
 async fn contact_list(eng: &Engine, params: Option<Value>) -> Result<Value, RpcError> {
     let p: ContactListParams = parse_params(params)?;
     if let Some(s) = &p.state {
-        if !["active", "pending_in", "pending_out", "declined", "blocked"].contains(&s.as_str()) {
+        if ![
+            "active",
+            "pending_in",
+            "pending_out",
+            "declined",
+            "blocked",
+            "denied",
+        ]
+        .contains(&s.as_str())
+        {
             return Err(RpcError::invalid_params(
-                "state must be active|pending_in|pending_out|declined|blocked",
+                "state must be active|pending_in|pending_out|declined|blocked|denied",
             ));
         }
     }
@@ -482,6 +491,24 @@ async fn contact_decline(eng: &Engine, params: Option<Value>) -> Result<Value, R
     let p: ContactIdParams = parse_params(params)?;
     check_prefix(&p.contact_id, &["contact:"], "contact_id")?;
     eng.core().contact_decline(p).await
+}
+
+/// `contact.deny` — permanent containment; a second call on an already
+/// denied contact returns the same `denied` result (panic buttons are
+/// idempotent).
+async fn contact_deny(eng: &Engine, params: Option<Value>) -> Result<Value, RpcError> {
+    let p: ContactDenyParams = parse_params(params)?;
+    check_prefix(&p.contact_id, &["contact:"], "contact_id")?;
+    eng.core().contact_deny(p).await
+}
+
+/// `chat.wipe` — local destruction is unconditional; `peer_notified` in
+/// the result tells the caller whether the remote wipe notice actually
+/// left over a live session.
+async fn chat_wipe(eng: &Engine, params: Option<Value>) -> Result<Value, RpcError> {
+    let p: ChatWipeParams = parse_params(params)?;
+    check_prefix(&p.chat_id, &["chat:"], "chat_id")?;
+    eng.core().chat_wipe(p).await
 }
 
 async fn invite_create(eng: &Engine, params: Option<Value>) -> Result<Value, RpcError> {
@@ -1045,6 +1072,8 @@ pub async fn dispatch_method(
         "contact.add" => contact_add(eng, params).await,
         "contact.accept" => contact_accept(eng, params).await,
         "contact.decline" => contact_decline(eng, params).await,
+        "contact.deny" => contact_deny(eng, params).await,
+        "chat.wipe" => chat_wipe(eng, params).await,
         "invite.create" => invite_create(eng, params).await,
         "invite.accept" => invite_accept(eng, params).await,
         "ident.verify" => ident_verify(eng, params).await,

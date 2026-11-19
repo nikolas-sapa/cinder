@@ -368,7 +368,7 @@ fn r_chat_set_disappearing() -> Value {
 fn p_contact_list() -> Value {
     obj(
         &[],
-        json!({"state": {"enum": ["active", "pending_in", "pending_out", "declined", "blocked"], "description": "optional filter"}}),
+        json!({"state": {"enum": ["active", "pending_in", "pending_out", "declined", "blocked", "denied"], "description": "optional filter"}}),
     )
 }
 
@@ -388,7 +388,7 @@ fn contact_schema() -> Value {
             "contact_id": id_prop("contact:", ""),
             "peer_id": id_prop("peer:", ""),
             "display_name": {"type": ["string", "null"], "description": "UNTRUSTED peer-supplied or local label"},
-            "state": {"enum": ["pending_out", "pending_in", "active", "declined", "blocked"]},
+            "state": {"enum": ["pending_out", "pending_in", "active", "declined", "blocked", "denied"], "description": "denied is terminal + irreversible (contact.deny); there is no un-deny"},
             "substate": {"enum": ["connecting", "retry", "failed", null], "description": "detail for pending_out"},
             "trust": {"enum": ["unverified", "verified", "key_changed"]},
             "chat_id": {"type": ["string", "null"], "pattern": "^chat:", "description": "present once active"},
@@ -439,6 +439,35 @@ fn r_contact_decline() -> Value {
     obj(
         &["contact_id", "state"],
         json!({"contact_id": id_prop("contact:", ""), "state": {"enum": ["declined"]}}),
+    )
+}
+
+fn r_contact_deny() -> Value {
+    obj(
+        &["contact_id", "peer_id", "state"],
+        json!({
+            "contact_id": id_prop("contact:", ""),
+            "peer_id": id_prop("peer:", "the denied identity, for audit correlation"),
+            "state": {"enum": ["denied"], "description": "terminal; re-add/accept/handshake all fail peer_denied from now on"},
+        }),
+    )
+}
+
+fn p_chat_wipe() -> Value {
+    obj(
+        &["chat_id"],
+        json!({"chat_id": id_prop("chat:", "the chat to destroy on both ends")}),
+    )
+}
+
+fn r_chat_wipe() -> Value {
+    obj(
+        &["chat_id", "wiped", "peer_notified"],
+        json!({
+            "chat_id": id_prop("chat:", ""),
+            "wiped": {"const": true, "description": "local rows hard-deleted (secure_delete); replay-log payloads for the chat are gone"},
+            "peer_notified": {"type": "boolean", "description": "true iff a ChatWipe frame was sent over a live session; false means the peer was unreachable/offline and may retain their copy — remote destruction is best-effort, never guaranteed"},
+        }),
     )
 }
 
@@ -800,6 +829,8 @@ pub const METHODS: &[MethodDef] = &[
     MethodDef { name: "contact.add", scope: "contacts", description: "Add a contact from a cinder:// link (one-time rendezvous or static address); kicks off Noise XX connection.", params: p_contact_add, result: r_contact_add },
     MethodDef { name: "contact.accept", scope: "contacts", description: "Accept an inbound contact request (state pending_in); contact becomes active.", params: p_contact_id, result: r_contact_accept },
     MethodDef { name: "contact.decline", scope: "contacts", description: "Decline an inbound contact request; record moves to declined.", params: p_contact_id, result: r_contact_decline },
+    MethodDef { name: "contact.deny", scope: "contacts", description: "PERMANENT compromised-peer containment. The peer-id is denylisted: live calls and the session die, queued outbound fails 'denied', grants are revoked, and every future handshake / mailbox envelope / re-add / accept from that identity is refused. There is NO un-deny RPC — recovery is manual surgery on the denied_peers table plus the meta entry.", params: p_contact_id, result: r_contact_deny },
+    MethodDef { name: "chat.wipe", scope: "send", description: "Hard-delete a conversation locally (messages, reactions, files, dedup, replay-log rows, staged blobs) and notify the peer to wipe theirs when a live session exists. Remote destruction is BEST-EFFORT: offline peers get nothing (deposits are session-sealed), and a compromised endpoint can ignore the frame.", params: p_chat_wipe, result: r_chat_wipe },
     MethodDef { name: "invite.create", scope: "contacts", description: "Mint a one-time rendezvous link to share out-of-band; single redemption.", params: p_invite_create, result: r_invite_create },
     MethodDef { name: "invite.accept", scope: "contacts", description: "Consume a one-time ?rendezvous= invite link; proceeds to handshake immediately.", params: p_invite_accept, result: r_invite_accept },
     MethodDef { name: "ident.verify", scope: "verify", description: "Sensitive write. Record that the SAS was confirmed out-of-band; flips trust to verified and is the only path that clears key_changed.", params: p_ident_verify, result: r_ident_verify },
@@ -847,7 +878,7 @@ fn e_msg_state() -> Value {
             "client_msg_id": {"type": "string", "description": "send's idempotency key; correlates before msg_id is known"},
             "chat_id": id_prop("chat:", ""),
             "state": {"enum": ["queued", "sent", "delivered", "read", "failed"], "description": "valid transitions only; read is reserved and never emitted in v1"},
-            "reason": {"enum": ["peer_offline", "mailbox_full", "key_changed_blocked", "contact_blocked", "expired", "internal", null], "description": "set on failed"},
+            "reason": {"enum": ["peer_offline", "mailbox_full", "key_changed_blocked", "contact_blocked", "denied", "expired", "internal", null], "description": "set on failed; denied = peer was contact.deny'd mid-flight"},
         }),
     )
 }
@@ -874,6 +905,26 @@ fn e_contact_connected() -> Value {
             "chat_id": id_prop("chat:", ""),
             "direction": {"enum": ["in", "out"]},
             "trust": {"enum": ["unverified", "verified", "key_changed"]},
+        }),
+    )
+}
+
+fn e_contact_denied() -> Value {
+    event_envelope(
+        &["contact_id", "peer_id"],
+        json!({
+            "contact_id": id_prop("contact:", ""),
+            "peer_id": id_prop("peer:", "the now-denylisted identity"),
+        }),
+    )
+}
+
+fn e_chat_wiped() -> Value {
+    event_envelope(
+        &["chat_id", "by"],
+        json!({
+            "chat_id": id_prop("chat:", "the destroyed chat; every row + staged blob for it is already gone"),
+            "by": {"enum": ["local", "peer"], "description": "local = chat.wipe RPC; peer = the peer wiped their side and we honored it"},
         }),
     )
 }
@@ -927,7 +978,7 @@ fn e_file_state() -> Value {
             "state": {"enum": ["offered", "accepted", "transferring", "verifying", "complete", "failed", "cancelled", "declined", "expired"], "description": "every transition emits; progress within transferring is throttled to <=1/s per transfer"},
             "bytes_done": {"type": "integer", "minimum": 0},
             "bytes_total": {"type": "integer", "minimum": 0},
-            "reason": {"enum": ["peer_offline", "mailbox_full", "hash_mismatch", "storage_full", "policy", "user", "timeout", "key_changed", "internal", null], "description": "set on terminal failure states"},
+            "reason": {"enum": ["peer_offline", "mailbox_full", "hash_mismatch", "storage_full", "policy", "user", "timeout", "key_changed", "denied", "internal", null], "description": "set on terminal failure states"},
         }),
     )
 }
@@ -962,6 +1013,8 @@ pub const EVENTS: &[EventDef] = &[
     EventDef { name: "msg.expired", description: "A disappearing message's deadline lapsed; the row is tombstoned and already gone from chat.history. Remove any cached copy of msg_id.", params: e_msg_expired },
     EventDef { name: "contact.request", description: "Someone reached this account via invite link or static address and awaits our decision.", params: e_contact_request },
     EventDef { name: "contact.connected", description: "A contact reached active: Noise XX completed and pinned peer-id verified.", params: e_contact_connected },
+    EventDef { name: "contact.denied", description: "contact.deny completed: the peer-id is permanently denylisted. Sessions, mailbox envelopes, and re-add/accept paths all refuse it; no un-deny exists.", params: e_contact_denied },
+    EventDef { name: "chat.wiped", description: "A chat was hard-deleted — by a local chat.wipe (by:local) or honored from the peer's wipe (by:peer). Drop every cached row for chat_id.", params: e_chat_wiped },
     EventDef { name: "security.identity_changed", description: "Pinned remote static key changed at handshake; trust becomes key_changed and sending blocks until re-verified. Never silently rebound.", params: e_identity_changed },
     EventDef { name: "security.verification_needed", description: "Contact is connected-but-unverified; sas_hint lets agents surface the SAS without an extra call.", params: e_verification_needed },
     EventDef { name: "file_state", description: "Transfer lifecycle + progress. Every state transition emits; progress within transferring coalesces to <=1 event/s per transfer. Terminal failures carry reason.", params: e_file_state },
@@ -986,6 +1039,7 @@ pub const ERROR_KINDS: &[ErrorKind] = &[
     ErrorKind::UnauthorizedScope,
     ErrorKind::NotFound,
     ErrorKind::Conflict,
+    ErrorKind::PeerDenied,
     ErrorKind::Unimplemented,
 ];
 

@@ -16,7 +16,7 @@ use serde_json::Value;
 use sha2::Sha256;
 
 const STORE_HKDF_INFO: &[u8] = b"cinder-store-v1";
-const SCHEMA_VERSION: i64 = 3;
+const SCHEMA_VERSION: i64 = 4;
 const EVENT_LOG_KEEP: i64 = 16384;
 const DEDUP_TTL_MS: i64 = 7 * 24 * 60 * 60 * 1000;
 const MAX_WINDOW: u32 = 500;
@@ -406,7 +406,8 @@ impl Store {
              PRAGMA journal_mode = WAL;
              PRAGMA synchronous = NORMAL;
              PRAGMA foreign_keys = ON;
-             PRAGMA busy_timeout = 5000;"
+             PRAGMA busy_timeout = 5000;
+             PRAGMA secure_delete = ON;"
         ))?;
         #[cfg(unix)]
         {
@@ -579,6 +580,21 @@ impl Store {
             tx.execute(
                 "INSERT INTO schema_migrations(version, applied_at) VALUES(?1, ?2)",
                 params![3, now_ms()],
+            )?;
+        }
+        if version < 4 {
+            // v4 — peer denylist (contact.deny): a denied peer-id must never
+            // establish a session again. Enforcement reads the whole set at
+            // open, so the table stays unindexed beyond its key.
+            tx.execute_batch(
+                "CREATE TABLE denied_peers(
+                    peer_id BLOB PRIMARY KEY,
+                    denied_at INTEGER NOT NULL
+                );",
+            )?;
+            tx.execute(
+                "INSERT INTO schema_migrations(version, applied_at) VALUES(?1, ?2)",
+                params![4, now_ms()],
             )?;
         }
         tx.commit()?;
@@ -1270,6 +1286,101 @@ impl Store {
             )
             .optional()?;
         Ok(ttl.filter(|t| *t > 0))
+    }
+
+    /// Denylist write — idempotent (deny is a panic button, replays must
+    /// succeed rather than conflict).
+    pub fn deny_peer(&self, peer_id: &[u8; 32]) -> Result<()> {
+        self.conn()?.execute(
+            "INSERT INTO denied_peers(peer_id, denied_at) VALUES(?1, ?2)
+             ON CONFLICT(peer_id) DO NOTHING",
+            params![peer_id.as_slice(), now_ms()],
+        )?;
+        Ok(())
+    }
+
+    /// Every denied peer-id — loaded into `Shared` at open so the deny
+    /// check is a hash lookup, never a per-frame query.
+    pub fn denied_peers(&self) -> Result<Vec<[u8; 32]>> {
+        let conn = self.conn()?;
+        let mut stmt = conn.prepare("SELECT peer_id FROM denied_peers")?;
+        let rows = stmt
+            .query_map([], |r| r.get::<_, Vec<u8>>(0))?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        rows.into_iter()
+            .map(|v| {
+                v.try_into()
+                    .map_err(|_| StoreError::Internal("denied peer_id length"))
+            })
+            .collect()
+    }
+
+    /// Does a `chats` row exist for `chat_id`? (wipe/refuse edge cases that
+    /// must not silently succeed on an unknown conversation).
+    pub fn chat_exists(&self, chat_id: &str) -> Result<bool> {
+        Ok(self
+            .conn()?
+            .query_row("SELECT 1 FROM chats WHERE chat_id = ?1", [chat_id], |_| {
+                Ok(())
+            })
+            .optional()?
+            .is_some())
+    }
+
+    /// `chat.wipe` — HARD delete of every per-chat row: messages (the
+    /// `messages_ad` trigger scrubs FTS), reactions, msg_states audit
+    /// entries, dedup keys, file transfer rows, replay-log events for the
+    /// chat (their payloads carry message bodies, file names, captions),
+    /// and the chat row itself — unread counts and per-chat metadata die
+    /// with it. Returns `(existed, staged_paths)` — the caller unlinks the
+    /// `xfer/*.part` blobs afterward.
+    pub fn wipe_chat(&self, chat_id: &str) -> Result<(bool, Vec<String>)> {
+        let conn = self.conn()?;
+        let tx = conn.unchecked_transaction()?;
+        let exists = tx
+            .query_row("SELECT 1 FROM chats WHERE chat_id = ?1", [chat_id], |_| {
+                Ok(())
+            })
+            .optional()?
+            .is_some();
+        if !exists {
+            return Ok((false, Vec::new()));
+        }
+        let staged: Vec<String> = {
+            let mut stmt = tx.prepare(
+                "SELECT staged_path FROM files
+                 WHERE chat_id = ?1 AND staged_path IS NOT NULL AND staged_path != ''",
+            )?;
+            let rows = stmt
+                .query_map([chat_id], |r| r.get::<_, String>(0))?
+                .collect::<std::result::Result<Vec<_>, _>>()?;
+            drop(stmt);
+            rows
+        };
+        tx.execute(
+            "DELETE FROM reactions WHERE msg_id IN
+                (SELECT msg_id FROM messages WHERE chat_id = ?1)",
+            [chat_id],
+        )?;
+        tx.execute(
+            "DELETE FROM msg_states WHERE msg_id IN
+                (SELECT msg_id FROM messages WHERE chat_id = ?1)",
+            [chat_id],
+        )?;
+        tx.execute(
+            "DELETE FROM dedup WHERE msg_id IN
+                (SELECT msg_id FROM messages WHERE chat_id = ?1)",
+            [chat_id],
+        )?;
+        tx.execute("DELETE FROM files WHERE chat_id = ?1", [chat_id])?;
+        // Whole-row delete, not a scrub: wipe removes the chat's entire
+        // replay slice (expire_due's json_set pattern only fits single
+        // messages; every per-chat event payload may embed plaintext).
+        tx.execute("DELETE FROM event_log WHERE chat_id = ?1", [chat_id])?;
+        tx.execute("DELETE FROM messages WHERE chat_id = ?1", [chat_id])?;
+        tx.execute("DELETE FROM chats WHERE chat_id = ?1", [chat_id])?;
+        tx.commit()?;
+        Ok((true, staged))
     }
 
     pub fn add_reaction(&self, msg_id: &str, emoji: &str, reactor: &[u8; 32]) -> Result<()> {

@@ -34,10 +34,10 @@ use cinder_core::transport::{ClientEvent, Link, RelayTransport};
 use crate::call::{self, CallCaps, CallDir, CallRt, CallState, EndReason, Quality};
 use crate::rpc::core::{
     CallIdParams, CallMuteParams, CallRingParams, ChatHistoryParams, ChatListParams,
-    ChatSetDisappearingParams, CinderCore, ContactAddParams, ContactIdParams, ContactListParams,
-    EventSink, FileIdParams, FileListParams, FileSaveParams, FileSendParams, IdentVerifyParams,
-    InviteAcceptParams, InviteCreateParams, MsgDeleteParams, MsgEditParams, MsgReactParams,
-    MsgSendParams,
+    ChatSetDisappearingParams, ChatWipeParams, CinderCore, ContactAddParams, ContactDenyParams,
+    ContactIdParams, ContactListParams, EventSink, FileIdParams, FileListParams, FileSaveParams,
+    FileSendParams, IdentVerifyParams, InviteAcceptParams, InviteCreateParams, MsgDeleteParams,
+    MsgEditParams, MsgReactParams, MsgSendParams,
 };
 use crate::rpc::events::{EventRecord, ReplayLog};
 use crate::rpc::protocol::{ErrorKind, RpcError};
@@ -299,6 +299,14 @@ pub(crate) enum AppMsg {
         ts_ms: u32,
         payload: Vec<u8>,
     },
+    /// Destroy-the-shared-conversation notice (§contact.deny/chat.wipe):
+    /// the sender already hard-deleted their copy; the receiver wipes
+    /// theirs identically. Appended LAST — peers on pre-wipe builds drop
+    /// the unknown variant index on decode, which is the correct failure
+    /// mode for a wipe they could not honor anyway.
+    ChatWipe {
+        chat_id: String,
+    },
 }
 
 /// Wire shape before `expires_at` was appended to `Text`: decode-only, kept
@@ -371,6 +379,11 @@ pub enum MetaState {
     Active,
     Declined,
     Blocked,
+    /// Permanently distrusted via `contact.deny` (compromised-key
+    /// containment). Enforcement keys off the persisted `denied_peers`
+    /// set; this state is the presentation half — kept out of every
+    /// retryable/re-add path so a deny can never be silently undone.
+    Denied,
 }
 
 impl MetaState {
@@ -381,6 +394,7 @@ impl MetaState {
             Self::Active => "active",
             Self::Declined => "declined",
             Self::Blocked => "blocked",
+            Self::Denied => "denied",
         }
     }
 }
@@ -572,6 +586,15 @@ struct Shared {
     /// Frames/messages dropped because the contact is declined or blocked —
     /// counted so the drop is observable, not silent.
     dropped_inbound: u64,
+    /// Peer-ids permanently distrusted via `contact.deny`: persisted in
+    /// `denied_peers`, loaded at open, kept in sync on every insert. The
+    /// deny check is a hash lookup. There is intentionally no un-deny —
+    /// recovery is manual DB surgery only.
+    denied: HashSet<PeerId>,
+    /// Inbound work dropped by the deny gate specifically — counted apart
+    /// from `dropped_inbound` so deny enforcement stays observable on its
+    /// own (a denied peer's attempts vs. generic declined/blocked noise).
+    denied_drops: u64,
     pending_out: HashMap<PeerId, VecDeque<PendingMsg>>,
     hs_inflight: HashSet<PeerId>,
     meta: HashMap<PeerId, ContactMeta>,
@@ -837,6 +860,17 @@ impl Core {
         .await??;
 
         let store = Arc::new(store);
+        let denied: HashSet<PeerId> = {
+            let s = store.clone();
+            tokio::task::spawn_blocking(move || {
+                s.denied_peers()
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(PeerId::from_bytes)
+                    .collect()
+            })
+            .await?
+        };
         let meta: HashMap<PeerId, ContactMeta> = {
             let s = store.clone();
             tokio::task::spawn_blocking(move || {
@@ -903,6 +937,8 @@ impl Core {
                 responders: HashSet::new(),
                 installing: HashSet::new(),
                 dropped_inbound: 0,
+                denied,
+                denied_drops: 0,
                 pending_out: HashMap::new(),
                 hs_inflight: HashSet::new(),
                 meta,
@@ -945,12 +981,19 @@ impl Core {
             let s = core.store.clone();
             tokio::task::spawn_blocking(move || s.queued_out_texts()).await??
         };
-        {
+        let denied_rows = {
             let mut sh = core.sh();
+            let mut denied_rows: Vec<String> = Vec::new();
             for (chat_id, msg_id, body, expires_at) in queued {
                 let Ok(peer) = peer_of_chat(&chat_id) else {
                     continue;
                 };
+                if sh.denied.contains(&peer) {
+                    // A denied contact's backlog must not re-arm a dead lane
+                    // on restart — fail the rows once instead.
+                    denied_rows.push(msg_id);
+                    continue;
+                }
                 sh.pending_out
                     .entry(peer)
                     .or_default()
@@ -963,6 +1006,17 @@ impl Core {
                         msg_id: Some(msg_id),
                     });
             }
+            denied_rows
+        };
+        if !denied_rows.is_empty() {
+            let _ = core
+                .sblk(move |s| {
+                    for id in denied_rows {
+                        let _ = s.update_state(&id, MsgState::Failed);
+                    }
+                    Ok(())
+                })
+                .await;
         }
 
         if let Some((addr, host)) = relay {
@@ -1021,6 +1075,15 @@ impl Core {
 
     pub fn meta_state(&self, peer: &PeerId) -> Option<MetaState> {
         self.sh().meta.get(peer).map(|m| m.state)
+    }
+
+    /// The one deny check used at every enforcement point: the persisted
+    /// `denied_peers` set mirrored into `Shared` is authoritative, and the
+    /// `Denied` meta state is honored too so a hand-patched meta can't
+    /// reopen a lane the table closed. `Shared` must already be locked.
+    fn denied(sh: &Shared, peer: &PeerId) -> bool {
+        sh.denied.contains(peer)
+            || matches!(sh.meta.get(peer).map(|m| m.state), Some(MetaState::Denied))
     }
 
     /// Attach the engine's event manager (or a test sink). Called once after
@@ -1088,6 +1151,22 @@ impl Core {
     #[allow(dead_code)]
     pub fn test_dropped_inbound(&self) -> u64 {
         self.sh().dropped_inbound
+    }
+
+    /// Test seam: inbound work the deny gate ate (revoke suite asserts
+    /// denied-side drops distinct from generic declined/blocked drops).
+    #[cfg(test)]
+    #[allow(dead_code)]
+    pub fn test_denied_drops(&self) -> u64 {
+        self.sh().denied_drops
+    }
+
+    /// Test seam: is `peer` on the persisted denylist?
+    #[cfg(test)]
+    #[allow(dead_code)]
+    pub fn test_denied(&self, peer: &PeerId) -> bool {
+        let sh = self.sh();
+        Self::denied(&sh, peer)
     }
 
     #[cfg(test)]
@@ -1924,14 +2003,24 @@ impl Core {
                             // session: after a restart there is none for
                             // `env.from` (sessions never resume), and a
                             // parked frame would poison the next handshake
-                            // via the `early` drain. Undeliverable deposits
+                            // via the `early` drain. Denied-origin deposits
+                            // are the grant-revocation backstop: the deny
+                            // check runs BEFORE the session check so a
+                            // distrusted peer's envelopes can never reach
+                            // handle_transport. Undeliverable deposits
                             // drop + count, but are still acked so they do
                             // not redeliver forever.
-                            if self.session(&env.from).is_some() {
+                            let denied = {
+                                let sh = self.sh();
+                                Self::denied(&sh, &env.from)
+                            };
+                            if !denied && self.session(&env.from).is_some() {
                                 self.handle_transport(env.from, env.session_id, env.body)
                                     .await;
                             } else {
-                                self.sh().dropped_inbound += 1;
+                                let mut sh = self.sh();
+                                sh.dropped_inbound += 1;
+                                sh.denied_drops += denied as u64;
                             }
                             ack_ids.push(env.msg_id);
                         }
@@ -1990,6 +2079,14 @@ impl Core {
         let sid = session.session_id()?;
         let remote = session.remote_session_id();
         let mut sh = self.sh();
+        // Denied peers never bind: refuse BEFORE any sid_index mutation so
+        // neither the local nor the claimed-remote stream id can be
+        // occupied by a distrusted identity.
+        if Self::denied(&sh, &peer) {
+            sh.denied_drops += 1;
+            tracing::debug!(%peer, "session install refused: peer is denied");
+            return None;
+        }
         // A claimed remote sid already bound to a DIFFERENT live session is
         // a sid the peer cannot own — honest peers draw theirs at random.
         // Indexing it would hijack the victim's inbound routing (and the
@@ -2150,12 +2247,16 @@ impl Core {
         // events, no pinned-key updates.
         {
             let mut sh = self.sh();
-            if matches!(
-                sh.meta.get(&peer).map(|m| m.state),
-                Some(MetaState::Declined) | Some(MetaState::Blocked)
-            ) {
+            let denied = Self::denied(&sh, &peer);
+            if denied
+                || matches!(
+                    sh.meta.get(&peer).map(|m| m.state),
+                    Some(MetaState::Declined) | Some(MetaState::Blocked)
+                )
+            {
                 sh.dropped_inbound += 1;
-                tracing::debug!(%peer, "session from declined/blocked contact; dropped");
+                sh.denied_drops += denied as u64;
+                tracing::debug!(%peer, "session from declined/blocked/denied contact; dropped");
                 return;
             }
         }
@@ -2584,6 +2685,15 @@ impl Core {
             return;
         }
         let item_id = item.msg_id.clone();
+        // A deny that landed mid-send must fail the item, never queue it —
+        // nothing will ever flush a denied peer's backlog.
+        if Self::denied(&self.sh(), &peer) {
+            if let Some(id) = item_id {
+                self.transition(&id, MsgState::Failed, Some("denied".into()))
+                    .await;
+            }
+            return;
+        }
         let full = {
             let mut sh = self.sh();
             let q = sh.pending_out.entry(peer).or_default();
@@ -4714,6 +4824,11 @@ impl Core {
         }
         {
             let mut sh = self.sh();
+            // Denied peers never re-handshake — no exception for queued
+            // backlog, presence flips, or post-decrypt resyncs.
+            if Self::denied(&sh, &peer) {
+                return;
+            }
             if !sh.hs_inflight.insert(peer) {
                 return;
             }
@@ -4861,14 +4976,20 @@ impl Core {
             let from = *from;
             {
                 let mut sh = self.sh();
-                // Declined/blocked contacts: no responder, no handshake —
-                // the Msg1 dies here (attacker burns their 10 s slot).
-                if matches!(
-                    sh.meta.get(&from).map(|m| m.state),
-                    Some(MetaState::Declined) | Some(MetaState::Blocked)
-                ) {
+                // Declined/blocked/denied contacts: no responder, no
+                // handshake — the Msg1 dies here (attacker burns their
+                // 10 s slot). Deny is the compromise path: the check is on
+                // the persisted set, so a denied peer can never re-pair.
+                let denied = Self::denied(&sh, &from);
+                if denied
+                    || matches!(
+                        sh.meta.get(&from).map(|m| m.state),
+                        Some(MetaState::Declined) | Some(MetaState::Blocked)
+                    )
+                {
                     sh.dropped_inbound += 1;
-                    tracing::debug!(%from, "Msg1 from declined/blocked contact; dropped");
+                    sh.denied_drops += denied as u64;
+                    tracing::debug!(%from, "Msg1 from declined/blocked/denied contact; dropped");
                     continue;
                 }
                 // One responder per claimed peer; RESPONDER_CAP bounds the
@@ -4929,6 +5050,17 @@ impl Core {
         // binds lazily (each side stamps a random local sid, learned here).
         // Tombstoned sids and bound-mismatches drop pre-decrypt; a decrypt
         // failure is fatal to the session AND tombstones the stream.
+        {
+            let mut sh = self.sh();
+            // Denied peers have no session and never will — their frames
+            // die before any bind/early-park path can feed a later install.
+            if Self::denied(&sh, &from) {
+                sh.dropped_inbound += 1;
+                sh.denied_drops += 1;
+                tracing::debug!(%from, ?session_id, "transport from denied peer; dropped");
+                return;
+            }
+        }
         let (ps, peer, fresh) = {
             let mut sh = self.sh();
             if sh.dead_sids.contains_key(&session_id) {
@@ -5083,9 +5215,20 @@ impl Core {
     async fn handle_app(self: &Arc<Self>, peer: PeerId, app: AppMsg, sid: Option<SessionId>) {
         let chat_id = chat_str(&peer);
         // Belt to the inbound_loop/on_session_ready suspenders: a session
-        // that predates a decline keeps delivering frames — drop them here.
+        // that predates a decline or deny keeps delivering frames — drop
+        // them here. No exemptions, not even ChatWipe: a denied peer-id
+        // means the key is hostile, and a hostile "wipe" would destroy our
+        // local copy — exactly what a compromised endpoint wants.
+        // Destruction is always locally initiated.
         {
             let mut sh = self.sh();
+            let denied = Self::denied(&sh, &peer);
+            if denied {
+                sh.dropped_inbound += 1;
+                sh.denied_drops += 1;
+                tracing::debug!(%peer, "app frame from denied peer; dropped");
+                return;
+            }
             if matches!(
                 sh.meta.get(&peer).map(|m| m.state),
                 Some(MetaState::Declined) | Some(MetaState::Blocked)
@@ -5382,6 +5525,9 @@ impl Core {
             } => {
                 self.on_call_frame(peer, call_id, seq, payload, sid).await;
             }
+            AppMsg::ChatWipe { chat_id } => {
+                self.on_chat_wipe(peer, chat_id).await;
+            }
         }
     }
 
@@ -5427,6 +5573,15 @@ impl Core {
     }
 
     async fn check_send_allowed(&self, peer: &PeerId) -> Result<(), RpcError> {
+        {
+            let sh = self.sh();
+            if Self::denied(&sh, peer) {
+                return Err(RpcError::new(
+                    ErrorKind::PeerDenied,
+                    "peer is on the deny list (contact.deny); there is no un-deny — recovery is manual DB surgery",
+                ));
+            }
+        }
         let state = self.meta_state(peer);
         match state {
             Some(MetaState::Blocked) | Some(MetaState::Declined) => {
@@ -5577,6 +5732,15 @@ impl Core {
         let peer = PeerId::from_static_key(&static_key);
         {
             let mut sh = self.sh();
+            // A denied peer-id is refused outright — re-add can never
+            // silently un-deny, and the error is distinct from the
+            // generic already-exists conflict.
+            if Self::denied(&sh, &peer) {
+                return Err(RpcError::new(
+                    ErrorKind::PeerDenied,
+                    "peer is on the deny list (contact.deny); there is no un-deny — recovery is manual DB surgery",
+                ));
+            }
             if let Some(m) = sh.meta.get(&peer) {
                 // Retryable: declined, or a pending_out whose substate is a
                 // terminal failure — a failed add must never wedge the peer.
@@ -5649,6 +5813,229 @@ impl Core {
             .push((token, id.clone()));
         let host = self.relay_host().unwrap_or_default();
         Ok((self.identity.uri(&host, Some(&token)), expires_at))
+    }
+
+    /// `contact.deny`'s domain half — compromised-key containment. Persist
+    /// the deny, then close every lane the peer could still use: calls
+    /// (no wire notice — the session dies with them), the session itself
+    /// (tombstoned), the outbound queue (rows fail `denied`), and live
+    /// transfers. Their copy of our mailbox grant is revoked relay-side;
+    /// envelopes already deposited are dropped on fetch. Intentionally
+    /// irreversible — there is no un-deny path.
+    async fn deny_peer(self: &Arc<Self>, peer: &PeerId) -> Result<(), RpcError> {
+        self.sblk({
+            let p = *peer;
+            move |s| s.deny_peer(p.as_bytes())
+        })
+        .await
+        .map_err(store_rpc)?;
+        {
+            let mut sh = self.sh();
+            sh.denied.insert(*peer);
+            // Frames parked for an in-flight install die with the deny —
+            // they must never drain into a later gate's judgment.
+            if let Some(q) = sh.early.remove(peer) {
+                sh.early_total = sh.early_total.saturating_sub(q.len());
+            }
+            if let Some(m) = sh.meta.get_mut(peer) {
+                m.state = MetaState::Denied;
+                m.substate = None;
+                // The grant THEY issued us: never deposit into a denied
+                // peer's mailbox again.
+                m.grant = None;
+                m.retry_after_ms = None;
+            }
+        }
+        self.persist_meta();
+        // The pinned-key store records the grant too — clear it so nothing
+        // revives the capability from contacts.json.
+        let p = *peer;
+        let _ = self
+            .cblk(move |c| {
+                let _ = c.clear_mailbox_grant(&p);
+            })
+            .await;
+        // Live calls first (silent — signalling their end would ride the
+        // session about to die anyway), then the session, then the queue.
+        self.end_calls_peer(peer, EndReason::Failed, false).await;
+        self.drop_session(peer);
+        self.fail_pending(*peer, "denied").await;
+        // In-flight transfers share the dead session — fail them rather
+        // than leave pumps parked on a path that never returns.
+        let rows = {
+            let fids: Vec<String> = self
+                .sh()
+                .xfers
+                .iter()
+                .filter(|(_, x)| x.peer == *peer)
+                .map(|(f, _)| f.clone())
+                .collect();
+            let mut rows = Vec::new();
+            for fid in fids {
+                if let Ok(Some(r)) = self
+                    .sblk({
+                        let f = fid.clone();
+                        move |s| s.get_file(&f)
+                    })
+                    .await
+                {
+                    rows.push(r);
+                }
+            }
+            rows
+        };
+        for row in rows {
+            if FileState::parse(&row.state)
+                .map(|s| !s.is_terminal())
+                .unwrap_or(false)
+            {
+                self.xfer_set_state(&row, FileState::Failed, Some("denied"))
+                    .await;
+                self.xfer_unlink(&row).await;
+            }
+        }
+        // Revoke OUR mailbox grant held by the peer: rotate the box's
+        // deposit capability so the token they hold dies relay-side.
+        self.rotate_deposit_token().await;
+        self.emit(
+            "contact.denied",
+            None,
+            json!({
+                "contact_id": contact_str(peer),
+                "peer_id": peer_str(peer),
+            }),
+        );
+        Ok(())
+    }
+
+    /// Rotate our mailbox's deposit capability (`MailboxRotate`). The peer
+    /// we deny may hold a deposit token issued in-band; rotating
+    /// `h_deposit` kills it relay-side. Collateral is accepted by design:
+    /// the deposit capability is per-MAILBOX not per-peer, so every
+    /// contact's outstanding token rotates — they re-grant on the next
+    /// handshake's `AppMsg::Grant`. `new_h_fetch` re-stamps the current
+    /// fetch hash so our own drain path is untouched. A failed/absent
+    /// rotate is not fatal: fetched envelopes from denied peers drop on
+    /// drain regardless.
+    async fn rotate_deposit_token(&self) {
+        let mbox = match self.sh().own_mailbox.clone() {
+            Some(m) => m,
+            None => return,
+        };
+        if self.conn_state() != tb::ConnState::Connected {
+            return;
+        }
+        let new_deposit = Token::random();
+        let ev = self
+            .request(
+                ClientMsg::MailboxRotate {
+                    mailbox_id: mbox.id,
+                    token: mbox.fetch_token,
+                    new_h_deposit: token_hash(&new_deposit),
+                    new_h_fetch: token_hash(&mbox.fetch_token),
+                },
+                ReqSlot::Ok,
+            )
+            .await;
+        match ev {
+            Ok(ClientEvent::Ok) => {
+                let persist = MailboxPersist {
+                    mailbox_id: *mbox.id.as_bytes(),
+                    fetch_token: *mbox.fetch_token.as_bytes(),
+                    deposit_token: *new_deposit.as_bytes(),
+                };
+                if let Ok(raw) = serde_json::to_string(&persist) {
+                    let s = self.store.clone();
+                    tokio::task::spawn_blocking(move || {
+                        let _ = s.set_meta(MBOX_KEY, &raw);
+                    });
+                }
+                self.sh().own_mailbox = Some(OwnMailbox {
+                    id: mbox.id,
+                    fetch_token: mbox.fetch_token,
+                    deposit_token: new_deposit,
+                });
+            }
+            other => {
+                tracing::debug!(
+                    ?other,
+                    "mailbox deposit-token rotate failed; fetch-drop still guards denied deposits"
+                );
+            }
+        }
+    }
+
+    /// Local half of `chat.wipe`, shared by the RPC and the inbound
+    /// `ChatWipe`: kill the chat's pending sends and transfer pumps, hard-
+    /// delete every per-chat row, unlink staged blobs, then emit
+    /// `chat.wiped`. `by` is `"local"` (we initiated) or `"peer"`.
+    async fn wipe_chat_local(self: &Arc<Self>, chat_id: &str, by: &str) {
+        let peer = peer_of_chat(chat_id).ok();
+        {
+            let mut sh = self.sh();
+            if let Some(p) = peer {
+                // Queued items reference rows the wipe deletes — a survivor
+                // would resurrect the chat on the peer's side post-wipe.
+                sh.pending_out.remove(&p);
+            }
+            let fids: Vec<String> = sh
+                .xfers
+                .iter()
+                .filter(|(_, x)| Some(x.peer) == peer)
+                .map(|(f, _)| f.clone())
+                .collect();
+            for fid in fids {
+                if let Some(x) = sh.xfers.remove(&fid) {
+                    if let Some(c) = x.cancel {
+                        c.notify_one();
+                    }
+                }
+            }
+        }
+        let cid = chat_id.to_string();
+        let wiped = match self.sblk(move |s| s.wipe_chat(&cid)).await {
+            Ok((existed, staged)) => {
+                for rel in staged {
+                    if !rel.starts_with("xfer/") {
+                        continue;
+                    }
+                    let abs = xfer::stage_abs(&self.data_dir, &rel);
+                    let _ = tokio::task::spawn_blocking(move || xfer::stage_unlink(&abs)).await;
+                }
+                existed
+            }
+            Err(_) => false,
+        };
+        if !wiped {
+            return;
+        }
+        self.emit(
+            "chat.wiped",
+            Some(chat_id),
+            json!({
+                "chat_id": chat_id,
+                "by": by,
+            }),
+        );
+    }
+
+    /// Inbound `ChatWipe`: the peer destroyed their side of a shared chat —
+    /// honor it locally (hard delete, same as the local RPC). The wire
+    /// chat_id is the SENDER's local row id: it encodes OUR peer-id, which
+    /// is exactly how ownership is verified — a wipe naming any other
+    /// peer-id is a foreign-delete probe and dies here. The row we erase
+    /// is OUR local one (`chat_str(&peer)`); ids are per-endpoint. Denied
+    /// peers never reach this handler: the transport/app gates drop their
+    /// frames wholesale, so a hostile key can never delete our copy.
+    async fn on_chat_wipe(self: &Arc<Self>, peer: PeerId, chat_id: String) {
+        let ours = self.identity.peer_id();
+        if peer_of_chat(&chat_id).ok() != Some(ours) {
+            let mut sh = self.sh();
+            sh.dropped_inbound += 1;
+            tracing::debug!(%peer, %chat_id, "wipe for foreign chat; dropped");
+            return;
+        }
+        self.wipe_chat_local(&chat_str(&peer), "peer").await;
     }
 }
 
@@ -6229,6 +6616,50 @@ impl CinderCore for Core {
         }))
     }
 
+    /// `chat.wipe` — destroy a conversation on both ends. The notice rides
+    /// whatever path exists right now: a live session, or a session-sealed
+    /// mailbox deposit that only decrypts while the peer's session
+    /// generation survives (their drain drops undecryptable envelopes).
+    /// It is never queued — a wipe redriven later is pointless and the
+    /// local delete is what matters. A compromised endpoint may ignore
+    /// the notice regardless; remote destruction is best-effort, the
+    /// LOCAL wipe (hard-deleted rows, secure_delete on) is unconditional.
+    async fn chat_wipe(&self, p: ChatWipeParams) -> Result<Value, RpcError> {
+        let peer = peer_of_chat(&p.chat_id)
+            .map_err(|_| RpcError::new(ErrorKind::NotFound, "chat not found"))?;
+        let exists = self
+            .sblk({
+                let cid = p.chat_id.clone();
+                move |s| s.chat_exists(&cid)
+            })
+            .await
+            .map_err(store_rpc)?;
+        if !exists {
+            return Err(RpcError::new(ErrorKind::NotFound, "chat not found"));
+        }
+        let notified = match self
+            .deliver_now(
+                peer,
+                &PendingMsg {
+                    app: AppMsg::ChatWipe {
+                        chat_id: p.chat_id.clone(),
+                    },
+                    msg_id: None,
+                },
+            )
+            .await
+        {
+            Delivered::Sent | Delivered::Deposited => true,
+            Delivered::Failed => false,
+        };
+        self.arc().wipe_chat_local(&p.chat_id, "local").await;
+        Ok(json!({
+            "chat_id": p.chat_id,
+            "wiped": true,
+            "peer_notified": notified,
+        }))
+    }
+
     async fn contact_list(&self, p: ContactListParams) -> Result<Value, RpcError> {
         let filter = p.state.clone();
         let (peers, metas) = {
@@ -6293,6 +6724,15 @@ impl CinderCore for Core {
 
     async fn contact_accept(&self, p: ContactIdParams) -> Result<Value, RpcError> {
         let peer = self.peer_of_contact_id(&p.contact_id)?;
+        {
+            let sh = self.sh();
+            if Self::denied(&sh, &peer) {
+                return Err(RpcError::new(
+                    ErrorKind::PeerDenied,
+                    "peer is on the deny list (contact.deny); there is no un-deny — recovery is manual DB surgery",
+                ));
+            }
+        }
         let state = self.meta_state(&peer);
         match state {
             Some(MetaState::PendingIn) => {}
@@ -6363,6 +6803,34 @@ impl CinderCore for Core {
         // inbound gate.
         self.drop_session(&peer);
         Ok(json!({"contact_id": p.contact_id, "state": "declined"}))
+    }
+
+    /// `contact.deny` — compromised-peer containment. Permanently distrust
+    /// the contact's peer-id: every lane closes now and no path can ever
+    /// re-establish a session. Idempotent (deny is a panic button) and
+    /// intentionally irreversible — there is no un-deny method; recovery
+    /// is manual surgery on the `denied_peers` table plus the meta entry.
+    async fn contact_deny(&self, p: ContactDenyParams) -> Result<Value, RpcError> {
+        let peer = self.peer_of_contact_id(&p.contact_id)?;
+        {
+            let sh = self.sh();
+            if sh.denied.contains(&peer) {
+                return Ok(json!({
+                    "contact_id": p.contact_id,
+                    "peer_id": peer_str(&peer),
+                    "state": "denied",
+                }));
+            }
+        }
+        if self.meta_state(&peer).is_none() {
+            return Err(RpcError::new(ErrorKind::NotFound, "unknown contact"));
+        }
+        self.arc().deny_peer(&peer).await?;
+        Ok(json!({
+            "contact_id": p.contact_id,
+            "peer_id": peer_str(&peer),
+            "state": "denied",
+        }))
     }
 
     async fn invite_create(&self, p: InviteCreateParams) -> Result<Value, RpcError> {

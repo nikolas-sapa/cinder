@@ -277,6 +277,16 @@ impl CinderCore for MockCore {
         Ok(json!({"contact_id": p.contact_id, "state": "declined"}))
     }
 
+    async fn contact_deny(&self, p: ContactDenyParams) -> Result<Value, RpcError> {
+        self.check("contact.deny")?;
+        Ok(json!({"contact_id": p.contact_id, "peer_id": PEER, "state": "denied"}))
+    }
+
+    async fn chat_wipe(&self, p: ChatWipeParams) -> Result<Value, RpcError> {
+        self.check("chat.wipe")?;
+        Ok(json!({"chat_id": p.chat_id, "wiped": true, "peer_notified": true}))
+    }
+
     async fn invite_create(&self, _p: InviteCreateParams) -> Result<Value, RpcError> {
         self.check("invite.create")?;
         Ok(json!({

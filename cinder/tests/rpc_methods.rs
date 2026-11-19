@@ -14,10 +14,12 @@ const ALL_METHODS: &[&str] = &[
     "chat.list",
     "chat.history",
     "chat.set_disappearing",
+    "chat.wipe",
     "contact.list",
     "contact.add",
     "contact.accept",
     "contact.decline",
+    "contact.deny",
     "invite.create",
     "invite.accept",
     "ident.verify",
@@ -370,8 +372,8 @@ async fn dispatch_covers_describe_table() {
     hello(&mut h).await;
     let d = call(&mut h, 2, "rpc.describe", json!({})).await;
     let described: Vec<String> = d["methods"].as_object().unwrap().keys().cloned().collect();
-    assert_eq!(described.len(), 33, "rpc.describe must describe 33 methods");
-    assert_eq!(METHODS.len(), 33);
+    assert_eq!(described.len(), 35, "rpc.describe must describe 35 methods");
+    assert_eq!(METHODS.len(), 35);
     for m in METHODS.iter() {
         assert!(
             described.contains(&m.name.to_string()),
@@ -385,7 +387,7 @@ async fn dispatch_covers_describe_table() {
             "METHODS table missing {name}"
         );
     }
-    assert_eq!(EVENTS.len(), 12);
+    assert_eq!(EVENTS.len(), 14);
 }
 
 // P2 — rpc.describe answers pre-auth and covers the whole surface.
@@ -417,6 +419,8 @@ async fn p2_describe_preauth() {
         "file_state",
         "call.incoming",
         "call.state",
+        "contact.denied",
+        "chat.wiped",
         "event.gap",
     ] {
         assert!(events.contains_key(name), "describe missing event {name}");
@@ -433,6 +437,7 @@ async fn p2_describe_preauth() {
         ("unauthorized_scope", -32016),
         ("not_found", -32017),
         ("conflict", -32018),
+        ("peer_denied", -32019),
     ] {
         assert_eq!(kinds[kind]["code"], code, "kind {kind}");
         assert!(kinds[kind].get("retryable").is_some(), "kind {kind}");

@@ -14,6 +14,7 @@ pub const RATE_LIMITED: i64 = -32015;
 pub const UNAUTHORIZED_SCOPE: i64 = -32016;
 pub const NOT_FOUND: i64 = -32017;
 pub const CONFLICT: i64 = -32018;
+pub const PEER_DENIED: i64 = -32019;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ErrorKind {
@@ -31,6 +32,7 @@ pub enum ErrorKind {
     UnauthorizedScope,
     NotFound,
     Conflict,
+    PeerDenied,
     Unimplemented,
 }
 
@@ -51,6 +53,7 @@ impl ErrorKind {
             Self::UnauthorizedScope => "unauthorized_scope",
             Self::NotFound => "not_found",
             Self::Conflict => "conflict",
+            Self::PeerDenied => "peer_denied",
             Self::Unimplemented => "unimplemented",
         }
     }
@@ -71,6 +74,7 @@ impl ErrorKind {
             Self::UnauthorizedScope => UNAUTHORIZED_SCOPE,
             Self::NotFound => NOT_FOUND,
             Self::Conflict => CONFLICT,
+            Self::PeerDenied => PEER_DENIED,
             Self::Unimplemented => METHOD_NOT_FOUND,
         }
     }
@@ -102,6 +106,7 @@ impl ErrorKind {
             Self::UnauthorizedScope => "connection scope lacks this capability",
             Self::NotFound => "unknown id, or expired cursor/since; re-fetch",
             Self::Conflict => "state conflict; do not retry the identical call",
+            Self::PeerDenied => "peer-id is on the permanent deny list (contact.deny); never retry",
             Self::Unimplemented => "method reserved but not implemented in this build",
         }
     }

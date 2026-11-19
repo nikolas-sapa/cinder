@@ -172,8 +172,8 @@ capability-scoped tokens carrying a subset without changing the shape:
 | Scope | Covers |
 |---|---|
 | `read` | `chat.list`, `chat.history`, `contact.list`, `events.subscribe`, `events.unsubscribe` |
-| `send` | `msg.send`, `msg.edit`, `msg.delete`, `msg.react` |
-| `contacts` | `contact.add`, `contact.accept`, `contact.decline`, `invite.create`, `invite.accept` |
+| `send` | `msg.send`, `msg.edit`, `msg.delete`, `msg.react`, `chat.set_disappearing`, `chat.wipe`, `file.*`, `call.*` |
+| `contacts` | `contact.add`, `contact.accept`, `contact.decline`, `contact.deny`, `invite.create`, `invite.accept` |
 | `verify` | `ident.verify` (sensitive write — grants trust; kept separate so v2 tokens can withhold it) |
 | `admin` | `shutdown.request` |
 | `*` | wildcard — all of the above. Granted by every v1 transport |
@@ -599,7 +599,7 @@ honors the `expires_at` deadlines that actually arrive on their messages.
 
 List all contact records in any state.
 
-**Params:** none. Optional `state` filter: `{state?: "active"|"pending_in"|"pending_out"|"declined"|"blocked"}`.
+**Params:** none. Optional `state` filter: `{state?: "active"|"pending_in"|"pending_out"|"declined"|"blocked"|"denied"}`.
 
 **Result:** `{contacts: [Contact]}`
 
@@ -610,7 +610,7 @@ List all contact records in any state.
 | `contact_id` | `contact:` | |
 | `peer_id` | `peer:` | |
 | `display_name` | string\|null | |
-| `state` | enum | `pending_out` (we invited/added, connecting\|retry\|failed), `pending_in` (they connected to us, awaiting accept), `active`, `declined`, `blocked` |
+| `state` | enum | `pending_out` (we invited/added, connecting\|retry\|failed), `pending_in` (they connected to us, awaiting accept), `active`, `declined`, `blocked`, `denied` (terminal — `contact.deny`, §4.22) |
 | `substate` | `"connecting"\|"retry"\|"failed"\|null` | Detail for `pending_out` |
 | `trust` | `"unverified"\|"verified"\|"key_changed"` | |
 | `chat_id` | `chat:`\|null | Present once `active` |
@@ -1028,6 +1028,104 @@ flag. → `{call_id, muted}`.
 
 ---
 
+### 4.22 Containment methods (`contact.deny`, `chat.wipe`)
+
+The compromised-peer pair: `contact.deny` permanently distrusts an identity,
+`chat.wipe` destroys a conversation. Typical containment sequence for
+"the other side is compromised": `chat.wipe` the shared chat, then
+`contact.deny` the contact (order does not matter — both stand alone).
+
+#### `contact.deny` — scope `contacts`
+
+**Permanent, irreversible.** The contact's peer-id is inserted into the
+persisted denylist and every lane closes atomically:
+
+- Live calls and the Noise session are torn down; the session's stream id is
+  tombstoned so frames on it die.
+- Queued outbound items fail with `msg_state{state:"failed",reason:"denied"}`.
+- Live file transfers fail (`file_state{...,reason:"denied"}`).
+- The mailbox grant the peer issued us is revoked locally, and OUR mailbox's
+  deposit token is rotated relay-side so the copy they hold is dead
+  (collateral: every contact's outstanding deposit token rotates — honest
+  peers re-grant automatically on the next handshake's `Grant` frame).
+- The contact's state becomes `denied` (terminal).
+
+After a deny, EVERY path refuses the peer-id: new handshakes (inbound Msg1
+dropped, outbound never initiated), mailbox envelopes (dropped + acked so
+they don't redeliver), transport frames on stale sessions, `contact.add`,
+`invite.accept`, `contact.accept`, and all send paths (→ `peer_denied`).
+
+**There is intentionally no un-deny RPC.** A mistaken or coerced deny is
+recovered only by manual database surgery: remove the peer-id row from the
+`denied_peers` table in the (encrypted) SQLite store AND reset the meta
+entry's `state` from `denied` — while the daemon is stopped. Deny is a
+panic button; treat it as final.
+
+**Params:** `{contact_id: "contact:"}` (required).
+
+**Result:** `{contact_id, peer_id, state:"denied"}` — idempotent: calling
+deny on an already-denied contact returns the same result.
+
+**Example**
+
+```json
+→ {"jsonrpc":"2.0","id":40,"method":"contact.deny","params":{"contact_id":"contact:9f3b12"}}
+← {"jsonrpc":"2.0","id":40,"result":{"contact_id":"contact:9f3b12","peer_id":"peer:oyv4kq...","state":"denied"}}
+```
+
+**Errors:** `-32017`/`not_found` (unknown contact), `-32602` (malformed id).
+
+**Scope:** `contacts`. Fires `contact.denied` (§5.13).
+
+#### `chat.wipe` — scope `send`
+
+**Hard-deletes the conversation locally** — all messages (FTS included),
+reactions, state audit rows, dedup keys, file-transfer rows, replay-log
+event rows for the chat, staged `xfer/*.part` blobs, and the chat row
+itself (unread count, per-chat metadata) — then, when a path exists,
+notifies the peer with an encrypted `ChatWipe` frame so a conforming peer
+destroys its copy identically.
+
+The local wipe is unconditional and synchronous (`secure_delete=ON`). The
+remote notice is **best-effort, not a guarantee**:
+
+- It is sent over a live session, or deposited session-sealed when the peer
+  is offline-but-granted (a deposit only decrypts while the peer's session
+  generation survives — a restarted peer drops it). It is NEVER queued for
+  later delivery.
+- `peer_notified:false` in the result means no frame left — the peer keeps
+  their copy.
+- `peer_notified:true` only means the frame was sent/deposited, not that it
+  was honored: a compromised or old client may ignore `ChatWipe` (v0 peers
+  can't even decode the variant). Remote wipe is client-honored erasure,
+  never cryptographic proof of destruction — a peer that already read or
+  exported the data retains it.
+- A denied peer can NEVER wipe your copy: deny closes every inbound lane
+  before `ChatWipe` would be read. Wipe is always locally initiated on the
+  receiving side.
+
+The `chat_id` encodes its owner peer — an inbound wipe naming a foreign
+chat is dropped as a forgery (a peer can only ever wipe the chat you share
+with them).
+
+**Params:** `{chat_id: "chat:"}` (required).
+
+**Result:** `{chat_id, wiped:true, peer_notified}`
+
+**Example**
+
+```json
+→ {"jsonrpc":"2.0","id":41,"method":"chat.wipe","params":{"chat_id":"chat:77aa01"}}
+← {"jsonrpc":"2.0","id":41,"result":{"chat_id":"chat:77aa01","wiped":true,"peer_notified":true}}
+```
+
+**Errors:** `-32017`/`not_found` (unknown chat), `-32602` (malformed id).
+
+**Scope:** `send`. Fires `chat.wiped` (§5.14) — also on the receiving side
+when a peer's wipe is honored (`by:"peer"`).
+
+---
+
 ## 5. Event catalog
 
 All events are JSON-RPC **notifications** on subscribed connections. Envelope:
@@ -1122,7 +1220,7 @@ with no mailbox) → `failed`.
 | `client_msg_id` | string | The send's idempotency key — correlates before `msg_id` is known |
 | `chat_id` | `chat:` | |
 | `state` | enum | New state |
-| `reason` | string\|null | On `failed`: one of `peer_offline`,`mailbox_full`,`key_changed_blocked`,`contact_blocked`,`expired` (mailbox TTL lapsed before delivery),`internal` |
+| `reason` | string\|null | On `failed`: one of `peer_offline`,`mailbox_full`,`key_changed_blocked`,`contact_blocked`,`denied` (peer was `contact.deny`'d mid-flight — permanent, do not retry),`expired` (mailbox TTL lapsed before delivery),`internal` |
 
 **Example**
 
@@ -1329,6 +1427,39 @@ reason?, quality?, muted?, stats?}`
 
 ---
 
+### 5.13 `contact.denied`
+
+`contact.deny` completed: the peer-id is permanently denylisted and the
+contact's `state` is `denied`. Audit signal only — all teardown (calls,
+session, queued sends, grants) has already happened by the time it emits.
+
+**Payload:** `{contact_id, peer_id}`
+
+```json
+{"jsonrpc":"2.0","method":"contact.denied","params":{"subscription_id":"sub:1","seq":1600,"ts":"2026-11-19T10:00:00Z","contact_id":"contact:9f3b12","peer_id":"peer:oyv4kq..."}}
+```
+
+---
+
+### 5.14 `chat.wiped`
+
+A conversation was hard-deleted. `by:"local"` = this endpoint ran
+`chat.wipe`; `by:"peer"` = the peer's `ChatWipe` frame was honored — same
+destruction either way. Subscribers MUST drop every cached row for
+`chat_id` (messages, reactions, files, replay entries are already gone).
+
+**Payload:** `{chat_id, by:"local"|"peer"}`
+
+```json
+{"jsonrpc":"2.0","method":"chat.wiped","params":{"subscription_id":"sub:1","seq":1601,"ts":"2026-11-19T10:00:01Z","chat_id":"chat:77aa01","by":"peer"}}
+```
+
+**Ordering:** `chat.wiped` is the LAST event for its chat — all prior
+per-chat replay rows are deleted with the wipe, so a resuming subscriber
+sees only the wipe marker, not the content it erased.
+
+---
+
 ## 6. Trust marking — prompt-injection hygiene
 
 Every inbound `body` object carries **`"trusted": false`**:
@@ -1382,6 +1513,7 @@ retrying the identical call can succeed.
 | `-32016` | `unauthorized_scope` | false | Scope lacks the capability (v2 tokens) or pre-hello call. Acquire scope / hello first |
 | `-32017` | `not_found` | false | Unknown id / expired cursor or `since`. Re-fetch (`chat.list`, fresh subscribe) |
 | `-32018` | `conflict` | false | State conflict: wrong-state accept, `client_msg_id` reused with different payload, SAS mismatch, one-time token consumed |
+| `-32019` | `peer_denied` | false | Peer-id is on the permanent deny list (`contact.deny`). Never retry; no un-deny exists — recovery is manual DB surgery (§4.22) |
 | `-32603` | `internal` | true | Bug/unexpected. Report stderr log id in `data.log_ref` if present |
 
 **Secret hygiene (MUST):** no error `data` field, `hint` string, event

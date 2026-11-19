@@ -241,6 +241,14 @@ impl ContactStore {
         self.save()
     }
 
+    // Revokes the grant the peer issued us — after contact.deny nothing
+    // may deposit into a denied peer's mailbox ever again.
+    pub fn clear_mailbox_grant(&mut self, peer_id: &PeerId) -> Result<(), Error> {
+        let c = self.get_mut(peer_id).ok_or(Error::UnknownContact)?;
+        c.mailbox_grant = None;
+        self.save()
+    }
+
     pub fn record_seen(&mut self, peer_id: &PeerId) -> Result<(), Error> {
         let c = self.get_mut(peer_id).ok_or(Error::UnknownContact)?;
         c.last_seen = Some(now_unix());

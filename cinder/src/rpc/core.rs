@@ -70,6 +70,22 @@ pub struct ContactIdParams {
     pub contact_id: String,
 }
 
+/// `contact.deny` — permanent compromised-peer containment. The param is
+/// the same shape as the other contact ops; the SEMANTICS are the
+/// irreversible part: the peer-id lands on the denylist and no path can
+/// re-establish it.
+#[derive(Debug, Deserialize)]
+pub struct ContactDenyParams {
+    pub contact_id: String,
+}
+
+/// `chat.wipe` — destroy a conversation locally and tell the peer to do
+/// the same when a live session carries the notice.
+#[derive(Debug, Deserialize)]
+pub struct ChatWipeParams {
+    pub chat_id: String,
+}
+
 #[derive(Debug, Deserialize)]
 pub struct InviteCreateParams {
     pub label: Option<String>,
@@ -180,11 +196,21 @@ pub trait CinderCore: Send + Sync {
         &self,
         params: ChatSetDisappearingParams,
     ) -> Result<Value, RpcError>;
+    /// Hard-deletes a conversation locally and notifies the peer to wipe
+    /// theirs when a live session exists. Returns `{chat_id, wiped,
+    /// peer_notified}`; `peer_notified:false` means the peer keeps their
+    /// copy (remote destruction is best-effort).
+    async fn chat_wipe(&self, params: ChatWipeParams) -> Result<Value, RpcError>;
 
     async fn contact_list(&self, params: ContactListParams) -> Result<Value, RpcError>;
     async fn contact_add(&self, params: ContactAddParams) -> Result<Value, RpcError>;
     async fn contact_accept(&self, params: ContactIdParams) -> Result<Value, RpcError>;
     async fn contact_decline(&self, params: ContactIdParams) -> Result<Value, RpcError>;
+    /// Permanently denylist the contact's peer-id: kills live calls and
+    /// sessions, fails queued outbound `denied`, revokes grants, refuses
+    /// every future session/envelope/re-add from that identity. There is
+    /// no un-deny. Returns `{contact_id, peer_id, state:"denied"}`.
+    async fn contact_deny(&self, params: ContactDenyParams) -> Result<Value, RpcError>;
 
     async fn invite_create(&self, params: InviteCreateParams) -> Result<Value, RpcError>;
     async fn invite_accept(&self, params: InviteAcceptParams) -> Result<Value, RpcError>;
@@ -232,6 +258,8 @@ pub const CORE_EVENT_KINDS: &[&str] = &[
     "msg.expired",
     "contact.request",
     "contact.connected",
+    "contact.denied",
+    "chat.wiped",
     "security.identity_changed",
     "security.verification_needed",
     "file_state",

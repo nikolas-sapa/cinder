@@ -2818,14 +2818,20 @@ impl Core {
         if deposit {
             return false;
         }
+        // Media backpressure must resolve at out_q (pre-seal drop-oldest),
+        // never post-seal: a dropped sealed frame desyncs the receiver's
+        // sequential nonces and DecryptFatal-destroys the session. Block on
+        // cmd_tx like every other lane — a full channel stalls only this
+        // drain task while out_q sheds the excess upstream of sealing.
         let sent = self
             .link
             .cmd_tx
-            .try_send(ClientMsg::Transport {
+            .send(ClientMsg::Transport {
                 to: peer,
                 session_id: ps.session_id,
                 body: ct,
             })
+            .await
             .is_ok();
         if let Some(ctrl) = ctrl {
             let _ = self
@@ -3042,7 +3048,8 @@ impl Core {
             });
         }
 
-        // out_q → sealed CallFrame → cmd_tx try_send (drop under backpressure).
+        // out_q → sealed CallFrame → cmd_tx. Wire backpressure stalls this
+        // drain task; drop-oldest loss happens upstream in out_q.push.
         {
             let me = self.arc();
             let rt = rt.clone();

@@ -38,10 +38,14 @@ jobs:
           components: clippy
       - uses: Swatinem/rust-cache@v2
       - name: audio deps for calls feature (ubuntu)
+        # Retry: archive/security.ubuntu.com flakes 503s under load.
         run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            libasound2-dev libopus-dev pkg-config
+          for i in 1 2 3; do
+            sudo apt-get update -o Acquire::Retries=3 && \
+            sudo apt-get install -y --no-install-recommends \
+              libasound2-dev libopus-dev pkg-config && break
+            [ "$i" = 3 ] && exit 1; sleep 15
+          done
       - run: cargo clippy --workspace --locked -- -D warnings
 
   test:
@@ -58,9 +62,12 @@ jobs:
       - name: audio deps for calls feature (ubuntu)
         if: runner.os == 'Linux'
         run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            libasound2-dev libopus-dev pkg-config
+          for i in 1 2 3; do
+            sudo apt-get update -o Acquire::Retries=3 && \
+            sudo apt-get install -y --no-install-recommends \
+              libasound2-dev libopus-dev pkg-config && break
+            [ "$i" = 3 ] && exit 1; sleep 15
+          done
       - name: audio deps for calls feature (macos)
         if: runner.os == 'macOS'
         run: brew install opus

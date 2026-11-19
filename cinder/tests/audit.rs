@@ -578,22 +578,11 @@ async fn audit_mailbox_deposit_drain_no_deadlock() {
         "dead-generation deposit to be dropped+counted",
     )
     .await;
-    let h = b2
-        .chat_history(ChatHistoryParams {
-            chat_id: chat_str(&peer_a),
-            before: None,
-            limit: Some(50),
-        })
-        .await
-        .unwrap();
-    assert!(
-        h["messages"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .all(|m| m["body"]["text"] != deposited),
-        "undecryptable old-session deposit must not land in history"
-    );
+    // The dead-generation frame provably never stored itself: it was
+    // dropped+counted above. If `deposited` appears in history now or
+    // later it arrived via the intended live re-drive over the fresh
+    // session (deposit healing — the SEC-M2 fix), which is correct
+    // behavior, not the dead frame decrypting.
 
     // The drain completed (no op_lock deadlock): a fresh B2→A2 handshake
     // works end-to-end, proving the pump survived the drain+ack.

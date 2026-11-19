@@ -49,7 +49,7 @@
   <pre class="hero-ascii" id="heroAscii" aria-hidden="true"></pre>
   <div class="hero-vignette" aria-hidden="true"></div>
   <div class="wrap">
-    <p class="eyebrow mono">e2e-encrypted · terminal-native · agent-first</p>
+    <p class="eyebrow mono"><i class="st-led" aria-hidden="true"></i>e2e-encrypted · terminal-native · agent-first</p>
     <h1>encrypted chat<br>your agents<br>can drive<span class="ember-dot">.</span></h1>
     <div class="hero-sub">
       <p class="sub">cinder is a terminal messenger where the TUI and your AI agents are
@@ -77,6 +77,8 @@
         <span>no accounts</span>
       </p>
     </div>
+    <p class="hero-status mono" data-reveal><span class="amber">▮</span> relay rly-02 ·
+    mailbox 3 pending · peers 2 verified · <span class="dim">scripted demo</span></p>
   </div>
 </section>
 
@@ -91,7 +93,7 @@
     <div class="sec-head">
       <p class="kicker mono">00 — the wire</p>
       <h2>three flights, then silence</h2>
-      <p class="sec-side mono">Noise_XX — full handshake, annotated</p>
+      <p class="sec-side mono">Noise_XX — the handshake that blinds the relay</p>
     </div>
     <div class="wire-card" data-reveal>
       <div class="trace">
@@ -457,55 +459,83 @@
       <p class="sec-side">everything below ships today</p>
     </div>
     <div class="ledger" data-reveal>
-      <div class="row">
-        <span class="num mono">01</span>
+      <div class="row" role="button" tabindex="0" aria-expanded="false">
+        <span class="num mono">01<span class="xind" aria-hidden="true"></span></span>
         <h3>agent-first JSON-RPC</h3>
-        <p class="desc">Every TUI capability is a method on a typed JSON-RPC 2.0 socket.
-        <code>cinder rpc</code> speaks newline-delimited frames on stdio;
-        <code>cinder daemon</code> serves the same protocol to concurrent clients over a peer-cred
-        unix socket. Sends are idempotent — retry a client_msg_id, get the same msg_id back.</p>
+        <div class="rcol">
+          <p class="desc">Every TUI capability is a method on a typed JSON-RPC 2.0 socket.
+          <code>cinder rpc</code> speaks newline-delimited frames on stdio;
+          <code>cinder daemon</code> serves the same protocol to concurrent clients over a peer-cred
+          unix socket. Sends are idempotent — retry a client_msg_id, get the same msg_id back.</p>
+          <p class="xtra mono">35 methods · 14 event kinds · errors carry retryable + hint ·
+          unix-socket peers authenticate by kernel cred</p>
+        </div>
       </div>
-      <div class="row">
-        <span class="num mono">02</span>
+      <div class="row" role="button" tabindex="0" aria-expanded="false">
+        <span class="num mono">02<span class="xind" aria-hidden="true"></span></span>
         <h3>real noise, no ceremony</h3>
-        <p class="desc"><code>Noise_XX_25519_ChaChaPoly_BLAKE2s</code> via snow. Mutual authentication,
+        <div class="rcol">
+          <p class="desc"><code>Noise_XX_25519_ChaChaPoly_BLAKE2s</code> via snow. Mutual authentication,
         forward secrecy against later key theft, static keys encrypted on the wire. One pattern,
         one suite — nothing to negotiate, nothing to downgrade. No TLS anywhere.</p>
+          <p class="xtra mono">snow · static keys encrypted in flight 3 · rekey every 1024 msgs ·
+          zeroized on drop</p>
+        </div>
       </div>
-      <div class="row">
-        <span class="num mono">03</span>
+      <div class="row" role="button" tabindex="0" aria-expanded="false">
+        <span class="num mono">03<span class="xind" aria-hidden="true"></span></span>
         <h3>blind relay</h3>
-        <p class="desc">The relay routes opaque ciphertext by peer-id and holds no keys — it can't
+        <div class="rcol">
+          <p class="desc">The relay routes opaque ciphertext by peer-id and holds no keys — it can't
         read, can't forge, can't MITM a pinned contact. Relay-blindness is asserted by an
         integration test, not by a promise.</p>
+          <p class="xtra mono">opaque frames only · relay holds no keys · global caps:
+        4096 mailboxes · 2048 invites · 2048 conns</p>
+        </div>
       </div>
-      <div class="row">
-        <span class="num mono">04</span>
+      <div class="row" role="button" tabindex="0" aria-expanded="false">
+        <span class="num mono">04<span class="xind" aria-hidden="true"></span></span>
         <h3>accountless identity</h3>
-        <p class="desc">Your identity is an X25519 keypair; your peer-id is
+        <div class="rcol">
+          <p class="desc">Your identity is an X25519 keypair; your peer-id is
         <code>SHA-256(pubkey)</code>. No email, no phone number, no signup. Keys live in the OS
         keyring with an age-encrypted fallback.</p>
+          <p class="xtra mono">keypair = identity · no registration path exists · os keyring /
+        age-encrypted fallback</p>
+        </div>
       </div>
-      <div class="row">
-        <span class="num mono">05</span>
+      <div class="row" role="button" tabindex="0" aria-expanded="false">
+        <span class="num mono">05<span class="xind" aria-hidden="true"></span></span>
         <h3>SAS verification</h3>
-        <p class="desc">Compare a 7-group numeric short authentication string out-of-band and an invite-link
+        <div class="rcol">
+          <p class="desc">Compare a 7-group numeric short authentication string out-of-band and an invite-link
         MITM has nowhere to hide. If a key ever changes, sending blocks loudly until you
         re-verify. Never a silent rebind.</p>
+          <p class="xtra mono">7 groups · derived from handshake hash + both statics, sorted ·
+        key change → sends blocked</p>
+        </div>
       </div>
-      <div class="row">
-        <span class="num mono">06</span>
+      <div class="row" role="button" tabindex="0" aria-expanded="false">
+        <span class="num mono">06<span class="xind" aria-hidden="true"></span></span>
         <h3>one-time links</h3>
-        <p class="desc"><code>cinder://&lt;pubkey&gt;@&lt;relay&gt;?rendezvous=&lt;token&gt;</code>
+        <div class="rcol">
+          <p class="desc"><code>cinder://&lt;pubkey&gt;@&lt;relay&gt;?rendezvous=&lt;token&gt;</code>
         is a single-use invite slot. An intercepted link can't be replayed, and a copied pubkey
         alone can't reach you.</p>
+          <p class="xtra mono">single-use rendezvous slot · ticket burns on consume ·
+        replayed links rejected</p>
+        </div>
       </div>
-      <div class="row">
-        <span class="num mono">07</span>
+      <div class="row" role="button" tabindex="0" aria-expanded="false">
+        <span class="num mono">07<span class="xind" aria-hidden="true"></span></span>
         <h3>offline mailboxes</h3>
-        <p class="desc">Bounded per-mailbox queues on the relay hold ciphertext for offline peers.
+        <div class="rcol">
+          <p class="desc">Bounded per-mailbox queues on the relay hold ciphertext for offline peers.
         Mailbox ids are random 256-bit; deposit and fetch need capability tokens — open mailboxes
         would be a spam vector.</p>
+          <p class="xtra mono">bounded queues · 256-bit ids · capability tokens for
+        deposit + fetch</p>
+        </div>
       </div>
     </div>
     <pre class="orn ledger-cap" aria-hidden="true"><span class="ft">╞══════════════════</span><span class="mu"> ledger </span><span class="ft">══════════════════╡</span></pre>
@@ -616,7 +646,7 @@
       <figcaption class="bar mono" id="fsm-cap">
         <span class="tag">fsm-01</span>
         <span class="t">session · transport · trust</span>
-        <span class="r"><i></i>schematic</span>
+        <span class="r"><i></i>schematic · <b class="fsm-state" id="fsmState">verified</b></span>
       </figcaption>
       <div class="scroll">
 <pre class="fsm" aria-label="ASCII schematic of the cinder session state machine. Entry at INVITE, transitions to HANDSHAKE, SEALED, VERIFIED. SEALED loops on rekey, drops to UNVERIFIED on key change, which returns to VERIFIED on sas match. VERIFIED drops to WIPED on chat.wipe. Every state falls to DENIED on contact.deny.">

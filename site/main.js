@@ -1039,8 +1039,8 @@ void main(){
   var base = document.getElementById('fx-base');
   var fx = document.getElementById('fx-ember');
   if (!base || !fx) return;
-  var RES = 2, CELL = 6, DOT = 2.55;
-  var EDGE_L = 76, EDGE_R = 76, EDGE_T = 30, EDGE_B = 30, MAX_IGN = 14;
+  var RES = 2, CELL = 6, DOT = 2.9;
+  var EDGE_L = 104, EDGE_R = 104, EDGE_T = 38, EDGE_B = 38, MAX_IGN = 24;
   var FAINT = [61,66,73], DIMB = [90,65,20];
   var TH8 = new Float32Array([
      0,32, 8,40, 2,34,10,42, 48,16,56,24,50,18,58,26,
@@ -1751,7 +1751,6 @@ start();
   var LEGS = [[18, 35], [59, 75]];
   var STEP_MS = 60, HOLD_MS = 450, REST_MS = 1400;
   var leg = 0, col = LEGS[0][0], timer = null;
-
   function place(){
     pkt.style.left = col + "ch";
   }
@@ -1797,6 +1796,8 @@ start();
 (function(){
   var leds = [].slice.call(document.querySelectorAll('pre.fsm .led[data-i], pre.rail .led[data-i]'));
   if (!leds.length) return;
+  var STATES = ['invite','handshake','sealed','verified'];
+  var stateEl = document.getElementById('fsmState');
   var mq = matchMedia('(prefers-reduced-motion: reduce)');
   if (mq.matches) return;
   var cur = 0;
@@ -1807,10 +1808,29 @@ start();
       l.classList.toggle('on', on);
       l.textContent = on ? '●' : '○';
     }
+    if (stateEl) stateEl.textContent = STATES[cur];
     cur = (cur + 1) % 4;
   };
   tick();
   setInterval(tick, 1100);
+})();
+
+/* ---------- expandable spec ledger ---------- */
+(function(){
+  var rows = document.querySelectorAll('.ledger .row[aria-expanded]');
+  if (!rows.length) return;
+  function toggle(r){
+    r.setAttribute('aria-expanded', r.getAttribute('aria-expanded') === 'true' ? 'false' : 'true');
+  }
+  rows.forEach(function(r){
+    r.addEventListener('click', function(e){
+      if (e.target.closest('a')) return;
+      toggle(r);
+    });
+    r.addEventListener('keydown', function(e){
+      if (e.key === 'Enter' || e.key === ' '){ e.preventDefault(); toggle(r); }
+    });
+  });
 })();
 
 /* ---------- voice call card ---------- */

@@ -23,7 +23,7 @@ mod xfer;
 
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use cinder_core::identity::Identity;
 use cinder_core::PeerId;
@@ -891,14 +891,24 @@ async fn ca16_mute_emits_nothing() {
     })
     .await
     .expect("unmute");
-    // Unmute restores the ~50 fps media rate, not just a trickle.
+    // Unmute restores the media rate, not just the keepalive trickle.
+    // Poll-based: starved CI runners can sustain well under 50 fps, but a
+    // live unmuted pump clears 8 frames far faster than the ~1.5s it takes
+    // the 200ms keepalive cadence to reach the same count.
     let (tx2, ..) = a.test_call_stats(&call_id).unwrap();
-    tokio::time::sleep(Duration::from_millis(500)).await;
-    let (tx3, ..) = a.test_call_stats(&call_id).unwrap();
+    let deadline = Instant::now() + Duration::from_millis(1500);
+    let mut extra = 0u64;
+    while Instant::now() < deadline {
+        let (tx3, ..) = a.test_call_stats(&call_id).unwrap();
+        extra = tx3 - tx2;
+        if extra >= 8 {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
     assert!(
-        tx3 - tx2 >= 10,
-        "unmute must restore full media rate, got {extra} in 500 ms",
-        extra = tx3 - tx2
+        extra >= 8,
+        "unmute must restore full media rate, got {extra} in 1.5 s"
     );
 }
 

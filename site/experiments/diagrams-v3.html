@@ -1,0 +1,1165 @@
+<!doctype html>
+<!--
+  cinder · diagrams v3 — ciphertext-path board + session FSM
+  ------------------------------------------------------------------
+  v3 upgrades over prod (index.html fig·03 + fsm-02):
+
+  BOARD
+    1. packets are a head run: ▮ head + 4-cell decay trail ▓▒░·
+       (prod had a lone ▪ + one · trail char).
+    2. new plate seg: [ peer: online | offline ] (key: o).
+       peer offline → fwd packet enters relay, holds, then drops down
+       the queue pipe (col 46) into MAILBOX; a +1 tick flashes on the
+       mailbox row and the mbx bar/count (j-mbq/j-mbf/j-mbe) fills.
+       peer back online → drain packet rises from mailbox → relay →
+       PEER, count ticks −1. relay view holds packets at the seam,
+       lights the ┬ fork junction and sheds a · spark down the pipe.
+    3. legend plate under the art in .keys language.
+
+  FSM
+    4. edge trace: selecting a state runs a · marker along each
+       outgoing edge path (desktop #fsm only; rail keeps .hot light).
+       paths are hand-set [row,col] cells — see TRACE table, all
+       columns measured against prod art. deny path is per-state:
+       drop column → bus row 15 → junction col 30 → DENIED.
+    5. readout is a typewriter: "state → event → state" per out-edge;
+       full string lands instantly in an sr-only line so aria-live
+       stays truthful while the visible line types.
+    6. legend plate inside the panel in .keys language.
+
+  VERIFIED WIDTHS (asserted live by widthCheck() below, console):
+    board m-desktop : every row = 92 cols incl border (20 rows)
+    board m-mobile  : every row = 46 cols incl border (25 rows)
+    pre#fsm         : ragged, max = 128 cols (canvas 128)
+    pre.rail        : ragged, max = 38 cols (legend row is widest)
+    packet/trace spans live in .art/.fwrap siblings, never inside
+    <pre> text, so textContent line length == rendered columns.
+
+  ---- PORT --------------------------------------------------------------
+  prod names kept: .board .housing .plate .pl-* .seg(.opt/.sep/.kk/.br)
+    .artwrap .ruler .art .m-desktop .m-mobile[data-v] .keys .k-*
+    .e .i .m .f .d .g .dd (ink)  .j-led .j-rtt .j-q .j-rx .j-tx .j-upt
+    .panel .bar .tag .scroll pre.fsm pre.rail .st .stc .bx .led .ent
+    .arw .lbl .lp .wrn .den .dnn .dim [data-state] [data-edge] .hot .sel
+    .inspect .readout .k .v .nul .log-h .log-body .ll .t .a .x .b
+    .spec .card .hd2 .s .d .e .lbl .x
+  prod renames / additions:
+    .pkt → .pk ; single trail span → .pk.t1..t4 (▓▒░· decay)
+    pkH/pkT → pkH + pkT1..pkT4 ; rkH/rkT → rkH + rkT1..4 ; new dkH/dkT*
+    new: .mbx-tick (+1/−1/FULL) .pk.sp (relay fork spark)
+    new art hooks: .j-peer (PEER led) .j-fork (relay ┬ junction)
+                   .j-mbq (mbx count) .j-mbf/.j-mbe (mbx bar fill/empty)
+    new plate bits: #peerBtn .seg.peer, #peerName in .pl-meta
+    new: .fwrap (positioned wrapper for .tr markers), .tr (edge trace ·)
+    readout split: #ro-anim (typed, aria-hidden) + #ro-sr (sr truth)
+    .keys.legend → second .keys strip; under .panel needs selector
+                   port (prod scopes .keys under .board)
+  behavior kept: v flip · hover pauses packets · IntersectionObserver
+    + visibilitychange + prefers-reduced-motion gating · esc reset ·
+    24-line capped register · led cycle parks on VERIFIED under prm.
+  ---------------------------------------------------------------------
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark">
+<title>cinder · diagrams v3</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600&family=Inter:wght@400;500&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  /* page chrome — experiment shell only */
+  *{box-sizing:border-box}
+  html,body{margin:0;padding:0}
+  body{
+    background:#0B0B0D;color:#8A919E;
+    font:400 15px/1.6 "Inter",system-ui,sans-serif;
+    -webkit-font-smoothing:antialiased;min-height:100vh;
+    padding:10vh 20px 96px;
+  }
+  ::selection{background:#B87A18;color:#E6E9EF}
+  .page-tag{position:fixed;top:18px;left:22px;z-index:5;
+    font:500 11px/1 "JetBrains Mono",ui-monospace,monospace;
+    letter-spacing:.14em;text-transform:uppercase;color:#B87A18}
+
+  /* ======================= .dg3 root ======================= */
+  .dg3{
+    --ground:#0B0B0D;--panel:#0E1013;--card:#101318;
+    --ink:#E6E9EF;--muted:#8A919E;--faint:#565D68;
+    --dim:#3A4049;--ember:#FFB224;--ember-dim:#B87A18;
+    --danger:#FF5D5D;--line:rgba(255,255,255,.07);
+    --mono:"JetBrains Mono",ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+    max-width:60rem;margin:0 auto;
+  }
+  .dg3 h1{
+    font:600 clamp(34px,5vw,52px)/1 "Space Grotesk","Inter",sans-serif;
+    letter-spacing:-.02em;text-transform:uppercase;color:var(--ink);margin:0;
+  }
+  .dg3 h1 .tick{color:var(--ember)}
+  .dg3 .lede{margin-top:16px;color:var(--muted);max-width:60ch;font-size:15px}
+  .dg3 .lede code{font:500 12px var(--mono);color:var(--ink);
+    background:var(--panel);border:1px solid var(--line);border-radius:3px;padding:1px 5px}
+  .dg3 .lede kbd{font:500 11px var(--mono);color:var(--ember);
+    background:var(--card);border:1px solid var(--ember-dim);border-radius:3px;padding:1px 5px}
+  .dg3 .sr{position:absolute;width:1px;height:1px;overflow:hidden;
+    clip:rect(0 0 0 0);white-space:nowrap}
+  .dg3 .sect{margin-top:56px}
+  .dg3 .sect-h{font:500 10.5px/1.4 var(--mono);letter-spacing:.18em;
+    text-transform:uppercase;color:var(--dim);margin:0 0 12px}
+  .dg3 .sect-h b{color:var(--ember-dim);font-weight:500}
+
+  /* ---- board: instrument housing (prod .board) ---- */
+  .dg3 .board{
+    position:relative;margin-top:24px;
+    border:1px solid var(--line);border-radius:10px;
+    background:repeating-linear-gradient(0deg,rgba(255,255,255,.012) 0 1px,transparent 1px 3px),var(--panel);
+    box-shadow:0 30px 80px rgba(0,0,0,.55),0 0 0 1px rgba(255,255,255,.02) inset;
+    overflow-x:auto;
+  }
+  .dg3 .housing{min-width:100%;width:max-content}
+  .dg3 .screw{position:absolute;font:400 11px/1 var(--mono);color:var(--faint);user-select:none;z-index:1}
+  .dg3 .screw.tl{top:9px;left:11px}.dg3 .screw.tr{top:9px;right:11px}
+  .dg3 .screw.bl{bottom:9px;left:11px}.dg3 .screw.br{bottom:9px;right:11px}
+
+  .dg3 .plate{display:flex;align-items:center;gap:9px;flex-wrap:wrap;
+    padding:14px 34px 13px;background:var(--card);
+    border-bottom:1px dashed var(--line);border-radius:9px 9px 0 0;
+    font:500 11px/1.2 var(--mono);letter-spacing:.07em;white-space:nowrap}
+  .dg3 .plate .br{color:var(--faint)}
+  .dg3 .pl-tag{color:var(--ember)}
+  .dg3 .pl-sep{color:var(--faint)}
+  .dg3 .pl-title{color:var(--ink)}
+  .dg3 .pl-meta{color:var(--dim)}
+  .dg3 .pl-meta b{color:var(--muted);font-weight:500}
+  .dg3 .pl-leader{flex:1 1 30px;min-width:12px;align-self:center;height:0;
+    border-bottom:1px dashed var(--faint);opacity:.5;margin:0 4px}
+  .dg3 .seg{flex:none;font:500 11px/1.1 var(--mono);letter-spacing:.05em;
+    color:var(--dim);background:var(--ground);border:1px solid var(--line);
+    border-radius:4px;padding:5px 9px;cursor:pointer;white-space:nowrap}
+  .dg3 .seg:hover{border-color:var(--ember-dim)}
+  .dg3 .seg:focus-visible{outline:1px solid var(--ember);outline-offset:2px}
+  .dg3 .seg .sep{color:var(--faint)}
+  .dg3 .seg .opt{color:var(--faint);padding:1px 4px;border-radius:2px;
+    transition:color .15s,background-color .15s}
+  .dg3 .seg:hover .opt{color:var(--muted)}
+  .dg3 .seg .opt.on{color:var(--ember);background:rgba(255,178,36,.10)}
+  .dg3 .seg.peer .opt.on{color:var(--ember)}
+  .dg3 .seg .kk{font-family:inherit;color:var(--dim);
+    margin-left:8px;padding-left:8px;border-left:1px solid var(--line)}
+
+  .dg3 .artwrap{position:relative;padding:26px 34px 30px 52px}
+  .dg3 .ruler{position:absolute;left:28px;top:26px;bottom:30px;width:9px;
+    pointer-events:none;opacity:.5;
+    background:
+      repeating-linear-gradient(0deg,var(--faint) 0 1px,transparent 1px 19.5px) left top/5px 100% no-repeat,
+      repeating-linear-gradient(0deg,var(--dim)   0 1px,transparent 1px 97.5px) left top/9px 100% no-repeat}
+  .dg3 .art{position:relative;display:inline-block}
+  .dg3 .board pre{margin:0;font:400 13px/1.5 var(--mono);letter-spacing:0;
+    white-space:pre;color:var(--muted);user-select:text;
+    font-variant-ligatures:none;font-feature-settings:"liga" 0,"calt" 0}
+  .dg3 .board pre[hidden]{display:none !important}
+  .dg3 .m-mobile{display:none}
+  .dg3 .e{color:var(--ember)}  .dg3 .i{color:var(--ink)}
+  .dg3 .m{color:var(--muted)}  .dg3 .f{color:var(--faint)}
+  .dg3 .d{color:var(--ember-dim)} .dg3 .g{color:var(--danger)}
+  .dg3 .dd{color:var(--dim)}
+
+  /* ---- v3 packets: ▮ head + ▓▒░· decay trail (prod .pkt) ---- */
+  .dg3 .pk{position:absolute;left:0;pointer-events:none;display:none;
+    font:400 13px/1.5 var(--mono)}
+  .dg3 .pk.on{display:block}
+  .dg3 .pk.h{color:var(--ember);text-shadow:0 0 9px rgba(255,178,36,.5)}
+  .dg3 .pk.t1{color:var(--ember-dim)}
+  .dg3 .pk.t2{color:var(--faint)}
+  .dg3 .pk.t3{color:var(--dim)}
+  .dg3 .pk.t4{color:var(--dim);opacity:.55}
+  .dg3 .pk.h.hold{color:var(--ember-dim);text-shadow:none}
+  .dg3 .pk.sp{color:var(--faint)}            /* relay fork spark · */
+  .dg3 .j-fork.lit{color:var(--ember);text-shadow:0 0 8px rgba(255,178,36,.5)}
+  .dg3 .mbx-tick{position:absolute;pointer-events:none;display:none;
+    font:500 11px/1.5 var(--mono);color:var(--ember);
+    text-shadow:0 0 8px rgba(255,178,36,.45)}
+  .dg3 .mbx-tick.minus{color:var(--muted);text-shadow:none}
+  .dg3 .mbx-tick.full{color:var(--danger);text-shadow:0 0 8px rgba(255,93,93,.4)}
+  .dg3 .mbx-tick.on{display:block;animation:dgtick .9s ease-out forwards}
+  @keyframes dgtick{0%{opacity:0;transform:translateY(0)}
+    18%{opacity:1}70%{opacity:1}100%{opacity:0;transform:translateY(-.8em)}}
+
+  /* ---- caption + legend plates (prod .keys) ---- */
+  .dg3 .keys{display:flex;align-items:baseline;gap:12px;flex-wrap:wrap;
+    padding:11px 34px;background:var(--card);border-top:1px dashed var(--line);
+    font:500 11px/1.6 var(--mono);letter-spacing:.08em;color:var(--ember-dim)}
+  .dg3 .housing > .keys:last-child,.dg3 .panel > .keys{border-radius:0 0 9px 9px}
+  .dg3 .keys .br{color:var(--faint)}
+  .dg3 .k-tag{color:var(--ember);white-space:nowrap}
+  .dg3 .k-text{flex:1 1 40ch;min-width:22ch}
+  .dg3 .keys b{color:var(--muted);font-weight:500}
+  .dg3 .k-hint{color:var(--dim);margin-left:auto;white-space:nowrap}
+  .dg3 .k-hint .kv{color:var(--ember)}
+  .dg3 .keys.legend{color:var(--dim);font-size:10px;letter-spacing:.1em}
+  .dg3 .keys.legend .k-tag{color:var(--ember-dim)}
+  .dg3 .keys.legend .gly{color:var(--muted)}
+  .dg3 .keys.legend .gly.e{color:var(--ember)}
+  .dg3 .keys.legend .gly.dan{color:var(--danger)}
+  .dg3 .keys.legend .sep2{color:var(--faint)}
+
+  /* ---- fsm panel (prod .fsmv2 .panel) ---- */
+  .dg3 .panel{margin:0;background:var(--panel);border:1px solid var(--line);
+    border-radius:10px;overflow:hidden}
+  .dg3 .bar{display:flex;align-items:center;gap:.9rem;padding:.65rem 1.1rem;
+    border-bottom:1px solid var(--line);font:500 10.5px/1.4 var(--mono);
+    letter-spacing:.12em;text-transform:uppercase;color:var(--muted);
+    background:var(--card)}
+  .dg3 .bar .tag{color:var(--ember);border:1px solid var(--ember-dim);
+    background:rgba(255,178,36,.06);border-radius:4px;padding:.2em .55em;
+    letter-spacing:.14em}
+  .dg3 .bar .t{color:var(--faint);letter-spacing:.1em}
+  .dg3 .bar .r{margin-left:auto;display:flex;align-items:center;gap:.5em;color:var(--muted)}
+  .dg3 .bar .r i{display:inline-block;width:6px;height:6px;border-radius:50%;
+    background:var(--ember);box-shadow:0 0 8px rgba(255,178,36,.55)}
+  .dg3 .scroll{overflow-x:auto;padding:1.6rem 1.8rem 1.5rem}
+  .dg3 .fwrap{position:relative;display:inline-block;--fz:12px}
+  .dg3 pre.fsm,.dg3 pre.rail{font:500 var(--fz,11.5px)/1.55 var(--mono);
+    margin:0;color:var(--muted);font-variant-ligatures:none}
+  .dg3 pre.fsm{font-size:var(--fz)}
+
+  .dg3 .bx{color:var(--ink)}   .dg3 .arw{color:var(--faint)}
+  .dg3 .lbl{color:var(--muted)} .dg3 .lp{color:var(--ember-dim)}
+  .dg3 .wrn{color:var(--ember)} .dg3 .den{color:var(--danger)}
+  .dg3 .dnn{color:var(--danger);opacity:.55}
+  .dg3 .dim{color:var(--faint)} .dg3 .ent{color:var(--ember)}
+  .dg3 .led{color:var(--faint);font-style:normal}
+  .dg3 .led.on{color:var(--ember);text-shadow:0 0 9px rgba(255,178,36,.45)}
+
+  .dg3 .st{appearance:none;-webkit-appearance:none;display:inline;
+    margin:0;padding:0;border:0;background:none;font:inherit;color:inherit;
+    letter-spacing:inherit;cursor:pointer;-webkit-tap-highlight-color:transparent}
+  .dg3 .stc{cursor:pointer}
+  .dg3 [data-state]:hover,.dg3 [data-state]:hover .bx{color:var(--ember)}
+  .dg3 .st:focus-visible{outline:none;background:rgba(255,178,36,.08);
+    box-shadow:inset 0 0 0 1px var(--ember-dim)}
+  .dg3 [data-state].sel,.dg3 [data-state].sel .bx{color:var(--ember);
+    text-shadow:0 0 8px rgba(255,178,36,.45)}
+  .dg3 [data-state="denied"].sel{color:var(--danger);
+    text-shadow:0 0 8px rgba(255,93,93,.5)}
+  .dg3 .st::-moz-focus-inner{border:0;padding:0}
+  .dg3 [data-edge].hot{color:var(--ember);text-shadow:0 0 8px rgba(255,178,36,.5)}
+  .dg3 [data-edge="deny"].hot{color:var(--danger);opacity:1;
+    text-shadow:0 0 8px rgba(255,93,93,.5)}
+
+  /* v3 edge-trace marker: · travels the lit edge (desktop #fsm only) */
+  .dg3 .tr{position:absolute;pointer-events:none;display:none;
+    font:500 var(--fz,12px)/1.55 var(--mono);color:var(--ember);
+    text-shadow:0 0 8px rgba(255,178,36,.6)}
+  .dg3 .tr.den{color:var(--danger);text-shadow:0 0 8px rgba(255,93,93,.55)}
+  .dg3 .tr.on{display:block}
+
+  .dg3 .inspect{margin:1.2rem 0 0;background:var(--panel);
+    border:1px solid var(--line);border-radius:10px;overflow:hidden}
+  .dg3 .readout{display:flex;align-items:baseline;gap:.9em;
+    padding:.55rem 1.1rem;border-bottom:1px solid var(--line);
+    background:var(--card);font:500 11px/1.6 var(--mono);color:var(--muted);
+    white-space:nowrap;overflow-x:auto}
+  .dg3 .readout .k{color:var(--faint);font-size:9.5px;letter-spacing:.12em;
+    text-transform:uppercase}
+  .dg3 .readout .v{color:var(--muted)}
+  .dg3 .readout .v.typ{color:var(--ink);min-width:1ch}
+  .dg3 .readout .v.typ .cur{color:var(--ember)}
+  .dg3 .readout b{color:var(--ember);font-weight:500}
+  .dg3 .readout i{color:var(--faint);font-style:normal}
+  .dg3 .readout .nul{color:var(--danger)}
+  .dg3 .log-h{padding:.45rem 1.1rem 0;font:500 9.5px/1.4 var(--mono);
+    letter-spacing:.12em;text-transform:uppercase;color:var(--faint)}
+  .dg3 .log-body{max-height:7.6em;overflow-y:auto;
+    padding:.2rem 1.1rem .65rem;font:400 11px/1.55 var(--mono);color:var(--muted)}
+  .dg3 .ll{white-space:nowrap}
+  .dg3 .ll .t{display:inline-block;width:4.8em;color:var(--faint)}
+  .dg3 .ll.sel .t{color:var(--ember-dim)}
+  .dg3 .ll.trc .t{color:var(--ember-dim)}
+  .dg3 .ll .a{color:var(--ember)}
+  .dg3 .ll b{color:var(--ink);font-weight:500}
+  .dg3 .ll .x{color:var(--faint)}
+
+  .dg3 .rail-panel{display:none}
+  .dg3 pre.rail{--fz:11.5px}
+  @media (max-width:44rem){
+    .dg3 .panel.fsm-panel{display:none}
+    .dg3 .rail-panel{display:block}
+  }
+  @media (min-width:44.01rem) and (max-width:86rem){
+    .dg3 .fwrap{--fz:11px}
+  }
+
+  .dg3 .spec{margin-top:1.2rem;display:grid;grid-template-columns:1fr 1.6fr;gap:1.2rem}
+  .dg3 .spec .card{background:var(--panel);border:1px solid var(--line);
+    border-radius:10px;overflow:hidden}
+  .dg3 .spec .hd2{padding:.65rem 1.1rem;border-bottom:1px solid var(--line);
+    font:500 10.5px/1.4 var(--mono);letter-spacing:.12em;text-transform:uppercase;
+    color:var(--muted);background:var(--card)}
+  .dg3 .spec ul{list-style:none;margin:0;padding:.4rem 0}
+  .dg3 .spec li{display:flex;align-items:baseline;gap:.9rem;
+    padding:.42rem 1.1rem;font:400 12px/1.5 var(--mono)}
+  .dg3 .spec li + li{border-top:1px dotted var(--line)}
+  .dg3 .spec .s{width:6.5rem;flex:none;color:var(--ink)}
+  .dg3 .spec .s::before{content:"○ ";color:var(--faint)}
+  .dg3 .spec li.hot .s::before{content:"● ";color:var(--ember)}
+  .dg3 .spec li.warn .s{color:var(--ember)}
+  .dg3 .spec li.term .s{color:var(--danger)}
+  .dg3 .spec .d{color:var(--muted)}
+  .dg3 .spec .e{color:var(--ink);white-space:nowrap}
+  .dg3 .spec li .lbl{margin-left:auto;color:var(--muted);text-align:right}
+  .dg3 .spec .e.den{color:var(--danger)}
+  .dg3 .spec .e.wrn{color:var(--ember)}
+  .dg3 .spec .x{color:var(--faint);white-space:nowrap}
+  .dg3 .spec li[data-edge]{cursor:default}
+  @media (max-width:44rem){.dg3 .spec{grid-template-columns:1fr}}
+
+  .dg3 .foot{margin:1.4rem 0 0;font:400 11px/1.6 var(--mono);
+    color:var(--faint);letter-spacing:.04em}
+  .dg3 .foot b{color:var(--muted);font-weight:500}
+
+  /* ---- gating ---- */
+  @media (prefers-reduced-motion:reduce){
+    .dg3 .pk,.dg3 .tr,.dg3 .mbx-tick{display:none !important}
+    .dg3 .mbx-tick.on{display:none !important}
+    .dg3 .seg .opt{transition:none}
+    .dg3 .mbx-tick{animation:none}
+  }
+  @media (max-width:44rem){
+    body{padding:12vh 14px 80px}
+    .dg3 .plate{padding:12px 14px 11px}
+    .dg3 .pl-meta{display:none}
+    .dg3 .artwrap{padding:22px 14px 20px}
+    .dg3 .ruler{display:none}
+    .dg3 .keys{padding:10px 14px}
+    .dg3 .m-desktop,.dg3 .pk,.dg3 .mbx-tick{display:none !important}
+    .dg3 .m-mobile{display:block;font-size:clamp(8px,2.55vw,12px)}
+  }
+</style>
+</head>
+<body>
+
+<div class="page-tag">cinder / experiments / diagrams v3</div>
+
+<main class="dg3">
+
+  <header>
+    <h1>diagrams v3<span class="tick">.</span></h1>
+    <p class="lede">two instrument panels, upgraded. <b>fig·03 ciphertext
+    path</b>: packets now run as a <code>▮</code> head with a
+    <code>▓▒░·</code> decay trail, pause and fork at the relay, and queue
+    into the mailbox when the peer is toggled <kbd>o</kbd>ffline.
+    <b>fsm-02 session machine</b>: inspecting a state sends a
+    <code>·</code> trace down each outgoing edge while the readout
+    type-prints the transition. <kbd>v</kbd> flips the board view,
+    <kbd>esc</kbd> resets the fsm.</p>
+  </header>
+
+  <!-- ================= fig·03 ciphertext path — board v3 ================= -->
+  <section class="sect" aria-label="ciphertext path">
+  <p class="sect-h"><b>fig·03</b> · ciphertext path · packet routing v3</p>
+
+  <div class="board" id="board" data-pov="t" data-peer="on">
+    <span class="screw tl">+</span><span class="screw tr">+</span>
+    <span class="screw bl">+</span><span class="screw br">+</span>
+    <p class="sr">Topology diagram with two switchable views. Transport view:
+    YOU, peer-id 4d2e…f18c, runs a Noise_XX x25519 handshake to the blind
+    relay, which routes opaque ciphertext onward to PEER, peer-id 9c1f…aa07.
+    Relay view (press v): the same path as the relay sees it. Toggle peer
+    offline (o) and packets pause at the relay, drop into the mailbox, and
+    a plus-one tick flashes on the mailbox row; back online they drain.
+    Status readouts are demo values.</p>
+    <div class="housing">
+
+      <header class="plate">
+        <span class="pl-tag"><span class="br">[</span>fig·03<span class="br">]</span></span><span class="pl-sep">·</span><span class="pl-title">ciphertext path</span><span class="pl-meta"><span class="pl-sep">·</span> view:<b id="viewName">transport</b><span class="pl-sep">·</span> peer:<b id="peerName">online</b></span><span class="pl-leader" aria-hidden="true"></span><button class="seg" id="viewBtn" type="button" aria-pressed="false" aria-label="Toggle relay point of view" title="flip point of view (v)"><span class="br">[</span> <span class="opt vt on">transport</span> <span class="sep">|</span> <span class="opt vr">relay</span> <span class="br">]</span><kbd class="kk">v</kbd></button><button class="seg peer" id="peerBtn" type="button" aria-pressed="false" aria-label="Toggle peer online or offline" title="peer reachability (o)"><span class="br">[</span> <span class="sep">peer:</span> <span class="opt pon on">online</span> <span class="sep">|</span> <span class="opt poff">offline</span> <span class="br">]</span><kbd class="kk">o</kbd></button>
+      </header>
+
+      <div class="artwrap">
+        <span class="ruler" aria-hidden="true"></span>
+        <div class="art">
+          <pre class="m-desktop" data-v="t" data-cols="92" aria-hidden="true"><span class="f">┌──────────────────────────────────────────────────────────────────────────────────────────┐</span>
+<span class="f">│</span> <span class="f">link</span> <span class="e j-led">●</span><span class="f"> up</span>     <span class="f">rtt</span> <span class="i j-rtt">24</span><span class="f">ms</span>   <span class="f">q</span> <span class="i j-q">3</span><span class="f">/64</span>   <span class="f">rx</span> <span class="i j-rx">1.0</span><span class="f">kB/s</span>      <span class="f">tx</span> <span class="i j-tx">0.4</span><span class="f">kB/s</span>    <span class="f">t+</span><span class="i j-upt">00:41</span>       <span class="d">demo</span>       <span class="f">│</span>
+<span class="f">│</span>                                                                                          <span class="f">│</span>
+<span class="f">│</span>   <span class="d">●</span> pin: peer static key <span class="d">╌╌╌╌╌┐</span>             invite: <span class="i">cinder://9c1f…aa07</span> · one-time <span class="d">╌┐</span>     <span class="f">│</span>
+<span class="f">│</span>                               <span class="d">│</span>                                                    <span class="d">│</span>     <span class="f">│</span>
+<span class="f">│</span>                               <span class="d">│</span>   <span class="f">┌─────────────────────┐</span>                          <span class="d">│</span>     <span class="f">│</span>
+<span class="f">│</span>  <span class="f">┌─────────────┐</span>              <span class="d">│</span>   <span class="f">│</span> <span class="e">●</span><span class="i"> BLIND RELAY</span>       <span class="f">│</span>                 <span class="f">┌────────┬────┐│</span>
+<span class="f">│</span>  <span class="f">│</span> <span class="e">●</span><span class="i"> YOU</span>       <span class="f">│</span>── noise_xx ──<span class="d">┬</span>──▶<span class="f">│</span> routes ciphertext   <span class="f">│</span>── ciphertext ──▶<span class="f">│</span> <span class="e j-peer">●</span><span class="i"> PEER</span>      <span class="f">││</span>
+<span class="f">│</span>  <span class="f">│</span> <span class="f">4d2e…f18c</span>   <span class="f">│</span>◀── x25519 ───────<span class="f">│</span> sees: <span class="g">░░▒▒▓</span> opaque  <span class="f">│</span>◀─── replies ────<span class="f">│</span> <span class="f">9c1f…aa07</span>   <span class="f">││</span>
+<span class="f">│</span>  <span class="f">└─────────────┘</span>                  <span class="f">└──────────<span class="j-fork">┬</span>──────────┘</span>                 <span class="f">└─────────────┘│</span>
+<span class="f">│</span>                                              <span class="f">│</span><span class="d"> queued</span>                                    <span class="f">│</span>
+<span class="f">│</span>   relay sees: timing · size · nothing else <span class="d">╌▶</span><span class="f">│</span>                                           <span class="f">│</span>
+<span class="f">│</span>                                   <span class="f">┌──────────┬─────────┐</span>                                 <span class="f">│</span>
+<span class="f">│</span>                                   <span class="f">│</span> <span class="e">●</span><span class="i"> MAILBOX</span><span class="f"> mbx·7e3d</span> <span class="f">│</span>                                 <span class="f">│</span>
+<span class="f">│</span>                                   <span class="f">│</span> <span class="e j-mbf">▓▓▓</span><span class="f j-mbe">░░░░░░░░░</span> <span class="i j-mbq">3</span><span class="f">/64</span>  <span class="f">│</span>                                 <span class="f">│</span>
+<span class="f">│</span>                                   <span class="f">└────────────────────┘</span>                                 <span class="f">│</span>
+<span class="f">│▓▒··</span>                                                                                  <span class="f"> ░▒▓│</span>
+<span class="f">│</span>  ─<span class="f"> wire</span>   <span class="d">╌</span><span class="f"> callout</span>   <span class="e">●</span><span class="f"> endpoint</span>   <span class="g">▒</span><span class="f"> attacker-visible</span>           <span class="f">relay keeps no keys</span>      <span class="f">│</span>
+<span class="f">│</span>                                                                                          <span class="f">│</span>
+<span class="f">└──────────────────────────────────────────────────────────────────────────────────────────┘</span></pre>
+          <pre class="m-desktop" data-v="r" data-cols="92" hidden aria-hidden="true"><span class="f">┌──────────────────────────────────────────────────────────────────────────────────────────┐</span>
+<span class="f">│</span> <span class="f">link</span> <span class="e j-led">●</span><span class="f"> up</span>     <span class="f">rtt</span> <span class="i j-rtt">24</span><span class="f">ms</span>   <span class="f">q</span> <span class="i j-q">3</span><span class="f">/64</span>   <span class="f">rx</span> <span class="i j-rx">1.0</span><span class="f">kB/s</span>      <span class="f">tx</span> <span class="i j-tx">0.4</span><span class="f">kB/s</span>    <span class="f">t+</span><span class="i j-upt">00:41</span>       <span class="d">demo</span>       <span class="f">│</span>
+<span class="f">│</span>                                                                                          <span class="f">│</span>
+<span class="f">│</span>   <span class="d">●</span> metadata: Δt·size·dir <span class="d">╌╌╌╌┐</span>                    identities: none · keys: none  <span class="d">╌┐</span>     <span class="f">│</span>
+<span class="f">│</span>                               <span class="d">│</span>                                                    <span class="d">│</span>     <span class="f">│</span>
+<span class="f">│</span>                               <span class="d">│</span>   <span class="f">┌─────────────────────┐</span>                          <span class="d">│</span>     <span class="f">│</span>
+<span class="f">│</span>  <span class="f">┌─────────────┐</span>              <span class="d">│</span>   <span class="f">│</span> <span class="e">●</span><span class="i"> BLIND RELAY</span>       <span class="f">│</span>                 <span class="f">┌────────┬────┐│</span>
+<span class="f">│</span>  <span class="f">│</span> <span class="f">○</span><span class="i"> conn a</span>    <span class="f">│</span>─ Δt41ms·512B <span class="d">┬</span>──▶<span class="f">│</span> sees: Δt·len·dir    <span class="f">│</span>─ Δt9ms·512B ───▶<span class="f">│</span> <span class="f">○</span><span class="i"> conn b</span>    <span class="f">││</span>
+<span class="f">│</span>  <span class="f">│</span> <span class="g">░░▒▒▓</span>       <span class="f">│</span>◀── Δt63ms·512B ──<span class="f">│</span> fwd <span class="g">·░░▓▓</span> · no keys <span class="f">│</span>◀── Δt51ms·512B ─<span class="f">│</span> <span class="g">░░▒▒▓</span>       <span class="f">││</span>
+<span class="f">│</span>  <span class="f">└─────────────┘</span>                  <span class="f">└──────────<span class="j-fork">┬</span>──────────┘</span>                 <span class="f">└─────────────┘│</span>
+<span class="f">│</span>                                              <span class="f">│</span><span class="d"> queued</span>                                    <span class="f">│</span>
+<span class="f">│</span>   payload: 0B readable · envelope only     <span class="d">╌▶</span><span class="f">│</span>                                           <span class="f">│</span>
+<span class="f">│</span>                                   <span class="f">┌──────────┬─────────┐</span>                                 <span class="f">│</span>
+<span class="f">│</span>                                   <span class="f">│</span> <span class="f">○</span><span class="i"> MAILBOX</span><span class="f"> sealed   </span><span class="f">│</span>                                 <span class="f">│</span>
+<span class="f">│</span>                                   <span class="f">│</span> <span class="g">░░▒▒▓</span> · opaque     <span class="f">│</span>                                 <span class="f">│</span>
+<span class="f">│</span>                                   <span class="f">└────────────────────┘</span>                                 <span class="f">│</span>
+<span class="f">│▓▒··</span>                                                                                  <span class="f"> ░▒▓│</span>
+<span class="f">│</span>  Δt<span class="f"> timing·</span> 512B<span class="f"> size</span>   <span class="g">░▒▓</span><span class="f"> unreadable</span>   <span class="f">○ anonymous</span>            <span class="f">relay keeps no keys</span>      <span class="f">│</span>
+<span class="f">│</span>                                                                                          <span class="f">│</span>
+<span class="f">└──────────────────────────────────────────────────────────────────────────────────────────┘</span></pre>
+          <pre class="m-mobile" data-v="t" data-cols="46" aria-hidden="true"><span class="f">┌────────────────────────────────────────────┐</span>
+<span class="f">│</span> transport view · blind relay   <span class="d">[v]:relay</span>   <span class="f">│</span>
+<span class="f">│</span> <span class="e j-led">●</span> <span class="f">rtt</span> <span class="i j-rtt">24</span><span class="f">ms · q</span> <span class="i j-q">3</span><span class="f">/64</span>                    <span class="d">demo</span><span class="f">│</span>
+<span class="f">│</span>                                            <span class="f">│</span>
+<span class="f">│</span>  <span class="f">┌───────────┐</span>                             <span class="f">│</span>
+<span class="f">│</span>  <span class="f">│</span> <span class="e">●</span><span class="i"> YOU</span>     <span class="f">│</span>                             <span class="f">│</span>
+<span class="f">│</span>  <span class="f">│</span> <span class="f">4d2e…f18c</span> <span class="f">│</span>                             <span class="f">│</span>
+<span class="f">│</span>  <span class="f">└─────┬─────┘</span>                             <span class="f">│</span>
+<span class="f">│</span>        <span class="f">│</span> noise_xx · e2e                    <span class="f">│</span>
+<span class="f">│</span>        <span class="f">▼</span>                                   <span class="f">│</span>
+<span class="f">│</span>  <span class="f">┌─────┬─────────────┐</span>                     <span class="f">│</span>
+<span class="f">│</span>  <span class="f">│</span> <span class="e">●</span><span class="i"> BLIND RELAY</span>     <span class="f">│</span>  <span class="d">╌▶</span> <span class="g">relay sees:</span>     <span class="f">│</span>
+<span class="f">│</span>  <span class="f">│</span>  routes <span class="g">·▒▓</span> only  <span class="f">│</span>     <span class="g">Δt · len · dir</span>  <span class="f">│</span>
+<span class="f">│</span>  <span class="f">└─────┬───────────┬─┘</span>     <span class="g">0B readable</span>     <span class="f">│</span>
+<span class="f">│</span>        <span class="f">│</span> ciphertext<span class="f">│</span><span class="d"> queued</span>                <span class="f">│</span>
+<span class="f">│</span>        <span class="f">▼</span>           <span class="f">│</span>                       <span class="f">│</span>
+<span class="f">│</span>  <span class="f">┌─────┬─────┐</span>     <span class="f">│</span> <span class="f">┌───────────────────┐</span> <span class="f">│</span>
+<span class="f">│</span>  <span class="f">│</span> <span class="e j-peer">●</span><span class="i"> PEER</span>    <span class="f">│</span>     <span class="f">└─┤</span> <span class="e">●</span><span class="i"> MAILBOX</span><span class="f"> mbx·7e3d│</span> <span class="f">│</span>
+<span class="f">│</span>  <span class="f">│</span> <span class="f">9c1f…aa07</span> <span class="f">│</span>       <span class="f">│</span> <span class="e j-mbf">▓▓▓</span><span class="f j-mbe">░░░░</span> <span class="i j-mbq">3</span><span class="f">/64</span>      <span class="f">│</span> <span class="f">│</span>
+<span class="f">│</span>  <span class="f">└───────────┘</span>       <span class="f">└───────────────────┘</span> <span class="f">│</span>
+<span class="f">│▓▒··</span>                                    <span class="f"> ░▒▓│</span>
+<span class="f">│</span> ─<span class="f"> wire</span> <span class="f">·</span> <span class="d">╌</span><span class="f"> callout</span> <span class="f">·</span> <span class="g">▒</span><span class="f"> relay-seen</span>          <span class="f">│</span>
+<span class="f">│</span> <span class="d">●</span> invite <span class="i">cinder://9c1f…aa07</span> ·1x            <span class="f">│</span>
+<span class="f">│</span> <span class="f">pin: peer static key · no keys at relay</span>    <span class="f">│</span>
+<span class="f">└────────────────────────────────────────────┘</span></pre>
+          <pre class="m-mobile" data-v="r" data-cols="46" hidden aria-hidden="true"><span class="f">┌────────────────────────────────────────────┐</span>
+<span class="f">│</span> adversary · metadata only      <span class="d">[v]:transp</span>  <span class="f">│</span>
+<span class="f">│</span> <span class="e j-led">●</span> <span class="f">rtt</span> <span class="i j-rtt">24</span><span class="f">ms · q</span> <span class="i j-q">3</span><span class="f">/64</span>                    <span class="d">demo</span><span class="f">│</span>
+<span class="f">│</span>                                            <span class="f">│</span>
+<span class="f">│</span>  <span class="f">┌───────────┐</span>                             <span class="f">│</span>
+<span class="f">│</span>  <span class="f">│</span> <span class="f">○</span><span class="i"> conn a</span>  <span class="f">│</span>                             <span class="f">│</span>
+<span class="f">│</span>  <span class="f">│</span> <span class="g">░░▒▒▓</span>     <span class="f">│</span>                             <span class="f">│</span>
+<span class="f">│</span>  <span class="f">└─────┬─────┘</span>                             <span class="f">│</span>
+<span class="f">│</span>        <span class="f">│</span> Δt41ms·512B                       <span class="f">│</span>
+<span class="f">│</span>        <span class="f">▼</span>                                   <span class="f">│</span>
+<span class="f">│</span>  <span class="f">┌─────┬─────────────┐</span>                     <span class="f">│</span>
+<span class="f">│</span>  <span class="f">│</span> <span class="e">●</span><span class="i"> BLIND RELAY</span>     <span class="f">│</span>  <span class="d">╌▶</span> <span class="g">relay sees:</span>     <span class="f">│</span>
+<span class="f">│</span>  <span class="f">│</span>  fwd <span class="g">·▒▓</span> no keys  <span class="f">│</span>     <span class="g">Δt · len · dir</span>  <span class="f">│</span>
+<span class="f">│</span>  <span class="f">└─────┬───────────┬─┘</span>     <span class="g">0B readable</span>     <span class="f">│</span>
+<span class="f">│</span>        <span class="f">│</span> Δt9ms·512B<span class="f">│</span><span class="d"> sealed</span>                <span class="f">│</span>
+<span class="f">│</span>        <span class="f">▼</span>           <span class="f">│</span>                       <span class="f">│</span>
+<span class="f">│</span>  <span class="f">┌─────┬─────┐</span>     <span class="f">│</span> <span class="f">┌───────────────────┐</span> <span class="f">│</span>
+<span class="f">│</span>  <span class="f">│</span> <span class="f">○</span><span class="i"> conn b</span>  <span class="f">│</span>     <span class="f">└─┤</span> <span class="f">○</span><span class="i"> MAILBOX</span><span class="f"> sealed  </span><span class="f">│</span> <span class="f">│</span>
+<span class="f">│</span>  <span class="f">│</span> <span class="g">░░▒▒▓</span>     <span class="f">│</span>       <span class="f">│</span> <span class="g">·▒▓</span> · opaque      <span class="f">│</span> <span class="f">│</span>
+<span class="f">│</span>  <span class="f">└───────────┘</span>       <span class="f">└───────────────────┘</span> <span class="f">│</span>
+<span class="f">│▓▒··</span>                                    <span class="f"> ░▒▓│</span>
+<span class="f">│</span> Δt<span class="f"> timing</span> <span class="f">·</span> B<span class="f"> size</span> <span class="f">·</span> <span class="g">▒</span><span class="f"> opaque</span>              <span class="f">│</span>
+<span class="f">│</span> <span class="f">○ anonymous</span>                                <span class="f">│</span>
+<span class="f">│</span> <span class="f">relay keeps no keys</span>                        <span class="f">│</span>
+<span class="f">└────────────────────────────────────────────┘</span></pre>
+          <!-- v3 packet stack: head ▮ + decay trail ▓▒░· (fwd / rev / drain / fork-spark) -->
+          <span class="pk h" id="pkH" aria-hidden="true">▮</span>
+          <span class="pk t1" id="pkT1" aria-hidden="true">▓</span>
+          <span class="pk t2" id="pkT2" aria-hidden="true">▒</span>
+          <span class="pk t3" id="pkT3" aria-hidden="true">░</span>
+          <span class="pk t4" id="pkT4" aria-hidden="true">·</span>
+          <span class="pk h" id="rkH" aria-hidden="true">▮</span>
+          <span class="pk t1" id="rkT1" aria-hidden="true">▓</span>
+          <span class="pk t2" id="rkT2" aria-hidden="true">▒</span>
+          <span class="pk t3" id="rkT3" aria-hidden="true">░</span>
+          <span class="pk t4" id="rkT4" aria-hidden="true">·</span>
+          <span class="pk h" id="dkH" aria-hidden="true">▮</span>
+          <span class="pk t1" id="dkT1" aria-hidden="true">▓</span>
+          <span class="pk t2" id="dkT2" aria-hidden="true">▒</span>
+          <span class="pk t3" id="dkT3" aria-hidden="true">░</span>
+          <span class="pk t4" id="dkT4" aria-hidden="true">·</span>
+          <span class="pk sp" id="fkS" aria-hidden="true">·</span>
+          <span class="mbx-tick" id="mbxTick" aria-hidden="true">+1</span>
+        </div>
+      </div>
+
+      <footer class="keys"><span class="k-tag"><span class="br">[</span>fig·03<span class="br">]</span></span><span class="k-text"><b>noise_xx</b> is end-to-end: the relay forwards <b>opaque frames</b>, sees timing+size only, keeps no keys · peer offline → frames <b>queue at mailbox</b> · readouts are <b>demo</b></span><span class="k-hint"><span class="br">[</span><span class="kv">v</span><span class="br">]</span> view <span class="br">[</span><span class="kv">o</span><span class="br">]</span> peer</span></footer>
+      <footer class="keys legend"><span class="k-tag"><span class="br">[</span>legend<span class="br">]</span></span><span><span class="gly e">▮</span> packet head <span class="sep2">·</span> <span class="gly">▓▒░·</span> decay trail <span class="sep2">·</span> <span class="gly e">┬</span> relay fork <span class="sep2">·</span> <span class="gly e">+1</span> mailbox enqueue <span class="sep2">·</span> <span class="gly e">●</span> peer up <span class="sep2">/</span> <span class="gly">○</span> peer down</span><span class="k-hint">motion: reduced-safe</span></footer>
+
+    </div>
+  </div>
+  </section>
+
+  <!-- ================= fsm-02 session machine — fsm v3 ================= -->
+  <section class="sect" aria-label="session state machine">
+  <p class="sect-h"><b>fsm-02</b> · session state machine · edge trace v3</p>
+
+  <figure class="panel fsm-panel" aria-labelledby="fsm-cap">
+    <figcaption class="bar" id="fsm-cap">
+      <span class="tag">fsm-02</span>
+      <span class="t">session · transport · trust</span>
+      <span class="r"><i></i>interactive · edge trace</span>
+    </figcaption>
+    <div class="scroll">
+      <div class="fwrap" id="fwrap">
+<pre class="fsm" id="fsm" data-cols="128" aria-label="Interactive ASCII schematic of the cinder session state machine. Entry at INVITE, transitions to HANDSHAKE, SEALED, VERIFIED. SEALED loops on rekey, drops to UNVERIFIED on key change, which returns to VERIFIED on sas match. VERIFIED drops to WIPED on chat.wipe. Every state falls to DENIED on contact.deny. State buttons inspect outgoing edges; a dot marker traces each lit edge.">
+                                                                                <span class="lp" data-edge="rekey">┌─ rekey ──┐</span>
+                                                                                <span class="lp" data-edge="rekey">▲</span>          <span class="lp" data-edge="rekey">▼</span>
+    <span class="bx stc" data-state="invite">┌──────────────┐</span><span class="lbl" data-edge="link"> cinder:// link </span><span class="bx stc" data-state="handshake">┌────────────────┐</span><span class="lbl" data-edge="noise"> noise_xx · 3 flights </span><span class="bx stc" data-state="sealed">┌────────────────┐</span><span class="lbl" data-edge="sas">   /sas match   </span><span class="bx stc" data-state="verified">┌────────────────┐</span>
+<span class="ent">●</span><span class="arw">──▶</span><button class="st" type="button" data-state="invite" aria-pressed="false" aria-label="INVITE — inspect outgoing edges"><span class="bx">│ </span><span class="led" data-i="0">○</span><span class="bx"> INVITE     │</span></button><span class="arw" data-edge="link">───────────────▶</span><button class="st" type="button" data-state="handshake" aria-pressed="false" aria-label="HANDSHAKE — inspect outgoing edges"><span class="bx">│ </span><span class="led" data-i="1">○</span><span class="bx"> HANDSHAKE    │</span></button><span class="arw" data-edge="noise">═════════════════════▶</span><button class="st" type="button" data-state="sealed" aria-pressed="false" aria-label="SEALED — inspect outgoing edges"><span class="bx">│ </span><span class="led" data-i="2">○</span><span class="bx"> SEALED       │</span></button><span class="arw" data-edge="sas">───────────────▶</span><button class="st" type="button" data-state="verified" aria-pressed="false" aria-label="VERIFIED — inspect outgoing edges"><span class="bx">│ </span><span class="led on" data-i="3">●</span><span class="bx"> VERIFIED     │</span></button>
+    <span class="bx stc" data-state="invite">└───────┬──────┘</span>                <span class="bx stc" data-state="handshake">└───────┬────────┘</span>                      <span class="bx stc" data-state="sealed">└─┬─────────┬────┘</span>                <span class="bx stc" data-state="verified">└─────────┬─────┬┘</span>
+            <span class="arw" data-edge="deny">│</span>                               <span class="arw" data-edge="deny">│</span>                                 <span class="arw" data-edge="deny">│</span>         <span class="arw" data-edge="keychg">│</span> <span class="wrn" data-edge="keychg">key change</span>               <span class="arw" data-edge="sasback">▲</span>    <span class="arw" data-edge="wipe">│</span>     <span class="arw" data-edge="deny">│</span>
+            <span class="arw" data-edge="deny">│</span>                               <span class="arw" data-edge="deny">│</span>                                 <span class="arw" data-edge="deny">│</span>         <span class="arw" data-edge="keychg">│</span>           <span class="arw" data-edge="sasback">┌─ </span><span class="lbl" data-edge="sasback">sas match</span><span class="arw" data-edge="sasback"> ──┘</span>    <span class="arw" data-edge="wipe">│</span>     <span class="arw" data-edge="deny">│</span>
+            <span class="arw" data-edge="deny">│</span>                               <span class="arw" data-edge="deny">│</span>                                 <span class="arw" data-edge="deny">│</span>         <span class="arw" data-edge="keychg">│</span>           <span class="arw" data-edge="sasback">│</span>                   <span class="arw" data-edge="wipe">│</span>     <span class="arw" data-edge="deny">│</span>
+            <span class="arw" data-edge="deny">│</span>                               <span class="arw" data-edge="deny">│</span>                                 <span class="arw" data-edge="deny">│</span>         <span class="arw" data-edge="keychg">▼</span>           <span class="arw" data-edge="sasback">│</span>         <span class="lbl" data-edge="wipe">chat.wipe</span> <span class="arw" data-edge="wipe">▼</span>     <span class="arw" data-edge="deny">│</span>
+            <span class="arw" data-edge="deny">│</span>                               <span class="arw" data-edge="deny">│</span>                                 <span class="arw" data-edge="deny">│</span> <span class="wrn stc" data-state="unverified">┏━━━━━━━━━━━━━━━━┓</span>  <span class="arw" data-edge="sasback">│</span>             <span class="bx stc" data-state="wiped">┌──────────┐</span><span class="arw" data-edge="deny">│</span>
+            <span class="arw" data-edge="deny">│</span>                               <span class="arw" data-edge="deny">│</span>                                 <span class="arw" data-edge="deny">│</span> <button class="st wrn" type="button" data-state="unverified" aria-pressed="false" aria-label="UNVERIFIED — sends blocked, inspect outgoing edges">┃ ! UNVERIFIED   ┃</button><span class="arw" data-edge="sasback">──┘</span>             <button class="st" type="button" data-state="wiped" aria-pressed="false" aria-label="WIPED — inspect outgoing edges"><span class="bx">│ </span><span class="led">○</span><span class="bx"> WIPED  │</span></button><span class="arw" data-edge="deny">│</span>
+            <span class="arw" data-edge="deny">│</span>                               <span class="arw" data-edge="deny">│</span>                                 <span class="arw" data-edge="deny">│</span> <span class="wrn stc" data-state="unverified">┃  sends blocked ┃</span>                <span class="bx stc" data-state="wiped">└─────┬────┘</span><span class="arw" data-edge="deny">│</span>
+            <span class="arw" data-edge="deny">│</span>                               <span class="arw" data-edge="deny">│</span>                                 <span class="arw" data-edge="deny">│</span> <span class="wrn stc" data-state="unverified">┗━━━━━┳━━━━━━━━━━┛</span>                      <span class="arw" data-edge="deny">│</span>     <span class="arw" data-edge="deny">│</span>
+            <span class="arw" data-edge="deny">│</span>                               <span class="arw" data-edge="deny">│</span>                                 <span class="arw" data-edge="deny">│</span>       <span class="arw" data-edge="deny">│</span>                                 <span class="arw" data-edge="deny">│</span>     <span class="arw" data-edge="deny">│</span>
+            <span class="arw" data-edge="deny">└─────────────────┬─────────────┴─</span><span class="den" data-edge="deny"> contact.deny · any state </span><span class="arw" data-edge="deny">──────┴───────┴─────────────────────────────────┴─────┘</span>
+                              <span class="arw" data-edge="deny">│</span>
+                              <span class="arw" data-edge="deny">▼</span>
+                      <span class="den stc" data-state="denied" data-edge="deny">┌┄┄┄┄┄┄┄┄┄┄┄┄┄┄┐</span>
+                      <button class="st den" type="button" data-state="denied" data-edge="deny" aria-pressed="false" aria-label="DENIED — terminal state, no outgoing edges">┆ × DENIED     ┆</button>
+                      <span class="den stc" data-state="denied" data-edge="deny">└┄┄┄┄┄┄┄┄┄┄┄┄┄┄┘</span>
+                      <span class="dnn" data-edge="deny">terminal · no un-deny</span>
+
+    <span class="dim">○ idle    ● active    ──▶ edge    ══▶ flight    ┄┄ terminal    click inspects · esc resets</span>
+</pre>
+      </div>
+    </div>
+    <footer class="keys legend"><span class="k-tag"><span class="br">[</span>legend<span class="br">]</span></span><span><span class="gly e">·</span> edge trace <span class="sep2">·</span> <span class="gly">──▶</span> transition <span class="gly">══▶</span> noise flight <span class="sep2">·</span> <span class="gly dan">┄┄</span> terminal <span class="sep2">·</span> <span class="gly e">▲▼</span> rekey loop</span><span class="k-hint"><span class="br">[</span><span class="kv">click</span><span class="br">]</span> inspect <span class="br">[</span><span class="kv">esc</span><span class="br">]</span> reset</span></footer>
+  </figure>
+
+  <p class="sr">
+    Session state machine. States: invite, handshake, sealed, verified,
+    unverified, wiped, denied. Transitions: invite to handshake via cinder
+    link; handshake to sealed after three noise_xx flights; sealed loops on
+    rekey; sealed to verified on sas match; sealed to unverified on key
+    change, which blocks sends; unverified back to verified on sas match;
+    verified to wiped via chat.wipe; any state to denied via contact.deny.
+    Denied is terminal; there is no un-deny. Each state is a button that
+    highlights and traces its outgoing edges in the readout below.
+  </p>
+
+  <figure class="panel rail-panel" aria-labelledby="rail-cap">
+    <figcaption class="bar" id="rail-cap">
+      <span class="tag">fsm-02</span>
+      <span class="t">session · rail</span>
+      <span class="r"><i></i>interactive</span>
+    </figcaption>
+    <div class="scroll">
+<pre class="rail" id="rail" data-cols="38" aria-label="Interactive vertical list of session states: invite, handshake, sealed, unverified, verified, wiped, denied. State buttons inspect outgoing edges.">
+<span class="ent">●</span><span class="arw">──▶</span><span class="bx stc" data-state="invite">┌─────────────┐</span>
+    <button class="st" type="button" data-state="invite" aria-pressed="false" aria-label="INVITE — inspect outgoing edges"><span class="bx">│ </span><span class="led" data-i="0">○</span><span class="bx"> INVITE    │</span></button>
+    <span class="bx stc" data-state="invite">└───────┬─────┘</span>
+            <span class="arw" data-edge="link">│</span> <span class="lbl" data-edge="link">cinder:// link</span>
+            <span class="arw" data-edge="link">▼</span>
+    <span class="bx stc" data-state="handshake">┌─────────────┐</span>
+    <button class="st" type="button" data-state="handshake" aria-pressed="false" aria-label="HANDSHAKE — inspect outgoing edges"><span class="bx">│ </span><span class="led" data-i="1">○</span><span class="bx"> HANDSHAKE │</span></button>
+    <span class="bx stc" data-state="handshake">└───────┬─────┘</span>
+            <span class="arw" data-edge="noise">│</span> <span class="lbl" data-edge="noise">noise_xx</span>
+            <span class="arw" data-edge="noise">│</span> <span class="lbl" data-edge="noise">3 flights</span>
+            <span class="arw" data-edge="noise">▼</span>
+        <span class="lp" data-edge="rekey">┌ rekey  ┐</span>
+        <span class="lp" data-edge="rekey">▲</span>   <span class="arw" data-edge="noise">▼</span>    <span class="lp" data-edge="rekey">▼</span>
+    <span class="bx stc" data-state="sealed">┌─────────────┐</span>
+    <button class="st" type="button" data-state="sealed" aria-pressed="false" aria-label="SEALED — inspect outgoing edges"><span class="bx">│ </span><span class="led" data-i="2">○</span><span class="bx"> SEALED    │</span></button>
+    <span class="bx stc" data-state="sealed">└───────┬─────┘</span>
+            <span class="arw" data-edge="keychg">│</span> <span class="wrn" data-edge="keychg">key change</span>
+            <span class="arw" data-edge="keychg">▼</span>
+       <span class="wrn stc" data-state="unverified">┏━━━━━━━━━━━━━━┓</span>
+       <button class="st wrn" type="button" data-state="unverified" aria-pressed="false" aria-label="UNVERIFIED — sends blocked, inspect outgoing edges">┃ ! UNVERIFIED ┃</button>
+       <span class="wrn stc" data-state="unverified">┃ sends blocked┃</span>
+       <span class="wrn stc" data-state="unverified">┗━━━━━━━━┳━━━━━┛</span>
+                <span class="arw" data-edge="sasback">│</span> <span class="lbl" data-edge="sasback">sas match</span>
+                <span class="arw" data-edge="sasback">▼</span>
+    <span class="bx stc" data-state="verified">┌─────────────┐</span>
+    <button class="st" type="button" data-state="verified" aria-pressed="false" aria-label="VERIFIED — inspect outgoing edges"><span class="bx">│ </span><span class="led on" data-i="3">●</span><span class="bx"> VERIFIED  │</span></button>
+    <span class="bx stc" data-state="verified">└───────┬─────┘</span>
+            <span class="arw" data-edge="wipe">│</span> <span class="lbl" data-edge="wipe">chat.wipe</span>
+            <span class="arw" data-edge="wipe">▼</span>
+    <span class="bx stc" data-state="wiped">┌─────────────┐</span>
+    <button class="st" type="button" data-state="wiped" aria-pressed="false" aria-label="WIPED — inspect outgoing edges"><span class="bx">│ </span><span class="led">○</span><span class="bx"> WIPED     │</span></button>
+    <span class="bx stc" data-state="wiped">└───────┬─────┘</span>
+            <span class="arw" data-edge="deny">│</span> <span class="den" data-edge="deny">contact.deny</span>
+            <span class="arw" data-edge="deny">│</span> <span class="den" data-edge="deny">· any state</span>
+            <span class="den" data-edge="deny">▼</span>
+    <span class="den stc" data-state="denied" data-edge="deny">┌┄┄┄┄┄┄┄┄┄┄┄┄┄┐</span>
+    <button class="st den" type="button" data-state="denied" data-edge="deny" aria-pressed="false" aria-label="DENIED — terminal state, no outgoing edges">┆ × DENIED    ┆</button>
+    <span class="den stc" data-state="denied" data-edge="deny">└┄┄┄┄┄┄┄┄┄┄┄┄┄┘</span>
+      <span class="dnn" data-edge="deny">terminal · no un-deny</span>
+
+    <span class="dim">○ idle   ● active   click inspects</span>
+</pre>
+    </div>
+    <footer class="keys legend"><span class="k-tag"><span class="br">[</span>legend<span class="br">]</span></span><span><span class="gly">──▶</span> transition <span class="sep2">·</span> <span class="gly dan">┄┄</span> terminal</span><span class="k-hint"><span class="br">[</span><span class="kv">tap</span><span class="br">]</span> inspect</span></footer>
+  </figure>
+
+  <div class="inspect" aria-label="Edge inspection and transition register">
+    <div class="readout" id="edge-read" role="status" aria-live="polite"><span class="k">inspect</span><span class="v"><b id="ro-state">· · ·</b></span><span class="k" id="ro-n"></span><span class="v typ" id="ro-anim" aria-hidden="true"></span><span class="sr" id="ro-sr"></span></div>
+    <div class="log" aria-label="Transition register">
+      <div class="log-h">transition register</div>
+      <div class="log-body" id="log-body"></div>
+    </div>
+  </div>
+
+  <div class="spec" aria-label="State and transition reference">
+    <div class="card">
+      <div class="hd2">states</div>
+      <ul>
+        <li><span class="s">INVITE</span><span class="d">link issued, no keys yet</span></li>
+        <li><span class="s">HANDSHAKE</span><span class="d">noise_xx in flight</span></li>
+        <li class="hot"><span class="s">SEALED</span><span class="d">transport live, trust off</span></li>
+        <li class="hot"><span class="s">VERIFIED</span><span class="d">sas matched, trusted</span></li>
+        <li class="warn"><span class="s">UNVERIFIED</span><span class="d">key changed, sends blocked</span></li>
+        <li><span class="s">WIPED</span><span class="d">history destroyed, keys kept</span></li>
+        <li class="term"><span class="s">DENIED</span><span class="d">absorbing, no un-deny</span></li>
+      </ul>
+    </div>
+    <div class="card">
+      <div class="hd2">edges · hover to trace</div>
+      <ul>
+        <li data-edge="link"><span class="e">INVITE <span class="x">──▶</span> HANDSHAKE</span><span class="lbl">cinder:// link</span></li>
+        <li data-edge="noise"><span class="e">HANDSHAKE <span class="x">══▶</span> SEALED</span><span class="lbl">noise_xx · 3 flights</span></li>
+        <li data-edge="sas"><span class="e">SEALED <span class="x">──▶</span> VERIFIED</span><span class="lbl">/sas match</span></li>
+        <li data-edge="rekey"><span class="e">SEALED <span class="x">◀─┐</span> SEALED</span><span class="lbl">rekey (loop)</span></li>
+        <li data-edge="keychg"><span class="e wrn">SEALED <span class="x">──▶</span> UNVERIFIED</span><span class="lbl">key change · sends blocked</span></li>
+        <li data-edge="sasback"><span class="e">UNVERIFIED <span class="x">──▶</span> VERIFIED</span><span class="lbl">sas match</span></li>
+        <li data-edge="wipe"><span class="e">VERIFIED <span class="x">──▶</span> WIPED</span><span class="lbl">chat.wipe</span></li>
+        <li data-edge="deny"><span class="e den">any <span class="x">──▶</span> DENIED</span><span class="lbl">contact.deny · terminal</span></li>
+      </ul>
+    </div>
+  </div>
+  </section>
+
+  <p class="foot">
+    <b>notes</b> — hand-set schematic + board art · every wire measured in
+    columns · width check runs at boot (console, <code>[dg3·width]</code>) ·
+    no emoji · state boxes are real buttons, Enter/Space inspects, Esc
+    resets · packets, edge traces, led cycle and typewriter all gate on
+    prefers-reduced-motion + visibility
+  </p>
+
+</main>
+
+<script>
+(() => {
+  "use strict";
+  const $  = (s, r = document) => [...r.querySelectorAll(s)];
+  const byId = id => document.getElementById(id);
+  const prm  = matchMedia('(prefers-reduced-motion: reduce)');
+  const wide = matchMedia('(min-width: 44rem)');
+
+  /* ============ ascii width verification ============
+     textContent of each <pre> == rendered columns (buttons inline;
+     .pk/.tr/.mbx-tick live outside <pre>). board rows must equal
+     data-cols exactly; fsm/rail are ragged → max ≤ data-cols. */
+  (function widthCheck(){
+    const out = [];
+    for (const pre of $('.dg3 pre[data-cols]')){
+      const want = +pre.dataset.cols;
+      const lines = pre.textContent.split('\n');
+      const lens  = lines.map(l => [...l].length);
+      const exact = pre.classList.contains('m-desktop') || pre.classList.contains('m-mobile');
+      const bad = exact ? lens.map((n,i)=>n!==want?i:-1).filter(i=>i>=0)
+                        : (Math.max(...lens) > want ? ['max '+Math.max(...lens)] : []);
+      const id = pre.className.replace('m-','m:').replace(/\s.*/,'') + '/' + (pre.dataset.v||'fsm');
+      out.push(`${id}: ${exact? lens.length+'×'+want : 'max '+Math.max(...lens)+'/'+want}${bad.length? ' FAIL rows '+bad : ' ok'}`);
+      if (bad.length) console.warn('[dg3·width] FAIL', id, bad);
+    }
+    console.info('[dg3·width] ' + out.join(' · '));
+  })();
+
+  /* ================= board v3 ================= */
+  (function board(){
+    const board = byId('board'), btn = byId('viewBtn'), pbtn = byId('peerBtn');
+    if (!board || !btn) return;
+    const pres = $$ => [...board.querySelectorAll('pre[data-v]')];
+    const PRES = pres();
+    const viewName = byId('viewName'), peerName = byId('peerName');
+    let pov = 't', peerOn = true, inView = false, hovered = false;
+
+    /* ---- pov + peer toggles ---- */
+    const vt = btn.querySelector('.vt'), vr = btn.querySelector('.vr');
+    function setPov(v){
+      pov = v; board.dataset.pov = v;
+      PRES.forEach(p => p.hidden = p.dataset.v !== v);
+      vt.classList.toggle('on', v==='t'); vr.classList.toggle('on', v==='r');
+      if (viewName) viewName.textContent = v==='t' ? 'transport' : 'relay';
+      btn.setAttribute('aria-pressed', String(v==='r'));
+      gateAll();
+    }
+    const pon = pbtn.querySelector('.pon'), poff = pbtn.querySelector('.poff');
+    function setPeer(on){
+      peerOn = on; board.dataset.peer = on ? 'on' : 'off';
+      pon.classList.toggle('on', on); poff.classList.toggle('on', !on);
+      if (peerName) peerName.textContent = on ? 'online' : 'offline';
+      pbtn.setAttribute('aria-pressed', String(!on));
+      for (const el of board.querySelectorAll('.j-peer')){
+        el.textContent = on ? '●' : '○';
+        el.className = (on ? 'e' : 'f') + ' j-peer';
+      }
+      gateAll();
+    }
+    btn.addEventListener('click', () => setPov(pov==='t' ? 'r' : 't'));
+    pbtn.addEventListener('click', () => setPeer(!peerOn));
+    document.addEventListener('keydown', e => {
+      const t = e.target;
+      if (t && (t.tagName==='INPUT' || t.tagName==='TEXTAREA' || t.isContentEditable)) return;
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
+      if (e.key === 'v') setPov(pov==='t' ? 'r' : 't');
+      if (e.key === 'o') setPeer(!peerOn);
+    });
+
+    /* ---- mailbox queue ---- */
+    const QUEUE_MAX = 6;               /* display saturates: 3+6 → 9/64 */
+    let queue = 0;
+    const tickEl = byId('mbxTick');
+    function setTxt(sel, txt){ for (const el of board.querySelectorAll(sel)) el.textContent = txt; }
+    function paintMbx(){
+      const n = Math.min(3 + queue, 9);               /* single col, 92-safe */
+      setTxt('.j-mbq', String(n));
+      const df = Math.min(3 + queue, 12), mf = Math.min(3 + queue, 7);
+      for (const pre of PRES){
+        const desk = pre.classList.contains('m-desktop');
+        const f = desk ? df : mf, cap = desk ? 12 : 7;
+        const bf = pre.querySelector('.j-mbf'), be = pre.querySelector('.j-mbe');
+        if (bf) bf.textContent = '▓'.repeat(f);
+        if (be) be.textContent = '░'.repeat(cap - f);
+      }
+    }
+    let tickT = null;
+    function flashTick(txt, cls){
+      if (!tickEl) return;
+      tickEl.textContent = txt;
+      tickEl.className = 'mbx-tick' + (cls ? ' ' + cls : '');
+      void tickEl.offsetWidth;                         /* restart animation */
+      tickEl.classList.add('on');
+      clearTimeout(tickT);
+      tickT = setTimeout(() => tickEl.classList.remove('on'), 950);
+    }
+    function enqueue(){
+      if (queue >= QUEUE_MAX) { flashTick('FULL', 'full'); return; }
+      queue++; paintMbx(); flashTick('+1');
+    }
+    function dequeue(){
+      if (queue <= 0) return;
+      queue--; paintMbx(); flashTick('−1', 'minus');
+    }
+
+    /* ---- packet engine: ▮ head + ▓▒░· trail from cell history ----
+       geometry (desktop rows @1.5em, prod-verified):
+         fwd wire row7 y=10.5em : you→relay c18-34 · relay→peer c59-74
+         rev wire row8 y=12em   : peer→relay c74-60 · relay→you c34-19
+         queue pipe col46 r9→14 : relay bottom ┬ → mailbox bar row14  */
+    const ROW = 1.5;
+    const h = (r, a, b) => { const c = []; for (let x = a; x !== b + Math.sign(b - a); x += Math.sign(b - a)) c.push({ x, r }); return c; };
+    const v = (c, a, b) => { const p = []; for (let y = a; y !== b + Math.sign(b - a); y += Math.sign(b - a)) p.push({ x: c, r: y }); return p; };
+    const STEP = 55, REST = 1500;
+
+    function Pkt(ids){
+      this.els = ids.map(byId);
+      this.timer = null; this.i = 0; this.cells = [];
+    }
+    Pkt.prototype.show = function(on){
+      this.els.forEach(el => el.classList.toggle('on', on));
+    };
+    Pkt.prototype.place = function(){
+      const c = this.cells[this.i];
+      const hd = this.els[0];
+      hd.style.left = c.x + 'ch';
+      hd.style.top  = (c.r * ROW) + 'em';
+      hd.classList.toggle('hold', !!c.hold);
+      /* trail: previous 4 cells, only while contiguous in same leg   */
+      for (let k = 1; k <= 4; k++){
+        const t = this.els[k], j = this.i - k, p = this.cells[j];
+        const ok = !c.hold && p && p.leg === c.leg && !p.hold;
+        t.classList.toggle('on', !!ok);
+        if (ok){ t.style.left = p.x + 'ch'; t.style.top = (p.r * ROW) + 'em'; }
+      }
+    };
+    Pkt.prototype.step = function(){
+      const c = this.cells[this.i];
+      if (!c) { this.finish(); return; }
+      if (c.fork) for (const el of board.querySelectorAll('.j-fork')) el.classList.add('lit');
+      else        for (const el of board.querySelectorAll('.j-fork')) el.classList.remove('lit');
+      this.place();
+      if (c.hold){
+        if (c.spark) this.spark();
+        this.timer = setTimeout(() => { this.i++; this.step(); }, c.hold);
+        return;
+      }
+      if (c.act) c.act();
+      this.i++;
+      this.timer = setTimeout(() => this.step(), STEP);
+    };
+    Pkt.prototype.spark = function(){
+      /* relay-view fork: shed a faint · down the queue pipe while held */
+      const s = byId('fkS');
+      if (!s || pov !== 'r') return;
+      let r = 9;
+      s.classList.add('on');
+      const drop = () => {
+        if (r > 12 || !s.classList.contains('on')) { s.classList.remove('on'); return; }
+        s.style.left = '46ch'; s.style.top = (r * ROW) + 'em'; r++;
+        setTimeout(drop, 130);
+      };
+      drop();
+      setTimeout(() => s.classList.remove('on'), 700);
+    };
+    Pkt.prototype.run = function(cells, done){
+      this.cells = cells; this.i = 0; this.onDone = done;
+      this.show(true); this.step();
+    };
+    Pkt.prototype.finish = function(){
+      this.show(false); this.running = false;
+      for (const el of board.querySelectorAll('.j-fork')) el.classList.remove('lit');
+      if (this.onDone) this.onDone();
+    };
+    Pkt.prototype.stop = function(){
+      clearTimeout(this.timer); this.show(false); this.running = false;
+      for (const el of board.querySelectorAll('.j-fork')) el.classList.remove('lit');
+    };
+
+    const pkF = new Pkt(['pkH','pkT1','pkT2','pkT3','pkT4']);
+    const pkR = new Pkt(['rkH','rkT1','rkT2','rkT3','rkT4']);
+    const pkD = new Pkt(['dkH','dkT1','dkT2','dkT3','dkT4']);
+
+    /* paths — leg ids keep the trail from smearing across teleports */
+    function leg(cells, id){ cells.forEach(c => c.leg = id); return cells; }
+    function fwdCells(){
+      const hold = { x:34, r:7, hold: (pov==='r' ? 850 : 450), fork:true, spark:true, leg:'h' };
+      const a = leg(h(7, 18, 34), 'a');
+      if (peerOn) return [...a, hold, ...leg(h(7, 59, 74), 'b')];
+      const drop = leg(v(46, 9, 14), 'q');
+      drop[drop.length - 1].act = enqueue;
+      return [...a, hold, ...drop];
+    }
+    function revCells(){
+      const hold = { x:60, r:8, hold: (pov==='r' ? 700 : 380), leg:'h' };
+      return [...leg(h(8, 74, 60), 'a'), hold, ...leg(h(8, 34, 19), 'b')];
+    }
+    function drainCells(){
+      const a = leg(v(46, 14, 9), 'r');
+      a[0].act = dequeue;
+      return [...a, { x:46, r:9, hold: 300, leg:'h' }, ...leg(h(7, 59, 74), 'b')];
+    }
+
+    /* cycle drivers — fwd loops forever while gated on */
+    let fwdT = null, revT = null, drainT = null;
+    function fwdCycle(){
+      if (pkF.running) return;
+      pkF.running = true;
+      pkF.run(fwdCells(), () => { fwdT = setTimeout(fwdCycle, REST); });
+    }
+    function revCycle(){
+      if (pkR.running) return;
+      if (!peerOn){ revT = setTimeout(revCycle, 900); return; }  /* no replies while offline */
+      pkR.running = true;
+      pkR.run(revCells(), () => { revT = setTimeout(revCycle, REST + 700); });
+    }
+    function drainCheck(){
+      if (peerOn && queue > 0 && !pkD.running){
+        pkD.running = true;
+        pkD.run(drainCells(), () => { drainT = setTimeout(drainCheck, 350); });
+      } else drainT = setTimeout(drainCheck, 1200);
+    }
+
+    /* ---- instrument readouts (demo) ---- */
+    const S = { rtt:24, q:3, rx:1.0, tx:0.4, up:41 };
+    const fmtUp = s => { const m = Math.floor(s/60), ss = s%60;
+      return (m<10?'0':'')+m+':'+(ss<10?'0':'')+ss; };
+    const clamp = (v,a,b) => Math.min(b, Math.max(a,v));
+    function tickReadouts(){
+      S.rtt = clamp(Math.round(S.rtt + (Math.random()-.5)*5), 17, 39);
+      S.q   = clamp(S.q + (Math.random()<.3 ? (Math.random()<.5?-1:1) : 0), 2, 6);
+      const floor = peerOn ? .6 : .0, cap = peerOn ? 1.5 : .05;
+      S.rx  = clamp(S.rx + (Math.random()-.5)*.3, floor, cap);
+      S.tx  = clamp(S.tx + (Math.random()-.5)*.2, peerOn?.2:.0, peerOn?.7:.05);
+      S.up += 1;
+      setTxt('.j-rtt', String(S.rtt)); setTxt('.j-q', String(S.q));
+      setTxt('.j-rx', S.rx.toFixed(1)); setTxt('.j-tx', S.tx.toFixed(1));
+      setTxt('.j-upt', fmtUp(S.up));
+    }
+    let ledOn = true;
+    function tickLed(){
+      ledOn = !ledOn;
+      for (const el of board.querySelectorAll('.j-led'))
+        el.className = (ledOn ? 'e' : 'd') + ' j-led';
+    }
+
+    /* ---- master gate ---- */
+    let roT = null, ledT = null;
+    const animated = () => inView && !document.hidden && !prm.matches;
+    function gateAll(){
+      const run = animated();
+      const pkRun = run && wide.matches && !hovered;
+      if (run){
+        if (!roT)  roT  = setInterval(tickReadouts, 1400);
+        if (!ledT) ledT = setInterval(tickLed, 900);
+      } else {
+        clearInterval(roT);  roT  = null;
+        clearInterval(ledT); ledT = null;
+      }
+      if (pkRun){
+        fwdCycle(); revCycle();
+        if (!drainT) drainT = setTimeout(drainCheck, 800);
+      } else {
+        pkF.stop(); pkR.stop(); pkD.stop();
+        clearTimeout(fwdT); fwdT = null;
+        clearTimeout(revT); revT = null;
+        clearTimeout(drainT); drainT = null;
+      }
+    }
+
+    new IntersectionObserver(es => { inView = es[0].isIntersecting; gateAll(); },
+      { threshold: .15 }).observe(board);
+    board.addEventListener('mouseenter', () => { hovered = true;  gateAll(); });
+    board.addEventListener('mouseleave', () => { hovered = false; gateAll(); });
+    document.addEventListener('visibilitychange', gateAll);
+    prm.addEventListener('change', gateAll);
+    wide.addEventListener('change', gateAll);
+    paintMbx(); setPeer(true); gateAll();
+  })();
+
+  /* ================= fsm v3 ================= */
+  (function fsm(){
+    const fwrap = byId('fwrap');
+    if (!fwrap) return;
+    const logBody = byId('log-body');
+    let tickN = 0;
+    const appendLog = (cls, tag, html) => {
+      if (!logBody) return;
+      const div = document.createElement('div');
+      div.className = 'll ' + cls;
+      div.innerHTML = `<span class="t">${tag}</span>${html}`;
+      logBody.appendChild(div);
+      while (logBody.children.length > 24) logBody.firstChild.remove();   /* capped register */
+      logBody.scrollTop = logBody.scrollHeight;
+    };
+    const stepLog = (a, ar, b, n) =>
+      appendLog('step', 't+' + String(++tickN).padStart(2, '0'),
+        `${a} <span class="a">${ar}</span> ${b} <span class="x">· ${n}</span>`);
+
+    const EDGES = {
+      invite:['link','deny'],  handshake:['noise','deny'],
+      sealed:['rekey','sas','keychg','deny'], unverified:['sasback','deny'],
+      verified:['wipe','deny'], wiped:['deny'], denied:[]
+    };
+    const OUT = {                                    /* arrow, to, via */
+      link:['──▶','handshake','cinder:// link'],
+      noise:['══▶','sealed','noise_xx · 3 flights'],
+      rekey:['──▶','sealed','rekey · self-loop'],
+      sas:['──▶','verified','/sas match'],
+      keychg:['──▶','unverified','key change · sends blocked'],
+      sasback:['──▶','verified','sas match'],
+      wipe:['──▶','wiped','chat.wipe'],
+      deny:['──▶','denied','contact.deny · terminal']
+    };
+
+    /* ---- edge trace paths: [row,col] cells on the 128-col canvas ----
+       measured against prod art: button row r4; labels r3; drop tees
+       r5; deny bus r15; denied box r18-20. deny is per-state: own drop
+       col → bus → junction c30 → down.                               */
+    const hr = (r, a, b) => { const c = []; for (let x=a;x<=b;x++) c.push([r,x]); return c; };
+    const vr = (c, a, b) => { const p = []; for (let y=a;y<=b;y++) p.push([y,c]); return p; };
+    const TRACE = {
+      link:    hr(4, 20, 34),
+      noise:   hr(4, 54, 74),
+      sas:     hr(4, 94, 108),
+      keychg:  vr(88, 5, 9),
+      wipe:    vr(120, 5, 9),
+      rekey:   [[3,80],[2,80],[1,80], ...hr(1, 81, 91), [2,91],[3,91]],
+      sasback: [[11,98],[11,99],[11,100],[10,100],[9,100],[8,100],
+                ...hr(7, 100, 115), [6,115],[5,115]]
+    };
+    const DENY_DROP = { invite:[12,6], handshake:[44,6], sealed:[78,6],
+      unverified:[86,14], verified:[126,6], wiped:[120,13] };
+    function denyPath(state){
+      const d = DENY_DROP[state]; if (!d) return [];
+      const [col, r0] = d, cells = vr(col, r0, 15);         /* own drop → bus */
+      const dir = col < 30 ? 1 : -1;
+      for (let c = col + dir; c !== 30 + dir; c += dir) cells.push([15, c]);
+      cells.push([16,30],[17,30]);                          /* → DENIED */
+      return cells;
+    }
+
+    /* ---- tracer pool: one · per lit edge, loops its path ---- */
+    const tracers = [];
+    function mkTr(){
+      const el = document.createElement('span');
+      el.className = 'tr'; el.textContent = '·'; el.setAttribute('aria-hidden','true');
+      fwrap.appendChild(el); return el;
+    }
+    function stopTraces(){
+      for (const t of tracers){ clearInterval(t.iv); clearTimeout(t.st); t.el.remove(); }
+      tracers.length = 0;
+    }
+    function startTraces(state){
+      stopTraces();
+      if (prm.matches) return;
+      (EDGES[state] || []).forEach((e, idx) => {
+        const cells = e === 'deny' ? denyPath(state) : TRACE[e];
+        if (!cells || !cells.length) return;
+        const el = mkTr();
+        if (e === 'deny') el.classList.add('den');
+        el.classList.add('on');
+        let i = 0;
+        const place = () => {
+          const [r, c] = cells[i % cells.length];
+          el.style.top = (r * 1.55) + 'em'; el.style.left = c + 'ch';
+        };
+        tracers.push({ el,
+          st: setTimeout(() => {
+            place();
+            tracers.find(t => t.el === el).iv =
+              setInterval(() => { i++; place(); }, 58);
+          }, idx * 170),                                       /* stagger edges */
+          iv: 0 });
+      });
+    }
+
+    /* ---- readout: typed 'state → event → state' + sr truth ---- */
+    const roState = byId('ro-state'), roN = byId('ro-n'),
+          roAnim  = byId('ro-anim'),  roSr = byId('ro-sr');
+    let typeIv = null;
+    function phrase(s){
+      const es = EDGES[s] || [];
+      if (!es.length) return `${s} ── terminal · no outgoing edges`;
+      return es.map(e => { const [,to,via] = OUT[e];
+        return `${s} → ${via} → ${to}`; }).join('  │  ');
+    }
+    function typeReadout(str){
+      clearInterval(typeIv);
+      roSr.textContent = str;                    /* aria-live truth, instant */
+      if (prm.matches){ roAnim.textContent = str; return; }
+      let i = 0;
+      typeIv = setInterval(() => {
+        i++;
+        roAnim.innerHTML = str.slice(0, i).replace(/</g,'&lt;') +
+          (i < str.length ? '<span class="cur">▌</span>' : '');
+        if (i >= str.length){ clearInterval(typeIv); typeIv = null; }
+      }, 16);
+      roAnim.textContent = '';
+    }
+    function renderReadout(){
+      if (!sel){
+        roState.textContent = '· · ·'; roN.textContent = 'edges';
+        typeReadout('click a state · enter/space inspects · esc resets');
+      } else {
+        const n = (EDGES[sel] || []).length;
+        roState.textContent = sel; roN.textContent = `edges ${n}`;
+        typeReadout(phrase(sel));
+      }
+    }
+
+    /* ---- selection (prod behavior + traces) ---- */
+    let sel = null;
+    const applySel = () => {
+      for (const el of $('[data-edge].hot')) el.classList.remove('hot');
+      for (const el of $('[data-state].sel')) el.classList.remove('sel');
+      if (!sel) return;
+      for (const el of $(`[data-state="${sel}"]`)) el.classList.add('sel');
+      for (const e of EDGES[sel] || [])
+        for (const el of $(`[data-edge="${e}"]`)) el.classList.add('hot');
+    };
+    const select = s => {
+      sel = (sel === s) ? null : s;
+      applySel();
+      for (const b of $('.st'))
+        b.setAttribute('aria-pressed', String(b.dataset.state === sel));
+      renderReadout();
+      if (sel){
+        startTraces(sel);
+        appendLog('trc', 'trc',
+          `inspect <b>${sel}</b> <span class="x">· ${EDGES[sel].length} out-edges · tracing</span>`);
+      } else stopTraces();
+    };
+    const reset = () => {
+      if (!sel) return;
+      sel = null; stopTraces(); applySel();
+      for (const b of $('.st')) b.setAttribute('aria-pressed', 'false');
+      renderReadout();
+    };
+    for (const pre of $('pre.fsm, pre.rail'))
+      pre.addEventListener('click', e => {
+        const t = e.target.closest('[data-state]');
+        t ? select(t.dataset.state) : reset();
+      });
+    document.addEventListener('keydown', e => { if (e.key === 'Escape') reset(); });
+
+    for (const li of $('.spec li[data-edge]')) {
+      li.addEventListener('mouseenter', () => {
+        for (const el of $(`[data-edge="${li.dataset.edge}"]`)) el.classList.add('hot');
+      });
+      li.addEventListener('mouseleave', applySel);
+    }
+
+    /* ---- marker stepping (prod led cycle) ---- */
+    const leds = $('.led[data-i]');
+    const PATH = [
+      ['invite','──▶','handshake','cinder:// link'],
+      ['handshake','══▶','sealed','noise_xx · 3 flights'],
+      ['sealed','──▶','verified','/sas match']
+    ];
+    let cur = 0, prev = -1, timer = null, visible = false;
+    const paint = () => {
+      for (const l of leds){
+        const on = +l.dataset.i === cur;
+        l.classList.toggle('on', on);
+        l.textContent = on ? '●' : '○';
+      }
+    };
+    const step = () => {
+      if (prev >= 0){
+        if (cur === 0 && prev === 3)
+          appendLog('rst','···','<span class="x">cycle reset · re-enter invite</span>');
+        else { const [a,ar,b,n] = PATH[prev]; stepLog(a, ar, b, n); }
+      }
+      paint(); prev = cur; cur = (cur + 1) % 4;
+    };
+    const park = () => { cur = 3; prev = -1; paint(); };
+    const start = () => {
+      if (timer || prm.matches || !visible || document.hidden) return;
+      timer = setInterval(step, 1100);
+    };
+    const stop = () => { clearInterval(timer); timer = null; };
+
+    if ('IntersectionObserver' in window){
+      const io = new IntersectionObserver(es => {
+        visible = es.some(x => x.isIntersecting);
+        visible ? start() : stop();
+      }, { threshold: .1 });
+      for (const id of ['fsm','rail']){ const el = byId(id); if (el) io.observe(el); }
+    } else visible = true;
+
+    document.addEventListener('visibilitychange',
+      () => document.hidden ? stop() : start());
+    const onPrm = () => {
+      if (prm.matches){
+        stop(); stopTraces(); park(); renderReadout();
+        appendLog('prm','prm','<span class="x">marker parked · prefers-reduced-motion</span>');
+      } else { start(); if (sel) startTraces(sel); renderReadout(); }
+    };
+    prm.addEventListener ? prm.addEventListener('change', onPrm)
+                       : prm.addListener(onPrm);
+
+    renderReadout();
+    if (prm.matches){
+      park();
+      appendLog('prm','prm','<span class="x">marker parked · prefers-reduced-motion</span>');
+    } else { step(); start(); }
+  })();
+})();
+</script>
+</body>
+</html>

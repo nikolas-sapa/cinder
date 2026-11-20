@@ -1,0 +1,750 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="color-scheme" content="dark">
+<title>cinder · footer-v3</title>
+<meta name="description" content="prototype v3: mega footer for cinder — signal-sweep wordmark (masked echo layer), meteor starfield, instrument-readout status strip, bracket-slide link hover, dithered dissolve.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+:root{
+  --ground:#0B0B0D; --panel:#141519; --card:#101116; --ink:#E6E9EF;
+  --muted:#8A919E; --faint:#565D68; --dim:#3A4049; --line:#1F2126;
+  --ember:#FFB224; --ember-hot:#FFD9A0; --ember-dim:#B87A18;
+  --pad:56px; --wrap:1328px;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+::selection{background:var(--ember);color:var(--ground)}
+html{scroll-behavior:smooth}
+body{background:var(--ground);color:var(--ink);
+  font:400 15px/1.6 'Space Grotesk',system-ui,sans-serif;
+  -webkit-font-smoothing:antialiased}
+.mono{font-family:'JetBrains Mono',ui-monospace,monospace}
+a{color:inherit;text-decoration:none}
+.page{min-height:100vh;display:flex;flex-direction:column}
+main{flex:1}
+
+/* ---------- experiment chrome (not part of .fm3) ---------- */
+.mast{display:flex;justify-content:space-between;align-items:baseline;gap:16px;
+  padding:22px var(--pad);border-bottom:1px solid var(--line);
+  font-family:'JetBrains Mono',monospace;font-size:11px;letter-spacing:.1em}
+.mast .tag{color:var(--ember)}
+.mast .hint{color:var(--faint)}
+.intro{max-width:var(--wrap);margin:0 auto;padding:84px var(--pad) 0}
+.kicker{font-family:'JetBrains Mono',monospace;font-size:11px;
+  letter-spacing:.22em;color:var(--ember);margin-bottom:16px}
+h1{font-family:'Space Grotesk',sans-serif;font-weight:700;
+  font-size:clamp(34px,4.6vw,56px);line-height:1;letter-spacing:-.025em;
+  margin-bottom:18px}
+h1 .tick{color:var(--ember)}
+.lede{color:var(--muted);max-width:66ch;font-size:14.5px}
+.lede b{color:var(--ink);font-weight:500}
+.lab{display:flex;justify-content:space-between;align-items:baseline;gap:16px;
+  max-width:var(--wrap);margin:0 auto;padding:64px var(--pad) 12px;
+  font-family:'JetBrains Mono',monospace;font-size:10px;
+  letter-spacing:.18em;color:var(--faint);flex-wrap:wrap}
+.lab b{color:var(--muted);font-weight:500}
+.lab .r{color:var(--faint);letter-spacing:.12em}
+.endmark{display:flex;align-items:center;gap:14px;max-width:var(--wrap);
+  margin:0 auto;padding:0 var(--pad);font-family:'JetBrains Mono',monospace;
+  font-size:10px;letter-spacing:.16em;color:var(--faint)}
+.endmark .rl{flex:1;height:1px;background:var(--line)}
+
+/* ================================================================
+   THE FOOTER — .fm3
+   ----------------------------------------------------------------
+   ---- PORT ----
+   Drop-in replacement for prod <footer class="fm2">. Renames to
+   port back into style.css (all selectors here are scoped .fm3 …):
+
+     .fm3 / .fm3-*            →  .fm2 / .fm2-*
+     .fm3 .fc                 →  prod .fc            (kept verbatim,
+                                prod defines it unscoped)
+     .fm3 .wL                 →  prod .wL            (kept verbatim)
+     .fm3 .fm-led             →  prod .fm2 .led      (spec calls it
+                                ".fm-led"; current prod is a styled
+                                dot-div ".led" — v3's is a ● glyph)
+     .fm3.fm-live             →  .fm2.fm-live        (gate unchanged)
+
+   New markup vs prod:
+     .fm3-echo   — empty div inside .fm3-mark-box; JS clones
+                   .fm3-word into it. Carries the --sx sweep mask.
+     .fm3-met    — two <pre> meteors (mL/mR) inside .fm3-stars.
+     .fm3-l .bk  — [ ] brackets added to every link row.
+     status strip — single .grp readout (ver/audit/loc/relay/
+                    uptime/[ demo ]); ids #upt (build) + #upt2
+                    (status) both tick.
+
+   New JS vs prod (same IIFE, same triple gate):
+     echo cloneNode, --sx rAF driver (~8s cadence), meteor
+     spawner (~15s cadence, direction coin-flip).
+   ================================================================ */
+.fm3{position:relative;border-top:1px solid var(--line);
+  background:linear-gradient(180deg,rgba(20,21,25,0) 0%,rgba(20,21,25,.42) 82%,rgba(20,21,25,.6) 100%)}
+
+/* ---------- 01 · starfield band — two ascii layers + meteors ----
+   far layer: faint dot field, slow. near layer: sparse ember sparks,
+   ~3.4x faster → parallax. Meteors: two hidden <pre> streaks, JS
+   flips a coin and adds .go every ~15s. All motion needs .fm-live. */
+.fm3-stars{position:relative;height:118px;overflow:hidden;
+  border-bottom:1px solid var(--line);
+  -webkit-mask-image:linear-gradient(180deg,#000 34%,rgba(0,0,0,.28) 100%);
+          mask-image:linear-gradient(180deg,#000 34%,rgba(0,0,0,.28) 100%)}
+.fm3-sf{position:absolute;inset:0;padding:16px 0;margin:0;
+  font-family:'JetBrains Mono',monospace;font-size:11px;line-height:1.5;
+  letter-spacing:.35em;white-space:pre;user-select:none;overflow:hidden}
+.fm3-sf.far{color:#2B2F36}
+.fm3-sf.near{color:var(--ember);
+  text-shadow:0 0 9px rgba(255,178,36,.5);opacity:.85}
+.fm3-sf-tag{position:absolute;right:var(--pad);bottom:8px;
+  font-family:'JetBrains Mono',monospace;font-size:9px;
+  letter-spacing:.18em;color:var(--faint)}
+
+/* meteors: · tail, : mid, * head. mL crosses right→left (head at
+   bottom-left), mR left→right (head at bottom-right). top% set by JS. */
+.fm3-met{position:absolute;top:20%;margin:0;z-index:2;opacity:0;
+  font-family:'JetBrains Mono',monospace;font-size:12px;line-height:1.2;
+  white-space:pre;pointer-events:none;user-select:none}
+.fm3-met.mL{right:-4ch}
+.fm3-met.mR{left:-4ch}
+.fm3-met .h{color:var(--ember-hot);
+  text-shadow:0 0 10px rgba(255,178,36,.85),0 0 3px rgba(255,178,36,.6)}
+.fm3-met .m{color:var(--ember)}
+.fm3-met .t{color:var(--faint)}
+.fm3.fm-live .fm3-met.go{animation-duration:1.15s;
+  animation-timing-function:linear;animation-fill-mode:both}
+.fm3.fm-live .fm3-met.mL.go{animation-name:metL}
+.fm3.fm-live .fm3-met.mR.go{animation-name:metR}
+@keyframes metL{
+  0%{transform:translate(0,-26px);opacity:0}
+  9%{opacity:1}
+  80%{opacity:.85}
+  100%{transform:translate(-115vw,150px);opacity:0}}
+@keyframes metR{
+  0%{transform:translate(0,-26px);opacity:0}
+  9%{opacity:1}
+  80%{opacity:.85}
+  100%{transform:translate(115vw,150px);opacity:0}}
+
+/* ---------- link / status columns ---------- */
+.fm3-cols{max-width:var(--wrap);margin:0 auto;padding:62px var(--pad) 0;
+  display:grid;grid-template-columns:1.5fr 1fr 1fr 1.2fr;gap:48px}
+
+/* column header = ascii panel tab:  ┌─ label ───────────┐  */
+.fm3-h{display:flex;align-items:center;gap:7px;font-weight:500;
+  font-size:10.5px;letter-spacing:.2em;text-transform:uppercase;
+  margin-bottom:22px;white-space:nowrap}
+.fm3-h i{font-style:normal;color:var(--faint);letter-spacing:0}
+.fm3-h b{color:var(--muted);font-weight:500}
+.fm3-h .rl{flex:1;height:1px;background:var(--line);min-width:12px}
+
+/* links v3: [ ] brackets parked just inside the row edges slide
+   outward on hover while // desc brightens. Brackets are absolute
+   so they never shift the name/desc baseline grid. */
+.fm3-l{position:relative;display:flex;justify-content:space-between;
+  align-items:baseline;gap:16px;font-size:12px;padding:7px 14px;
+  color:var(--muted);transition:color .18s,background .18s}
+.fm3-l .bk{position:absolute;top:7px;font-style:normal;
+  color:var(--ember-dim);opacity:0;
+  transition:opacity .18s,transform .18s}
+.fm3-l .bk.l{left:0;transform:translateX(9px)}
+.fm3-l .bk.r{right:0;transform:translateX(-9px)}
+.fm3-l .n{color:var(--ink);white-space:nowrap;transition:color .18s}
+.fm3-l .d{color:var(--faint);font-size:11px;text-align:right;
+  transition:color .18s}
+.fm3-l .d i{font-style:normal;color:var(--dim);transition:color .18s}
+.fm3-l:hover{color:var(--dim);
+  background:linear-gradient(90deg,rgba(255,178,36,.05),transparent 62%)}
+.fm3-l:hover .bk{opacity:1;transform:translateX(0)}
+.fm3-l:hover .bk.l{transform:translateX(-4px)}
+.fm3-l:hover .bk.r{transform:translateX(4px)}
+.fm3-l:hover .n{color:var(--ember)}
+.fm3-l:hover .d{color:var(--ink)}
+.fm3-l:hover .d i{color:var(--ember)}
+.fm3-l:focus-visible{outline:1px solid var(--ember-dim);outline-offset:3px}
+.fm3-l:focus-visible .bk{opacity:1;transform:translateX(0)}
+
+.fm3-s{display:flex;justify-content:space-between;align-items:baseline;gap:16px;
+  font-size:12px;padding:7px 14px}
+.fm3-s .k{color:var(--faint)}
+.fm3-s .v{color:var(--muted);text-align:right}
+.fm3-s .v.hot{color:var(--ember)}
+.fm3-s .v.warn{color:var(--ember-dim)}
+
+/* ---------- brand column ---------- */
+.fm3-brand{display:flex;flex-direction:column;gap:14px}
+.fm3-spark{font-family:'JetBrains Mono',monospace;font-size:8px;line-height:1.15;
+  color:var(--ember);user-select:none}
+.fm3-name{font-family:'Space Grotesk',sans-serif;font-weight:700;font-size:22px;
+  letter-spacing:-.01em}
+.fm3-tag{color:var(--muted);font-size:13.5px;max-width:30ch}
+.fm3-meta{font-size:10.5px;letter-spacing:.12em;color:var(--faint);
+  margin-top:auto;padding-top:18px}
+
+/* ---------- 02 · wordmark v3 — dual-tone letterforms, scanline,
+   per-letter flicker, and the signal sweep --------------------------
+   Base layer identical to prod. The sweep is .fm3-echo: a JS clone
+   of .fm3-word pinned over it, re-tinted hot (ember-hot cores, muted
+   bodies) and clipped by a moving --sx gradient band — sharp leading
+   edge, ~30% trailing decay. Where supported the gradient is
+   intersected with a 4px bayer dot screen so the band itself is
+   dithered. No per-column spans → hand-set alignment untouched. */
+.fm3-mark{position:relative;margin-top:76px;overflow:hidden;
+  display:grid;place-items:center;padding:0 0 10px;--sx:-.35}
+.fm3-mark-box{position:relative}
+.fm3-scan{position:absolute;left:-6%;right:-6%;top:0;height:18%;
+  pointer-events:none;mix-blend-mode:screen;
+  transform:translateY(-120%);
+  background:linear-gradient(180deg,transparent,
+    rgba(255,178,36,.045) 30%,rgba(255,178,36,.16) 50%,
+    rgba(255,178,36,.045) 70%,transparent)}
+.fm3.fm-live .fm3-scan{animation:scan 5.6s linear infinite}
+@keyframes scan{to{transform:translateY(660%)}}
+
+/* edge dust: bayer rank-pair layers, banded at both margins */
+.fm3-dith{position:absolute;top:-9%;bottom:-9%;left:-11%;right:-11%;
+  pointer-events:none;
+  -webkit-mask-image:linear-gradient(180deg,transparent,#000 7%,#000 93%,transparent);
+          mask-image:linear-gradient(180deg,transparent,#000 7%,#000 93%,transparent)}
+.fm3-dith i{position:absolute;inset:0;background-size:16px 16px;
+  background-repeat:repeat;--e:#3A4049}
+.fm3-dith i:nth-child(1){background-image:
+  radial-gradient(circle at 2px 2px,rgba(255,178,36,.40) 0 1.4px,transparent 1.5px),
+  radial-gradient(circle at 10px 10px,rgba(255,178,36,.40) 0 1.4px,transparent 1.5px);
+  -webkit-mask-image:linear-gradient(90deg,transparent 0%,#000 1.5%,#000 13.5%,transparent 15.5%,transparent 84.5%,#000 86.5%,#000 98.5%,transparent 100%);
+          mask-image:linear-gradient(90deg,transparent 0%,#000 1.5%,#000 13.5%,transparent 15.5%,transparent 84.5%,#000 86.5%,#000 98.5%,transparent 100%)}
+.fm3-dith i:nth-child(2){background-image:
+  radial-gradient(circle at 10px 2px,rgba(255,178,36,.22) 0 1.4px,transparent 1.5px),
+  radial-gradient(circle at 2px 10px,rgba(255,178,36,.22) 0 1.4px,transparent 1.5px);
+  -webkit-mask-image:linear-gradient(90deg,transparent 1.5%,#000 3%,#000 14%,transparent 16%,transparent 84%,#000 86%,#000 97%,transparent 98.5%);
+          mask-image:linear-gradient(90deg,transparent 1.5%,#000 3%,#000 14%,transparent 16%,transparent 84%,#000 86%,#000 97%,transparent 98.5%)}
+.fm3-dith i:nth-child(3){background-image:
+  radial-gradient(circle at 6px 6px,rgba(184,122,24,.9) 0 1.4px,transparent 1.5px),
+  radial-gradient(circle at 14px 14px,rgba(184,122,24,.9) 0 1.4px,transparent 1.5px);
+  -webkit-mask-image:linear-gradient(90deg,transparent 3%,#000 4.5%,#000 14.5%,transparent 16.5%,transparent 83.5%,#000 85.5%,#000 95.5%,transparent 97%);
+          mask-image:linear-gradient(90deg,transparent 3%,#000 4.5%,#000 14.5%,transparent 16.5%,transparent 83.5%,#000 85.5%,#000 95.5%,transparent 97%)}
+.fm3-dith i:nth-child(4){background-image:
+  radial-gradient(circle at 14px 6px,rgba(184,122,24,.55) 0 1.4px,transparent 1.5px),
+  radial-gradient(circle at 6px 14px,var(--e) 0 1.4px,transparent 1.5px);
+  -webkit-mask-image:linear-gradient(90deg,transparent 4.5%,#000 6%,#000 15%,transparent 17%,transparent 83%,#000 85%,#000 94%,transparent 95.5%);
+          mask-image:linear-gradient(90deg,transparent 4.5%,#000 6%,#000 15%,transparent 17%,transparent 83%,#000 85%,#000 94%,transparent 95.5%)}
+.fm3-dith i:nth-child(5){background-image:
+  radial-gradient(circle at 6px 2px,var(--e) 0 1.4px,transparent 1.5px),
+  radial-gradient(circle at 14px 10px,var(--e) 0 1.4px,transparent 1.5px);
+  -webkit-mask-image:linear-gradient(90deg,transparent 6%,#000 7.5%,#000 15.5%,transparent 17.5%,transparent 82.5%,#000 84.5%,#000 92.5%,transparent 94%);
+          mask-image:linear-gradient(90deg,transparent 6%,#000 7.5%,#000 15.5%,transparent 17.5%,transparent 82.5%,#000 84.5%,#000 92.5%,transparent 94%)}
+.fm3-dith i:nth-child(6){background-image:
+  radial-gradient(circle at 14px 2px,var(--e) 0 1.4px,transparent 1.5px),
+  radial-gradient(circle at 6px 10px,var(--e) 0 1.4px,transparent 1.5px);
+  -webkit-mask-image:linear-gradient(90deg,transparent 7.5%,#000 9%,#000 16%,transparent 18%,transparent 82%,#000 84%,#000 91%,transparent 92.5%);
+          mask-image:linear-gradient(90deg,transparent 7.5%,#000 9%,#000 16%,transparent 18%,transparent 82%,#000 84%,#000 91%,transparent 92.5%)}
+.fm3-dith i:nth-child(7){background-image:
+  radial-gradient(circle at 2px 6px,var(--e) 0 1.4px,transparent 1.5px),
+  radial-gradient(circle at 10px 14px,var(--e) 0 1.4px,transparent 1.5px);
+  -webkit-mask-image:linear-gradient(90deg,transparent 9%,#000 10.5%,#000 16.5%,transparent 18.5%,transparent 81.5%,#000 83.5%,#000 89.5%,transparent 91%);
+          mask-image:linear-gradient(90deg,transparent 9%,#000 10.5%,#000 16.5%,transparent 18.5%,transparent 81.5%,#000 83.5%,#000 89.5%,transparent 91%)}
+.fm3-dith i:nth-child(8){background-image:
+  radial-gradient(circle at 10px 6px,var(--e) 0 1.4px,transparent 1.5px),
+  radial-gradient(circle at 2px 14px,var(--e) 0 1.4px,transparent 1.5px);
+  -webkit-mask-image:linear-gradient(90deg,transparent 10.5%,#000 12%,#000 17%,transparent 19%,transparent 81%,#000 83%,#000 88%,transparent 89.5%);
+          mask-image:linear-gradient(90deg,transparent 10.5%,#000 12%,#000 17%,transparent 19%,transparent 81%,#000 83%,#000 88%,transparent 89.5%)}
+
+.fm3-word{display:flex;gap:2ch;justify-content:center;
+  font-family:'JetBrains Mono',monospace;font-size:clamp(5px,1.6vw,22px);
+  line-height:1.14;user-select:none;
+  -webkit-mask-image:linear-gradient(90deg,transparent 4%,#000 8.5%,#000 91.5%,transparent 96%);
+          mask-image:linear-gradient(90deg,transparent 4%,#000 8.5%,#000 91.5%,transparent 96%)}
+.fm3 .wL{margin:0;font:inherit;color:var(--dim);white-space:pre}
+.fm3 .wL.edge{color:#2B2F36}
+.fm3 .wL b{color:var(--ember);font-weight:400;
+  text-shadow:0 0 14px rgba(255,178,36,.45),0 0 3px rgba(255,178,36,.5)}
+.fm3.fm-live .wL{animation:flick 9s linear infinite;animation-delay:var(--fd,0s)}
+.fm3.fm-live .wL b{animation:heat 4.5s ease-in-out infinite;animation-delay:var(--fd,0s)}
+@keyframes flick{0%,84%,100%{opacity:1}86%{opacity:.55}88%{opacity:.93}
+  91%{opacity:.68}93%{opacity:1}}
+@keyframes heat{0%,100%{opacity:1}50%{opacity:.8}}
+
+/* the sweep echo: same glyphs, hotter ink, band-masked by --sx.
+   --sx is a unitless 0→1+ progress JS pushes each frame; the trail
+   math lives in the gradient stops (calc against *100%). */
+.fm3-echo{position:absolute;inset:0;display:grid;place-items:center;
+  pointer-events:none;--trail:.30;
+  -webkit-mask-image:linear-gradient(90deg,
+    transparent calc((var(--sx,-.35) - var(--trail)) * 100%),
+    rgba(0,0,0,.8) calc((var(--sx,-.35) - .10) * 100%),
+    #000        calc((var(--sx,-.35) - .035) * 100%),
+    #000        calc(var(--sx,-.35) * 100%),
+    rgba(0,0,0,.35) calc((var(--sx,-.35) + .012) * 100%),
+    transparent calc((var(--sx,-.35) + .028) * 100%));
+          mask-image:linear-gradient(90deg,
+    transparent calc((var(--sx,-.35) - var(--trail)) * 100%),
+    rgba(0,0,0,.8) calc((var(--sx,-.35) - .10) * 100%),
+    #000        calc((var(--sx,-.35) - .035) * 100%),
+    #000        calc(var(--sx,-.35) * 100%),
+    rgba(0,0,0,.35) calc((var(--sx,-.35) + .012) * 100%),
+    transparent calc((var(--sx,-.35) + .028) * 100%))}
+.fm3-echo .wL{color:var(--muted)}
+.fm3-echo .wL.edge{color:var(--faint)}
+.fm3-echo .wL b{color:var(--ember-hot);
+  text-shadow:0 0 18px rgba(255,178,36,.75),0 0 4px rgba(255,178,36,.7)}
+
+/* dithered-signal upgrade: intersect the sweep band with a 4px
+   bayer dot screen (~18% coverage) → stippled band whose density
+   decays with the trail. Fallback = smooth band (still sweeps). */
+@supports ((-webkit-mask-composite:source-in) or (mask-composite:intersect)){
+  .fm3-echo{
+    -webkit-mask-image:linear-gradient(90deg,
+      transparent calc((var(--sx,-.35) - var(--trail)) * 100%),
+      rgba(0,0,0,.8) calc((var(--sx,-.35) - .10) * 100%),
+      #000        calc((var(--sx,-.35) - .035) * 100%),
+      #000        calc(var(--sx,-.35) * 100%),
+      rgba(0,0,0,.35) calc((var(--sx,-.35) + .012) * 100%),
+      transparent calc((var(--sx,-.35) + .028) * 100%)),
+      radial-gradient(circle at 2px 2px,#000 0 1.9px,transparent 2px);
+            mask-image:linear-gradient(90deg,
+      transparent calc((var(--sx,-.35) - var(--trail)) * 100%),
+      rgba(0,0,0,.8) calc((var(--sx,-.35) - .10) * 100%),
+      #000        calc((var(--sx,-.35) - .035) * 100%),
+      #000        calc(var(--sx,-.35) * 100%),
+      rgba(0,0,0,.35) calc((var(--sx,-.35) + .012) * 100%),
+      transparent calc((var(--sx,-.35) + .028) * 100%)),
+      radial-gradient(circle at 2px 2px,#000 0 1.9px,transparent 2px);
+    -webkit-mask-size:auto,4px 4px;mask-size:auto,4px 4px;
+    -webkit-mask-composite:source-in;mask-composite:intersect}
+}
+
+/* instrument corner brackets (prod .fc, kept verbatim) */
+.fm3 .fc{position:absolute;font-family:'JetBrains Mono',monospace;
+  font-style:normal;font-size:12px;color:var(--line);line-height:1;
+  pointer-events:none}
+.fm3 .fc.tl{top:2px;left:14px}.fm3 .fc.tr{top:2px;right:14px}
+.fm3 .fc.bl{bottom:2px;left:14px}.fm3 .fc.br{bottom:2px;right:14px}
+
+/* ---------- 03 · build info strip — scripted demo counters ---------- */
+.fm3-build{border-top:1px solid var(--line);margin-top:26px}
+.fm3-build-in{max-width:var(--wrap);margin:0 auto;padding:11px var(--pad);
+  display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;
+  font-family:'JetBrains Mono',monospace;font-size:10.5px;
+  letter-spacing:.08em;color:var(--faint)}
+.fm3-build .k{color:var(--faint)}
+.fm3-build .v{color:var(--muted)}
+.fm3-build .v.commit{color:var(--ink)}
+.fm3-build .sep{color:var(--dim)}
+.fm3-build .sp{flex:1}
+.fm3-build .demo{color:var(--ember-dim);letter-spacing:.16em}
+
+/* ---------- 04 · status strip v3 — instrument readout ----------
+   one live line: ● led · ver · audit · loc · relay · uptime,
+   flagged [ demo ]. right side keeps the keycap + prompt caret. */
+.fm3-status{border-top:1px solid var(--line)}
+.fm3-status-in{max-width:var(--wrap);margin:0 auto;padding:15px var(--pad);
+  display:flex;align-items:center;justify-content:space-between;gap:20px;
+  font-family:'JetBrains Mono',monospace;font-size:11px;
+  letter-spacing:.08em;color:var(--faint);flex-wrap:wrap}
+.fm3-status .grp{display:flex;align-items:center;gap:9px;flex-wrap:wrap}
+.fm3-status .it .k{color:var(--faint)}
+.fm3-status .it .v{color:var(--muted)}
+.fm3-status .it .v.hot{color:var(--ember)}
+.fm3-status .it .v.warn{color:var(--ember-dim)}
+.fm3-status .sep{color:var(--dim)}
+.fm3-status .demo{color:var(--ember-dim);letter-spacing:.16em;
+  font-size:10px;margin-left:4px}
+.fm3 .fm-led{font-style:normal;color:var(--ember);font-size:10px;
+  text-shadow:0 0 8px rgba(255,178,36,.6);flex:none}
+.fm3.fm-live .fm-led{animation:ledblink 1.6s steps(1) infinite}
+@keyframes ledblink{0%,84%{opacity:1}92%{opacity:.12}}
+.fm3-status .keycap{color:var(--faint);border:1px solid var(--line);
+  padding:2px 8px;transition:color .18s,border-color .18s}
+.fm3-status .keycap:hover{color:var(--ember);border-color:var(--ember-dim)}
+.fm3 .caret{display:inline-block;width:8px;height:14px;
+  background:var(--ember);vertical-align:-2px;flex:none}
+.fm3.fm-live .caret{animation:blink 1.1s steps(1) infinite}
+@keyframes blink{50%{opacity:0}}
+
+/* ---------- 05 · bottom dissolve — footer erodes into the ground ---- */
+.fm3-dissolve{position:relative;height:110px;overflow:hidden}
+.fm3-dissolve i{position:absolute;inset:0;background-size:16px 16px;
+  background-position:50% 0;background-repeat:repeat;
+  -webkit-mask-image:linear-gradient(180deg,#000 var(--t),transparent var(--t));
+          mask-image:linear-gradient(180deg,#000 var(--t),transparent var(--t))}
+.fm3-dissolve i:nth-child(1){--t:100%;background-image:
+  radial-gradient(circle at 2px 2px,#3A4049 0 1.4px,transparent 1.5px),
+  radial-gradient(circle at 10px 10px,#3A4049 0 1.4px,transparent 1.5px)}
+.fm3-dissolve i:nth-child(2){--t:88%;background-image:
+  radial-gradient(circle at 10px 2px,rgba(255,178,36,.20) 0 1.4px,transparent 1.5px),
+  radial-gradient(circle at 2px 10px,#2B2F36 0 1.4px,transparent 1.5px)}
+.fm3-dissolve i:nth-child(3){--t:76%;background-image:
+  radial-gradient(circle at 6px 6px,#2B2F36 0 1.4px,transparent 1.5px),
+  radial-gradient(circle at 14px 14px,#3A4049 0 1.4px,transparent 1.5px)}
+.fm3-dissolve i:nth-child(4){--t:64%;background-image:
+  radial-gradient(circle at 14px 6px,#2B2F36 0 1.4px,transparent 1.5px),
+  radial-gradient(circle at 6px 14px,#2B2F36 0 1.4px,transparent 1.5px)}
+.fm3-dissolve i:nth-child(5){--t:54%;background-image:
+  radial-gradient(circle at 6px 2px,#3A4049 0 1.4px,transparent 1.5px),
+  radial-gradient(circle at 14px 10px,rgba(255,178,36,.14) 0 1.4px,transparent 1.5px)}
+.fm3-dissolve i:nth-child(6){--t:45%;background-image:
+  radial-gradient(circle at 14px 2px,#1F2126 0 1.4px,transparent 1.5px),
+  radial-gradient(circle at 6px 10px,#1F2126 0 1.4px,transparent 1.5px)}
+.fm3-dissolve i:nth-child(7){--t:37%;background-image:
+  radial-gradient(circle at 2px 6px,#1F2126 0 1.4px,transparent 1.5px),
+  radial-gradient(circle at 10px 14px,#1F2126 0 1.4px,transparent 1.5px)}
+.fm3-dissolve i:nth-child(8){--t:30%;background-image:
+  radial-gradient(circle at 10px 6px,#191B1F 0 1.4px,transparent 1.5px),
+  radial-gradient(circle at 2px 14px,#1F2126 0 1.4px,transparent 1.5px)}
+
+/* ---------- responsive ---------- */
+@media(max-width:1000px){
+  .fm3-cols{grid-template-columns:1fr 1fr;row-gap:44px}
+  .fm3-meta{margin-top:0}
+}
+@media(max-width:700px){
+  :root{--pad:22px}
+  .fm3-cols{grid-template-columns:1fr;padding-top:48px;row-gap:36px}
+  .fm3-status-in{gap:12px}
+  .fm3-status .grp{gap:8px}
+  .fm3-build-in{gap:8px}
+  .fm3-sf-tag{display:none}
+  .fm3 .fc{display:none}
+}
+@media (prefers-reduced-motion:reduce){
+  html{scroll-behavior:auto}
+  .fm3 .fm-led,.fm3 .caret,.fm3 .fm3-scan,.fm3 .wL,.fm3 .wL b,
+  .fm3 .fm3-met{animation:none !important}
+  .fm3 .caret{opacity:1}
+  .fm3-l,.fm3-l .bk,.fm3-l .n,.fm3-l .d,.fm3-l .d i,
+  .fm3-status .keycap{transition:none}
+}
+</style>
+</head>
+<body id="top">
+<div class="page">
+
+<header class="mast mono">
+  <span class="tag">cinder / experiments</span>
+  <span class="hint">footer-v3 — the wordmark gets a signal</span>
+</header>
+
+<main>
+  <div class="intro">
+    <p class="kicker mono">PROTOTYPE // FOOTER-MEGA-V3</p>
+    <h1>the footer, transmitting<span class="tick">.</span></h1>
+    <p class="lede">Third pass on <b>.fm2</b>. Upgrades over v2: a
+      <b>signal sweep</b> — a dithered brightness band that crosses the
+      wordmark every ~8s on top of the per-stroke flicker (a masked echo
+      layer, hand-set alignment untouched); <b>meteors</b> — a short
+      <b>·:*</b> streak crossing the starfield every ~15s; a real
+      <b>instrument readout</b> status strip (led, ver, audit, loc, relay,
+      ticking uptime, flagged <b>[ demo ]</b>); and <b>bracket hover</b>
+      links whose <b>[ ]</b> slide outward while the <b>//</b> desc
+      brightens. All motion sits behind IntersectionObserver +
+      visibilitychange + prefers-reduced-motion. Copy stays honest:
+      <b>pre-1.0, not externally audited</b>.</p>
+  </div>
+
+  <div class="lab mono">
+    <span class="l"><b>// 00</b> — context · end of main</span>
+    <span class="r">THE SEAM IT REPLACES</span>
+  </div>
+  <div class="endmark mono"><span class="rl"></span><span>┤ end of transmission ├</span><span class="rl"></span></div>
+
+  <div class="lab mono">
+    <span class="l"><b>// 01</b> — footer.mega-v3</span>
+    <span class="r">SIGNAL SWEEP · METEORS · INSTRUMENT READOUT · BRACKET HOVER · EDGE DISSOLVE</span>
+  </div>
+</main>
+
+<footer class="fm3">
+
+  <!-- 01 · starfield: two rotating <pre> layers + meteor streaks,
+       all drift gated by .fm-live -->
+  <div class="fm3-stars" id="sf" aria-hidden="true">
+    <pre class="fm3-sf far mono" id="sfFar"></pre>
+    <pre class="fm3-sf near mono" id="sfNear"></pre>
+    <pre class="fm3-met mL" id="metL"><span class="t">  ·</span>
+<span class="m"> : </span>
+<span class="h">*  </span></pre>
+    <pre class="fm3-met mR" id="metR"><span class="t">·  </span>
+<span class="m"> : </span>
+<span class="h">  *</span></pre>
+    <span class="fm3-sf-tag mono">// ambient signal · drift + meteors = cosmetic demo</span>
+  </div>
+
+  <div class="fm3-cols">
+    <div class="fm3-brand">
+      <pre class="fm3-spark" aria-hidden="true">╲ │ ╱
+─ █ ─
+╱ │ ╲</pre>
+      <p class="fm3-name">cinder</p>
+      <p class="fm3-tag">encrypted chat your agents can drive</p>
+      <p class="fm3-meta mono">e2e · noise_xx · blind relay · no accounts</p>
+    </div>
+
+    <nav class="fm3-col" aria-label="Protocol">
+      <h4 class="fm3-h mono"><i>┌─</i><b>protocol</b><span class="rl"></span><i>┐</i></h4>
+      <a class="fm3-l mono" href="/docs/protocol"><i class="bk l">[</i><span class="n">protocol.md</span><span class="d"><i>//</i> the wire</span><i class="bk r">]</i></a>
+      <a class="fm3-l mono" href="/docs/threat-model"><i class="bk l">[</i><span class="n">threat-model.md</span><span class="d"><i>//</i> adversaries</span><i class="bk r">]</i></a>
+      <a class="fm3-l mono" href="/docs/agent-api"><i class="bk l">[</i><span class="n">agent-api.md</span><span class="d"><i>//</i> the spec</span><i class="bk r">]</i></a>
+    </nav>
+
+    <nav class="fm3-col" aria-label="Repository">
+      <h4 class="fm3-h mono"><i>┌─</i><b>repo</b><span class="rl"></span><i>┐</i></h4>
+      <a class="fm3-l mono" href="https://github.com/nikolas-sapa/cinder" rel="noopener"><i class="bk l">[</i><span class="n">github</span><span class="d"><i>//</i> nikolas-sapa/cinder</span><i class="bk r">]</i></a>
+      <a class="fm3-l mono" href="https://github.com/nikolas-sapa/cinder/issues" rel="noopener"><i class="bk l">[</i><span class="n">issues</span><span class="d"><i>//</i> bug reports welcome</span><i class="bk r">]</i></a>
+      <a class="fm3-l mono" href="https://github.com/nikolas-sapa/cinder/releases" rel="noopener"><i class="bk l">[</i><span class="n">releases</span><span class="d"><i>//</i> cargo install</span><i class="bk r">]</i></a>
+    </nav>
+
+    <div class="fm3-col" aria-label="Status">
+      <h4 class="fm3-h mono"><i>┌─</i><b>status</b><span class="rl"></span><i>┐</i></h4>
+      <p class="fm3-s mono"><span class="k">version</span><span class="v hot">pre-1.0</span></p>
+      <p class="fm3-s mono"><span class="k">audit</span><span class="v warn">not externally audited</span></p>
+      <p class="fm3-s mono"><span class="k">license</span><span class="v">mit</span></p>
+      <p class="fm3-s mono"><span class="k">loc</span><span class="v">~14k · rust</span></p>
+    </div>
+  </div>
+
+  <!-- 02 · wordmark v3: base glyphs identical to prod; .fm3-echo is a
+       JS-cloned hot layer band-masked by --sx (the signal sweep) -->
+  <div class="fm3-mark">
+    <span class="fc tl mono" aria-hidden="true">┌</span>
+    <span class="fc tr mono" aria-hidden="true">┐</span>
+    <div class="fm3-mark-box">
+      <div class="fm3-dith" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>
+
+      <!-- rows are grid-padded to fixed widths with NBSP (U+00A0) at row ends;
+           every row in a letter equal, total = 86 cols -->
+      <div class="fm3-word" aria-hidden="true"><pre class="wL edge">░     
+  ▓ ░ 
+ · ░▒ 
+░    ░
+  ▒   
+   ░· </pre><pre class="wL" style="--fd:-.4s"> ███<b>██</b>███ 
+█<b>█</b>█    ███
+<b>██</b>        
+<b>██</b>        
+█<b>█</b>█    ███
+ ███<b>██</b>███ </pre><pre class="wL" style="--fd:-3.1s">███<b>███</b>███
+   █<b>█</b>█   
+   █<b>█</b>█   
+   █<b>█</b>█   
+   █<b>█</b>█   
+███<b>███</b>███</pre><pre class="wL" style="--fd:-6.8s">██       ██
+██<b>█</b>      ██
+██ <b>██</b>    ██
+██   <b>██</b>  ██
+██     <b>██</b>██
+██      <b>███</b></pre><pre class="wL" style="--fd:-1.9s">██<b>████</b>██  
+<b>██</b>    ██  
+<b>██</b>     ██ 
+<b>██</b>     ██ 
+<b>██</b>    ██  
+██<b>████</b>██  </pre><pre class="wL" style="--fd:-5.2s">██<b>████</b>████
+<b>██</b>        
+<b>███████</b>   
+<b>██</b>        
+<b>██</b>        
+██<b>████</b>████</pre><pre class="wL" style="--fd:-4.5s">██<b>███</b>██   
+<b>██</b>    ██  
+<b>██</b>    ██  
+██<b>███</b>██   
+██   <b>██</b>   
+██    <b>██</b>  </pre><pre class="wL edge">     ░
+ ░ ▓  
+ ▒░ · 
+░    ░
+   ▒  
+ ·░   </pre></div>
+      <div class="fm3-echo" id="echo" aria-hidden="true"></div>
+      <div class="fm3-scan" aria-hidden="true"></div>
+    </div>
+    <span class="fc bl mono" aria-hidden="true">└</span>
+    <span class="fc br mono" aria-hidden="true">┘</span>
+  </div>
+
+  <!-- 03 · build info — scripted counters, flagged demo -->
+  <div class="fm3-build" aria-label="build information (demo)">
+    <div class="fm3-build-in">
+      <span><span class="k">build</span> <span class="v commit">8f3a2c1</span></span>
+      <span class="sep">·</span>
+      <span><span class="k">rustc</span> <span class="v">1.79.0 stable</span></span>
+      <span class="sep">·</span>
+      <span><span class="k">target</span> <span class="v">aarch64-apple-darwin</span></span>
+      <span class="sep">·</span>
+      <span><span class="k">profile</span> <span class="v">release</span></span>
+      <span class="sep">·</span>
+      <span><span class="k">uptime</span> <span class="v" id="upt">04:17:33</span></span>
+      <span class="sp"></span>
+      <span class="demo">[ demo counters ]</span>
+    </div>
+  </div>
+
+  <!-- 04 · instrument readout: one line, hard truth + [ demo ] -->
+  <div class="fm3-status">
+    <div class="fm3-status-in">
+      <div class="grp" aria-label="instrument readout (demo)">
+        <i class="fm-led" aria-hidden="true">●</i>
+        <span class="it"><span class="k">ver</span> <span class="v hot">pre-1.0</span></span>
+        <span class="sep">·</span>
+        <span class="it"><span class="k">audit</span> <span class="v warn">none</span></span>
+        <span class="sep">·</span>
+        <span class="it"><span class="k">loc</span> <span class="v">~14k</span></span>
+        <span class="sep">·</span>
+        <span class="it"><span class="k">relay</span> <span class="v">rly-02</span></span>
+        <span class="sep">·</span>
+        <span class="it"><span class="k">uptime</span> <span class="v" id="upt2">04:17:33</span></span>
+        <span class="demo">[ demo ]</span>
+      </div>
+      <div class="grp">
+        <a class="keycap" href="#top">[ ↑ top ]</a>
+        <span class="caret" aria-hidden="true"></span>
+      </div>
+    </div>
+  </div>
+
+  <!-- 05 · bottom edge: ordered dust thinning to nothing — footer dissolves -->
+  <div class="fm3-dissolve" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>
+</footer>
+
+</div>
+
+<script>
+(() => {
+  "use strict";
+  const footer = document.querySelector(".fm3");
+  const mq = window.matchMedia("(prefers-reduced-motion: reduce)");
+
+  /* ---- uptime counters (fake boot offset, labelled demo) ---- */
+  const upEls = ["upt", "upt2"].map(id => document.getElementById(id)).filter(Boolean);
+  const upBase = 4*3600 + 17*60 + 33;
+  const t0 = Date.now();
+  const p2 = n => String(n).padStart(2, "0");
+  function tickUptime(){
+    const s = upBase + Math.floor((Date.now() - t0) / 1000);
+    const txt = p2(Math.floor(s/3600)) + ":" + p2(Math.floor(s/60)%60) + ":" + p2(s%60);
+    upEls.forEach(el => { el.textContent = txt; });
+  }
+
+  /* ---- starfield: two pre layers, rows rotated left ---- */
+  const host = document.getElementById("sf");
+  const farEl = document.getElementById("sfFar");
+  const nearEl = document.getElementById("sfNear");
+  const ROWS = 5;
+  function makeRows(cols, density, chars){
+    const rows = [];
+    for(let r = 0; r < ROWS; r++){
+      let s = "";
+      for(let c = 0; c < cols; c++){
+        s += Math.random() < density
+          ? chars[Math.floor(Math.random() * chars.length)] : " ";
+      }
+      rows.push(s);
+    }
+    return rows;
+  }
+  let far = [], near = [], farAcc = 0, nearAcc = 0;
+  function buildStars(){
+    const fs = parseFloat(getComputedStyle(farEl).fontSize);
+    const cols = Math.ceil(host.clientWidth / (fs * 0.6)) + 30;
+    far  = makeRows(cols, 0.06,  "······.+");
+    near = makeRows(cols, 0.016, "*+");
+    farEl.textContent  = far.join("\n");
+    nearEl.textContent = near.join("\n");
+  }
+  const rot = rows => rows.map(s => s.slice(1) + s[0]);
+  function drift(){
+    farAcc += 0.16; nearAcc += 0.55;
+    let dirty = false;
+    while(farAcc >= 1){ far = rot(far); farAcc -= 1; dirty = true; }
+    if(dirty){ farEl.textContent = far.join("\n"); dirty = false; }
+    while(nearAcc >= 1){ near = rot(near); nearAcc -= 1; dirty = true; }
+    if(dirty) nearEl.textContent = near.join("\n");
+  }
+
+  /* ---- signal sweep: clone the wordmark into .fm3-echo, then drive
+     --sx (-0.35 → 1.35) over ~2.3s every ~8s. The gradient + bayer
+     mask on .fm3-echo does the rest; base glyphs never reflow. ---- */
+  const mark = footer.querySelector(".fm3-mark");
+  const word = footer.querySelector(".fm3-word");
+  const echo = document.getElementById("echo");
+  if(echo && word) echo.appendChild(word.cloneNode(true));
+  let sxRaf = 0, sweepTimer = 0;
+  const SWEEP_MS = 2300, SX_MIN = -0.35, SX_SPAN = 1.70;
+  function runSweep(){
+    const t0 = performance.now();
+    function step(t){
+      const k = Math.min(1, (t - t0) / SWEEP_MS);
+      mark.style.setProperty("--sx", (SX_MIN + k * SX_SPAN).toFixed(4));
+      if(k < 1 && live) sxRaf = requestAnimationFrame(step);
+    }
+    sxRaf = requestAnimationFrame(step);
+  }
+  function scheduleSweep(d){
+    sweepTimer = setTimeout(() => { runSweep(); scheduleSweep(); },
+      d !== undefined ? d : 5600 + Math.random() * 1400);
+  }
+
+  /* ---- meteors: coin-flip direction, random top, ~15s cadence ---- */
+  const metL = document.getElementById("metL");
+  const metR = document.getElementById("metR");
+  let metTimer = 0;
+  function spawnMeteor(){
+    const el = Math.random() < 0.6 ? metL : metR;
+    el.style.top = (4 + Math.random() * 42) + "%";
+    el.classList.remove("go");
+    void el.offsetWidth;            /* restart the css animation */
+    el.classList.add("go");
+  }
+  [metL, metR].forEach(el => el &&
+    el.addEventListener("animationend", () => el.classList.remove("go")));
+  function scheduleMeteor(d){
+    metTimer = setTimeout(() => { spawnMeteor(); scheduleMeteor(); },
+      d !== undefined ? d : 13000 + Math.random() * 5000);
+  }
+
+  /* ---- gate: intersecting && !hidden && motion-ok → .fm-live + timers ---- */
+  let inView = false, live = false, timers = [];
+  function start(){
+    if(live) return;
+    live = true;
+    footer.classList.add("fm-live");
+    timers.push(setInterval(drift, 140), setInterval(tickUptime, 1000));
+    tickUptime();
+    scheduleSweep(1400);      /* first sweep early so it's discoverable */
+    scheduleMeteor(5200);
+  }
+  function stop(){
+    if(!live) return;
+    live = false;
+    footer.classList.remove("fm-live");
+    timers.forEach(clearInterval);
+    timers = [];
+    clearTimeout(sweepTimer); clearTimeout(metTimer);
+    cancelAnimationFrame(sxRaf);
+    mark.style.setProperty("--sx", SX_MIN);
+    metL.classList.remove("go"); metR.classList.remove("go");
+  }
+  function gate(){
+    (inView && !document.hidden && !mq.matches) ? start() : stop();
+  }
+  if("IntersectionObserver" in window){
+    new IntersectionObserver(es => {
+      inView = es[0].isIntersecting; gate();
+    }, {threshold: 0.02}).observe(footer);
+  } else { inView = true; }
+  document.addEventListener("visibilitychange", gate);
+  if(mq.addEventListener) mq.addEventListener("change", gate);
+  else mq.addListener(gate);
+
+  buildStars();
+  tickUptime();
+  let rsz;
+  window.addEventListener("resize", () => {
+    clearTimeout(rsz);
+    rsz = setTimeout(buildStars, 200);
+  });
+})();
+</script>
+</body>
+</html>

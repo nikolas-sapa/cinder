@@ -57,13 +57,23 @@
       <p class="hero-meta mono">protocol v1 · noise_xx<br>rust · mit · ~14k loc</p>
     </div>
 
-    <div class="install mono" data-reveal>
-      <div class="install-body">
-        <span class="prompt" aria-hidden="true">$</span>
-        <code id="install-cmd" class="install-cmd">cargo install --locked --git https://github.com/nikolas-sapa/cinder cinder cinder-relay<i class="caret" aria-hidden="true"></i></code>
-      </div>
-      <button class="copychip mono" id="copy-btn" type="button" aria-label="Copy install command"><span class="cc-l">[ ⧉ copy ]</span></button>
-    </div>
+    <div class="ctl4-strip">
+            <div class="ctl4-well">
+              <span class="ctl4-rail" aria-hidden="true"><i class="ctl4-led"></i></span>
+              <div class="ctl4-body">
+                <span class="ctl4-prompt" aria-hidden="true">$</span>
+                <code class="ctl4-cmd">cargo install --locked --git https://github.com/nikolas-sapa/cinder cinder cinder-relay<i class="ctl4-caret" aria-hidden="true"></i></code>
+                <span class="ctl4-ghost" aria-hidden="true">⏎ install</span>
+              </div>
+            </div>
+            <button class="ctl4-key" type="button" aria-label="Copy install command"><span class="ctl4-key-cap"><canvas class="ctl4-key-tex" aria-hidden="true"></canvas><span class="ctl4-key-l">[ ⧉ copy ]</span></span></button>
+            <span class="ctl4-sr" aria-live="polite"></span>
+          </div>
+<div class="ctl4-echo" aria-hidden="true">
+            <span class="ctl4-echo-row"><span class="ctl4-echo-p">$</span> <span class="ctl4-echo-t1"></span><i class="ctl4-echo-caret"></i></span>
+            <span class="ctl4-echo-row ctl4-echo-out"><span class="ctl4-echo-t2"></span></span>
+          </div>
+
 
     <div class="ctas" data-reveal>
       <a class="btn btn-primary" href="#quickstart" role="button" data-fill="#FFB224" data-halo="#5A4114"><canvas aria-hidden="true"></canvas><span class="btn-g" aria-hidden="true">[▶]</span><span class="btn-label">get started</span></a>
@@ -439,7 +449,7 @@
           <p class="side-h" style="margin-top:14px">DEMO</p>
           <div class="kcs" role="group" aria-label="Command keycaps">
             <button class="kc" data-cmd="/help" type="button">/help</button>
-            <button class="kc" data-cmd="/sas" type="button">/sas</button>
+            <button class="kc" data-cmd="/verify" type="button">/verify</button>
             <button class="kc kc--ember" data-cmd="/deny" type="button">/deny</button>
           </div>
           <p class="side-f dim">click a peer · type a command<br>or press a keycap</p>
@@ -492,9 +502,9 @@
         </div>
       </div>
       <div class="controls">
-        <button class="chip mono" id="btn-mute" aria-pressed="false">[ mute ]</button>
-        <button class="chip mono" id="btn-hold" aria-pressed="false">[ hold ]</button>
-        <button class="chip danger mono" id="btn-end">[ end ]</button>
+        <button class="chip mono" type="button" id="btn-mute" aria-pressed="false">[ mute ]</button>
+        <button class="chip mono" type="button" id="btn-hold" aria-pressed="false">[ hold ]</button>
+        <button class="chip danger mono" type="button" id="btn-end">[ end ]</button>
         <span class="keys mono">keys <b>m</b> mute · <b>h</b> hold · <b>e</b> end</span>
       </div>
       <div class="p-foot mono">
@@ -554,8 +564,8 @@
       </figcaption>
 <pre class="schematic" aria-hidden="true"><span class="w">┌─────────────┐                  ┌───────────┐</span>
 <span class="w">│             │</span><span class="a"> msg_state </span><span class="w">──────▶│           │</span>
-<span class="w">│</span><span class="u">cinder daemon</span><span class="w">│</span><span class="a"> ident.changed </span><span class="w">──▶│</span><span class="u"> tui + rpc </span><span class="w">│</span>
-<span class="w">│             │</span><span class="a"> net.status </span><span class="w">─────▶│           │</span>
+<span class="w">│</span><span class="u">cinder daemon</span><span class="w">│</span><span class="a"> msg_state      </span><span class="w">──▶│</span><span class="u"> tui + rpc </span><span class="w">│</span>
+<span class="w">│             │</span><span class="a"> event.gap  </span><span class="w">─────▶│           │</span>
 <span class="w">└─────────────┘</span><span class="a">  14 event kinds  </span><span class="w">└───────────┘</span></pre>
     </figure>
   </div>
@@ -903,7 +913,7 @@
   </div>
 </section>
 
-<div class="dither-div" role="separator" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>
+<div class="dvf dvf--ramp" role="separator"><span class="dvf-fb" aria-hidden="true">────────────────────────────────────────────────────────────────</span></div>
 
 <!-- ============ AGENTS ============ -->
 <section class="agents" id="agents">
@@ -1014,7 +1024,7 @@
 <pre class="fsm" id="fsm" aria-label="Interactive ASCII schematic of the cinder session state machine. Entry at INVITE, transitions to HANDSHAKE, SEALED, VERIFIED. SEALED loops on rekey, drops to UNVERIFIED on key change, which returns to VERIFIED on sas match. VERIFIED drops to WIPED on chat.wipe. Every state falls to DENIED on contact.deny. State buttons inspect outgoing edges.">
                                                                                 <span class="lp" data-edge="rekey">┌─ rekey ──┐</span>
                                                                                 <span class="lp" data-edge="rekey">▲</span>          <span class="lp" data-edge="rekey">▼</span>
-    <span class="bx stc" data-state="invite">┌──────────────┐</span><span class="lbl" data-edge="link"> cinder:// link </span><span class="bx stc" data-state="handshake">┌────────────────┐</span><span class="lbl" data-edge="noise"> noise_xx · 3 flights </span><span class="bx stc" data-state="sealed">┌────────────────┐</span><span class="lbl" data-edge="sas">   /sas match   </span><span class="bx stc" data-state="verified">┌────────────────┐</span>
+    <span class="bx stc" data-state="invite">┌──────────────┐</span><span class="lbl" data-edge="link"> cinder:// link </span><span class="bx stc" data-state="handshake">┌────────────────┐</span><span class="lbl" data-edge="noise"> noise_xx · 3 flights </span><span class="bx stc" data-state="sealed">┌────────────────┐</span><span class="lbl" data-edge="sas">  /verify match </span><span class="bx stc" data-state="verified">┌────────────────┐</span>
 <span class="ent">●</span><span class="arw">──▶</span><button class="st" type="button" data-state="invite" aria-pressed="false" aria-label="INVITE — inspect outgoing edges"><span class="bx">│ </span><span class="led" data-i="0">○</span><span class="bx"> INVITE     │</span></button><span class="arw" data-edge="link">───────────────▶</span><button class="st" type="button" data-state="handshake" aria-pressed="false" aria-label="HANDSHAKE — inspect outgoing edges"><span class="bx">│ </span><span class="led" data-i="1">○</span><span class="bx"> HANDSHAKE    │</span></button><span class="arw" data-edge="noise">═════════════════════▶</span><button class="st" type="button" data-state="sealed" aria-pressed="false" aria-label="SEALED — inspect outgoing edges"><span class="bx">│ </span><span class="led" data-i="2">○</span><span class="bx"> SEALED       │</span></button><span class="arw" data-edge="sas">───────────────▶</span><button class="st" type="button" data-state="verified" aria-pressed="false" aria-label="VERIFIED — inspect outgoing edges"><span class="bx">│ </span><span class="led on" data-i="3">●</span><span class="bx"> VERIFIED     │</span></button>
     <span class="bx stc" data-state="invite">└───────┬──────┘</span>                <span class="bx stc" data-state="handshake">└───────┬────────┘</span>                      <span class="bx stc" data-state="sealed">└─┬─────────┬────┘</span>                <span class="bx stc" data-state="verified">└─────────┬─────┬┘</span>
             <span class="arw" data-edge="deny">│</span>                               <span class="arw" data-edge="deny">│</span>                                 <span class="arw" data-edge="deny">│</span>         <span class="arw" data-edge="keychg">│</span> <span class="wrn" data-edge="keychg">key change</span>               <span class="arw" data-edge="sasback">▲</span>    <span class="arw" data-edge="wipe">│</span>     <span class="arw" data-edge="deny">│</span>
@@ -1129,7 +1139,7 @@
       <ul>
         <li data-edge="link"><span class="e">INVITE <span class="x">──▶</span> HANDSHAKE</span><span class="lbl">cinder:// link</span></li>
         <li data-edge="noise"><span class="e">HANDSHAKE <span class="x">══▶</span> SEALED</span><span class="lbl">noise_xx · 3 flights</span></li>
-        <li data-edge="sas"><span class="e">SEALED <span class="x">──▶</span> VERIFIED</span><span class="lbl">/sas match</span></li>
+        <li data-edge="sas"><span class="e">SEALED <span class="x">──▶</span> VERIFIED</span><span class="lbl">/verify match</span></li>
         <li data-edge="rekey"><span class="e">SEALED <span class="x">◀─┐</span> SEALED</span><span class="lbl">rekey (loop)</span></li>
         <li data-edge="keychg"><span class="e wrn">SEALED <span class="x">──▶</span> UNVERIFIED</span><span class="lbl">key change · sends blocked</span></li>
         <li data-edge="sasback"><span class="e">UNVERIFIED <span class="x">──▶</span> VERIFIED</span><span class="lbl">sas match</span></li>
@@ -1164,8 +1174,8 @@
     <div class="qs-grid" data-reveal>
       <div class="qs-card">
         <p class="qs-kicker mono">humans</p>
-        <pre class="mono qs-cmd"><span class="dim">$</span> cargo install --locked cinder-messenger
-<span class="dim">$</span> cinder identity
+        <pre class="mono qs-cmd"><span class="dim">$</span> cargo install --locked --git https://github.com/nikolas-sapa/cinder cinder cinder-relay
+<span class="dim">$</span> cinder id
 <span class="dim">$</span> cinder</pre>
         <p class="qs-note">Print your pubkey, share a link, run the TUI. No account, no phone
         number, no config file needed.</p>
@@ -1199,7 +1209,7 @@
 <span class="f">┊</span>   <span class="e">-*-</span>   <span class="m">ONE-TIME LINK</span>                                  <span class="d">┊</span><span class="m">       I      </span><span class="f">┊</span>
 <span class="f">┊</span>   <span class="e">/|\</span>                                                  <span class="d">┊</span><span class="m">       N      </span><span class="f">┊</span>
 <span class="f">┊</span>                                                        <span class="d">┊</span><span class="m">       G      </span><span class="f">┊</span>
-<span class="f">┊</span>   <a class="lnk" href="cinder://9c1f%e2%80%a6aa07@relay:8443?rendezvous=8f2a">cinder://9c1f…aa07@relay:8443?rendezvous=8f2a</a><span class="cur">▌</span>       <span class="d">┊</span><span class="m">       L      </span><span class="f">┊</span>
+<span class="f">┊</span>   <a class="lnk" tabindex="-1" href="cinder://9c1f%e2%80%a6aa07@relay:8443?rendezvous=8f2a">cinder://9c1f…aa07@relay:8443?rendezvous=8f2a</a><span class="cur">▌</span>       <span class="d">┊</span><span class="m">       L      </span><span class="f">┊</span>
 <span class="f">┊</span>                                                        <span class="d">┊</span><span class="m">       E      </span><span class="f">┊</span>
 <span class="f">┊</span>   <span class="m">one-time · expires on use</span>                            <span class="d">┊</span><span class="f">       ·      </span><span class="f">┊</span>
 <span class="f">┊</span>   <span class="m">intercepted links can't be replayed</span>                  <span class="d">┊</span><span class="m">       U      </span><span class="f">┊</span>
@@ -1214,7 +1224,7 @@
 <span class="f">┊</span>  <span class="e">-*-</span>   <span class="m">ONE-TIME LINK</span>                           <span class="f">┊</span>
 <span class="f">┊</span>  <span class="e">/|\</span>                                           <span class="f">┊</span>
 <span class="f">┊</span>                                                <span class="f">┊</span>
-<span class="f">┊</span>  <a class="lnk" href="cinder://9c1f%e2%80%a6aa07@relay:8443?rendezvous=8f2a">cinder://9c1f…aa07@relay:8443?rendezvous=8f2a</a> <span class="f">┊</span>
+<span class="f">┊</span>  <a class="lnk" tabindex="-1" href="cinder://9c1f%e2%80%a6aa07@relay:8443?rendezvous=8f2a">cinder://9c1f…aa07@relay:8443?rendezvous=8f2a</a> <span class="f">┊</span>
 <span class="f">┊</span>                                                <span class="f">┊</span>
 <span class="f">┊</span>  <span class="m">one-time · expires on use</span>                     <span class="f">┊</span>
 <span class="f">┊</span>  <span class="m">intercepted links can't be replayed</span>           <span class="f">┊</span>
@@ -1233,18 +1243,25 @@
 
 <!-- ============ PAGE-EDGE DISSOLVE ============ -->
 <div class="page-dissolve" aria-hidden="true">
-  <canvas class="dissolve-cv"></canvas>
+  <canvas class="dissolve-cv" data-dir="down"></canvas>
 </div>
 
 </main>
 
-<footer class="fm2 fm-live">
+<footer class="fm2">
 
-  <!-- 01 · starfield: two rotating <pre> layers, drift gated by .fm-live -->
+  <!-- 01 · starfield: two rotating <pre> layers + meteor streaks,
+       all drift gated by .fm-live -->
   <div class="fm2-stars" id="sf" aria-hidden="true">
     <pre class="fm2-sf far mono" id="sfFar"></pre>
     <pre class="fm2-sf near mono" id="sfNear"></pre>
-    <span class="fm2-sf-tag mono">// ambient signal · drift = cosmetic demo</span>
+    <pre class="fm2-met mL" id="metL"><span class="t">  ·</span>
+<span class="m"> : </span>
+<span class="h">*  </span></pre>
+    <pre class="fm2-met mR" id="metR"><span class="t">·  </span>
+<span class="m"> : </span>
+<span class="h">  *</span></pre>
+    <span class="fm2-sf-tag mono">// ambient signal · drift + meteors = cosmetic demo</span>
   </div>
 
   <div class="fm2-cols">
@@ -1259,28 +1276,29 @@
 
     <nav class="fm2-col" aria-label="Protocol">
       <h4 class="fm2-h mono"><i>┌─</i><b>protocol</b><span class="rl"></span><i>┐</i></h4>
-      <a class="fm2-l mono" href="/docs/protocol"><span class="n">protocol.md</span><span class="d">// the wire</span></a>
-      <a class="fm2-l mono" href="/docs/threat-model"><span class="n">threat-model.md</span><span class="d">// adversaries</span></a>
-      <a class="fm2-l mono" href="/docs/agent-api"><span class="n">agent-api.md</span><span class="d">// the spec</span></a>
+      <a class="fm2-l mono" href="https://github.com/nikolas-sapa/cinder/blob/main/docs/PROTOCOL.md"><i class="bk l">[</i><span class="n">protocol.md</span><span class="d"><i>//</i> the wire</span><i class="bk r">]</i></a>
+      <a class="fm2-l mono" href="https://github.com/nikolas-sapa/cinder/blob/main/docs/THREAT-MODEL.md"><i class="bk l">[</i><span class="n">threat-model.md</span><span class="d"><i>//</i> adversaries</span><i class="bk r">]</i></a>
+      <a class="fm2-l mono" href="https://github.com/nikolas-sapa/cinder/blob/main/docs/AGENT-API.md"><i class="bk l">[</i><span class="n">agent-api.md</span><span class="d"><i>//</i> the spec</span><i class="bk r">]</i></a>
     </nav>
 
     <nav class="fm2-col" aria-label="Repository">
       <h4 class="fm2-h mono"><i>┌─</i><b>repo</b><span class="rl"></span><i>┐</i></h4>
-      <a class="fm2-l mono" href="https://github.com/nikolas-sapa/cinder" rel="noopener"><span class="n">github</span><span class="d">// nikolas-sapa/cinder</span></a>
-      <a class="fm2-l mono" href="https://github.com/nikolas-sapa/cinder/issues" rel="noopener"><span class="n">issues</span><span class="d">// bug reports welcome</span></a>
-      <a class="fm2-l mono" href="https://github.com/nikolas-sapa/cinder/releases" rel="noopener"><span class="n">releases</span><span class="d">// cargo install</span></a>
+      <a class="fm2-l mono" href="https://github.com/nikolas-sapa/cinder" rel="noopener"><i class="bk l">[</i><span class="n">github</span><span class="d"><i>//</i> nikolas-sapa/cinder</span><i class="bk r">]</i></a>
+      <a class="fm2-l mono" href="https://github.com/nikolas-sapa/cinder/issues" rel="noopener"><i class="bk l">[</i><span class="n">issues</span><span class="d"><i>//</i> bug reports welcome</span><i class="bk r">]</i></a>
+      <a class="fm2-l mono" href="https://github.com/nikolas-sapa/cinder/releases" rel="noopener"><i class="bk l">[</i><span class="n">releases</span><span class="d"><i>//</i> cargo install</span><i class="bk r">]</i></a>
     </nav>
 
     <div class="fm2-col" aria-label="Status">
       <h4 class="fm2-h mono"><i>┌─</i><b>status</b><span class="rl"></span><i>┐</i></h4>
       <p class="fm2-s mono"><span class="k">version</span><span class="v hot">pre-1.0</span></p>
-      <p class="fm2-s mono"><span class="k">audit</span><span class="v bad">not externally audited</span></p>
+      <p class="fm2-s mono"><span class="k">audit</span><span class="v warn">not externally audited</span></p>
       <p class="fm2-s mono"><span class="k">license</span><span class="v">mit</span></p>
       <p class="fm2-s mono"><span class="k">loc</span><span class="v">~14k · rust</span></p>
     </div>
   </div>
 
-  <!-- 02 · dual-tone wordmark: faint bodies, ember core strokes, scan + flicker -->
+  <!-- 02 · wordmark v3: base glyphs identical to prod; .fm2-echo is a
+       JS-cloned hot layer band-masked by --sx (the signal sweep) -->
   <div class="fm2-mark">
     <span class="fc tl mono" aria-hidden="true">┌</span>
     <span class="fc tr mono" aria-hidden="true">┐</span>
@@ -1288,7 +1306,7 @@
       <div class="fm2-dith" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>
 
       <!-- rows are grid-padded to fixed widths with NBSP (U+00A0) at row ends;
-           verified by check_fm2_widths.py — every row in a letter equal, total = 86 cols -->
+           every row in a letter equal, total = 86 cols -->
       <div class="fm2-word" aria-hidden="true"><pre class="wL edge">░     
   ▓ ░ 
  · ░▒ 
@@ -1330,6 +1348,8 @@
 ░    ░
    ▒  
  ·░   </pre></div>
+      <div class="fm2-echo" id="echo" aria-hidden="true"></div>
+      <div class="fm2-scan" aria-hidden="true"></div>
     </div>
     <span class="fc bl mono" aria-hidden="true">└</span>
     <span class="fc br mono" aria-hidden="true">┘</span>
@@ -1352,27 +1372,33 @@
     </div>
   </div>
 
+  <!-- 04 · instrument readout: one line, hard truth + [ demo ] -->
   <div class="fm2-status">
     <div class="fm2-status-in">
-      <div class="grp">
-        <span class="led" aria-hidden="true"></span>
-        <span class="up">relay up</span>
+      <div class="grp" aria-label="instrument readout (demo)">
+        <i class="fm-led" aria-hidden="true">●</i>
+        <span class="it"><span class="k">ver</span> <span class="v hot">pre-1.0</span></span>
         <span class="sep">·</span>
-        <span>peer-id <span class="pid">9c1f…aa07</span></span>
+        <span class="it"><span class="k">audit</span> <span class="v warn">none</span></span>
+        <span class="sep">·</span>
+        <span class="it"><span class="k">loc</span> <span class="v">~14k</span></span>
+        <span class="sep">·</span>
+        <span class="it"><span class="k">relay</span> <span class="v">rly-02</span></span>
+        <span class="sep">·</span>
+        <span class="it"><span class="k">uptime</span> <span class="v" id="upt2">04:17:33</span></span>
+        <span class="demo">[ demo ]</span>
       </div>
       <div class="grp">
-        <span>pre-1.0</span><span class="sep">·</span><span>unaudited</span><span class="sep">·</span><span>mit</span><span class="sep">·</span><span>rust</span>
         <a class="keycap" href="#top">[ ↑ top ]</a>
         <span class="caret" aria-hidden="true"></span>
       </div>
     </div>
   </div>
 
-  <!-- 04 · bottom edge: ordered dust thinning to nothing — footer dissolves -->
+  <!-- 05 · bottom edge: ordered dust thinning to nothing — footer dissolves -->
   <div class="fm2-dissolve" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>
 </footer>
 
-<script>
 
 </body>
 </html>

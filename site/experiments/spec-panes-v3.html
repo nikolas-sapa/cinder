@@ -1,0 +1,868 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>cinder — spec panes v3</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600&family=Inter:wght@400;500&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+/* ================================================================
+   spec-panes v3 — all component CSS scoped under .sp3
+   ----------------------------------------------------------------
+   ---- PORT ----
+   Root:        prod `.sl` section  → this file `.sp3` (wraps whole
+                page for standalone; when porting, keep `.sl` and
+                transplant inner rules).
+   Same names:  .row .head .num .title .lead .map .chip(.h/.a) .x
+                .tgl .body .pair .pair--seam .side(.agent) .phead .pf
+                .pbridge .pbadge .pcap(.k/.d/.v) .spec(.k/.d/.v2)
+                .desc .foot .all .ledger .arch .sl-strip
+   Renames/new vs prod:
+     .body      gains two wrappers: `.body > .bodyin > .pad`
+                (.bodyin = min-height:0+overflow:hidden grid item,
+                .pad takes prod .body's padding). Needed so open/close
+                animates via grid-template-rows 0fr→1fr instead of
+                the `hidden` attr (display:none cannot transition).
+                Markup still emits `hidden`; JS clears it on init and
+                drives state by `.open` + aria-hidden.
+     .ln        NEW — every <pre> line wrapped in
+                `<span class="ln" [data-sync="k …"] [tabindex="0"]>`
+                (display:block). Literal newlines BETWEEN .ln spans
+                must be removed or whitespace-only text nodes render
+                as blank pre lines.
+     data-sync  NEW — space-separated sync keys; a key pairs all
+                .ln carrying it on BOTH panes of the same .pair.
+                Selector used: `.ln[data-sync~="key"]`.
+     .pcap .v   was `<span class="v">` → now
+                `<button class="v" data-flash="k …">` (chip).
+                Prod `.pcap` is aria-hidden="true" — drop it or the
+                chip is unreachable to AT/focus.
+     pre pad    prod `.side pre` padding-left 14px → 26px here
+                (houses the ▶ sync-marker gutter). .ln bleeds back
+                -18px so the highlight band covers the gutter.
+     JS classes .lit/.litf on sibling .side (pane reveal),
+                .on/.onf on paired .ln, .src/.srcf on hovered/
+                focused source .ln, .zap on chip-flashed .ln.
+   Prod JS delta: setRow() no longer writes body.hidden — it toggles
+   .open + aria-hidden + aria-expanded only; init clears the
+   markup `hidden` attr once.
+   ================================================================ */
+
+  :root{
+    --ground:#0B0B0D; --card:#12151A; --panel:#0E1013;
+    --ink:#E6E9EF; --muted:#8A919E; --faint:#565D68; --dim:#3A4049;
+    --ember:#FFB224; --ember-dim:#B87A18; --danger:#FF6B5E;
+    --line:rgba(255,255,255,.07);
+    --disp:'Space Grotesk',system-ui,sans-serif;
+    --body:'Inter',system-ui,sans-serif;
+    --mono:'JetBrains Mono',ui-monospace,monospace;
+  }
+  *{box-sizing:border-box;margin:0}
+  body{background:var(--ground)}
+
+  .sp3{min-height:100vh;display:flex;flex-direction:column;
+    color:var(--ink);font-family:var(--body);
+    font-size:14px;line-height:1.6;-webkit-font-smoothing:antialiased}
+  .sp3 .ph{padding:26px 32px;display:flex;justify-content:space-between;
+    align-items:baseline;border-bottom:1px solid var(--line);
+    font-family:var(--mono);font-size:13px}
+  .sp3 .ph .tag{color:var(--ember);font-weight:500}
+  .sp3 .ph .hint{color:var(--muted);font-size:11px;letter-spacing:.08em}
+  .sp3 .wrap{max-width:920px;margin:0 auto;padding:0 24px;width:100%}
+  .sp3 main{flex:1;padding-bottom:96px}
+
+  /* ============ section head ============ */
+  .sp3 .sl{padding:64px 0 8px}
+  .sp3 .sl-strip{display:flex;align-items:center;gap:14px;
+    font-family:var(--mono);font-size:10px;letter-spacing:.2em;
+    color:var(--faint);text-transform:uppercase;margin-bottom:20px}
+  .sp3 .sl-strip .tag2{color:var(--ember)}
+  .sp3 .sl-strip .rule{flex:1;border-top:1px dashed var(--line)}
+  .sp3 .sl-strip .meta{color:var(--dim);letter-spacing:.12em}
+  .sp3 .all{font-family:var(--mono);font-size:10px;letter-spacing:.14em;
+    color:var(--muted);background:var(--card);border:1px solid var(--line);
+    border-radius:4px;padding:0 12px;min-height:44px;cursor:pointer;
+    white-space:nowrap}
+  .sp3 .all:focus-visible{outline:2px solid var(--ember);outline-offset:2px}
+
+  .sp3 h2{font-family:var(--disp);font-weight:600;
+    font-size:clamp(30px,5vw,46px);line-height:1.08;
+    letter-spacing:-.02em;margin-bottom:14px}
+  .sp3 h2 em{font-style:normal;color:var(--ember)}
+  .sp3 .lede{color:var(--muted);max-width:66ch;font-size:14.5px;
+    line-height:1.65;margin-bottom:26px}
+  .sp3 .lede b{color:var(--ink);font-weight:500}
+  .sp3 .lede code{font-family:var(--mono);font-size:12.5px;color:var(--ink);
+    background:var(--card);border:1px solid var(--line);
+    border-radius:4px;padding:1px 6px}
+
+  /* ============ signal-path schematic ============ */
+  .sp3 .arch-grid{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);
+    gap:14px;margin-bottom:34px}
+  .sp3 .arch{border:1px solid var(--line);border-radius:8px;
+    background:var(--card);overflow:hidden}
+  .sp3 .arch figcaption{padding:9px 14px;border-bottom:1px solid var(--line);
+    background:var(--panel);font-family:var(--mono);font-size:9.5px;
+    letter-spacing:.18em;color:var(--faint);text-transform:uppercase;
+    display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap}
+  .sp3 .arch figcaption .rt{color:var(--dim);letter-spacing:.06em}
+  .sp3 .arch pre{margin:0;padding:16px 18px;overflow-x:auto;
+    font-family:var(--mono);font-size:clamp(8.5px,2.6vw,11.5px);
+    line-height:1.7;color:var(--faint)}
+  .sp3 .arch pre .u{color:var(--ink)}
+  .sp3 .arch pre .a{color:var(--ember)}
+  .sp3 .arch pre .w{color:var(--dim)}
+
+  /* ============ ledger ============ */
+  .sp3 .ledger{list-style:none;padding:0;border-top:1px solid var(--line)}
+  .sp3 .row{border-bottom:1px solid var(--line);position:relative}
+  .sp3 .row::before{content:"";position:absolute;left:0;top:0;bottom:0;
+    width:2px;background:var(--ember);transform:scaleY(0);
+    transform-origin:top}
+  .sp3 .row:hover::before,.sp3 .row.open::before{transform:scaleY(1)}
+
+  .sp3 .head{display:flex;align-items:center;gap:16px;width:100%;
+    min-height:60px;padding:14px 14px 14px 18px;background:none;
+    border:0;color:inherit;font:inherit;cursor:pointer;text-align:left;
+    -webkit-tap-highlight-color:transparent;touch-action:manipulation}
+  .sp3 .head:focus-visible{outline:2px solid var(--ember);outline-offset:2px;
+    border-radius:2px}
+  .sp3 .num{font-family:var(--mono);font-size:11px;color:var(--dim);
+    width:32px;flex:none}
+  .sp3 .row:hover .num,.sp3 .row.open .num{color:var(--ember)}
+  .sp3 .title{font-family:var(--mono);font-size:14.5px;font-weight:500;
+    color:var(--ink);letter-spacing:-.01em;white-space:nowrap}
+  .sp3 .lead{flex:1;height:1px;min-width:16px;
+    border-bottom:1px dotted var(--dim);transform:translateY(2px)}
+  .sp3 .map{display:flex;align-items:center;gap:8px;flex:none;
+    font-family:var(--mono);font-size:11px}
+  .sp3 .chip{padding:3px 9px;border:1px solid var(--line);border-radius:4px;
+    background:var(--card);color:var(--ink);white-space:nowrap}
+  .sp3 .chip.a{color:var(--ember);border-color:rgba(255,178,36,.28);
+    background:rgba(255,178,36,.06)}
+  .sp3 .x{color:var(--ember);font-size:12px}
+  .sp3 .tgl{font-family:var(--mono);font-size:11px;color:var(--faint);
+    border:1px solid var(--line);border-radius:4px;padding:4px 7px;
+    min-width:34px;text-align:center;flex:none}
+  .sp3 .tgl::before{content:"[+]"}
+  .sp3 .row.open .tgl::before{content:"[-]"}
+  .sp3 .row.open .tgl{color:var(--ember);border-color:rgba(255,178,36,.35)}
+
+  /* ============ expanded body — height-ease collapse ============
+     .body is a one-track grid; the track animates 0fr→1fr so the row
+     eases open by real height, not max-height guesswork. .bodyin is
+     the grid item that may shrink below its content (min-height:0 +
+     overflow:hidden). Closed state is visibility:hidden so panes and
+     chips can't be tabbed into while collapsed. */
+  .sp3 .body{display:grid;grid-template-rows:0fr;visibility:hidden}
+  .sp3 .row.open .body{grid-template-rows:1fr;visibility:visible}
+  .sp3 .bodyin{min-height:0;overflow:hidden}
+  .sp3 .pad{padding:6px 18px 26px 66px}
+
+  /* ---- panes at the seam ---- */
+  .sp3 .pair{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);
+    align-items:stretch;position:relative}
+  .sp3 .pair--seam{grid-template-columns:minmax(0,1fr) 0 minmax(0,1fr)}
+  .sp3 .pair--seam>.side:first-child{border-radius:8px 0 0 8px;
+    border-right:0}
+  .sp3 .pair--seam>.side.agent{border-radius:0 8px 8px 0}
+
+  .sp3 .side{display:flex;flex-direction:column;min-width:0;
+    border:1px solid var(--line);border-radius:8px;
+    background:var(--card);overflow:hidden}
+  .sp3 .phead{display:flex;align-items:center;gap:8px;padding:9px 13px;
+    border-bottom:1px solid var(--line);background:var(--panel);
+    font-family:var(--mono);font-size:9.5px;letter-spacing:.16em;
+    text-transform:uppercase;color:var(--faint)}
+  .sp3 .phead::before{content:"";width:7px;height:7px;border-radius:1px;
+    background:var(--dim);flex:none}
+  .sp3 .side.agent .phead::before{background:var(--ember)}
+  .sp3 .phead .pf{margin-left:auto;color:var(--dim);letter-spacing:.04em;
+    text-transform:none;white-space:nowrap}
+  .sp3 .side pre{margin:0;padding:14px 14px 14px 26px;overflow-x:auto;
+    white-space:pre;font-family:var(--mono);font-size:12.5px;
+    line-height:1.75;color:var(--muted);flex:1}
+  .sp3 .side pre .p{color:var(--ink)}            /* prompt / user text */
+  .sp3 .side pre .m{color:var(--ember)}          /* method / event names */
+  .sp3 .side pre .g{color:var(--ember)}          /* wire glyphs → ← */
+  .sp3 .side pre .c{color:var(--dim)}            /* # comments */
+  .sp3 .side pre .s{color:var(--ink)}            /* ids, values, sas */
+  .sp3 .side pre .v{color:var(--ink);font-weight:500} /* verified/trust */
+
+  /* ---- seam bridge / badge ---- */
+  .sp3 .pbridge{position:relative;z-index:2}
+  .sp3 .pbadge{position:absolute;top:50%;left:50%;
+    transform:translate(-50%,-50%);display:flex;align-items:center;
+    justify-content:center;width:30px;height:30px;border-radius:50%;
+    background:var(--panel);border:1px solid rgba(255,178,36,.45);
+    color:var(--ember);font-family:var(--mono);font-size:14px;
+    line-height:1;box-shadow:0 0 0 4px var(--card)}
+  /* seam energy — 2px ember glow ring on pane hover (static, safe
+     for reduced-motion) */
+  .sp3 .pair:hover .pbadge{border-color:var(--ember);
+    box-shadow:0 0 0 4px var(--card),0 0 0 6px rgba(255,178,36,.5),
+    0 0 16px rgba(255,178,36,.32)}
+
+  /* ---- pcap caption: .v is now a button chip ---- */
+  .sp3 .pcap{display:flex;align-items:center;gap:10px;
+    margin:10px 2px 0;font-family:var(--mono);font-size:9.5px;
+    letter-spacing:.15em;text-transform:uppercase;color:var(--faint)}
+  .sp3 .pcap .k{color:var(--ember)}
+  .sp3 .pcap .d{flex:1;height:1px;min-width:16px;
+    border-bottom:1px dotted var(--dim)}
+  .sp3 .pcap .v{font:inherit;letter-spacing:inherit;text-transform:inherit;
+    color:var(--muted);background:var(--card);border:1px solid var(--line);
+    border-radius:4px;padding:2px 8px;cursor:pointer;white-space:nowrap;
+    display:inline-flex;align-items:center;gap:6px}
+  .sp3 .pcap .v::after{content:"⇄";font-size:9px;color:var(--dim)}
+  .sp3 .pcap .v:hover{color:var(--ember);border-color:rgba(255,178,36,.4);
+    background:rgba(255,178,36,.05)}
+  .sp3 .pcap .v:hover::after{color:var(--ember)}
+  .sp3 .pcap .v:focus-visible{outline:2px solid var(--ember);
+    outline-offset:2px}
+  .sp3 .pcap .v:active{transform:translateY(1px)}
+
+  /* ---- sync pairing: lines + markers ----
+     .ln wraps every pre line (block). The ::before gutter marker is
+     inert (empty) until a state class appears:
+       .side.lit / .side.litf → sibling pane reveal: all paired lines
+                                get a faint ▶
+       .ln.on / .ln.onf       → the semantically-paired line(s): ember
+                                ▶ + glow + band highlight
+       .ln.src / .ln.srcf     → the hovered/focused source line
+       .ln.zap                → chip-triggered flash (pulse in MQ)   */
+  .sp3 .ln{display:block;position:relative;margin-left:-18px;
+    padding-left:18px;outline:none}
+  .sp3 .ln[data-sync]{cursor:default}
+  .sp3 .ln::before{content:"";position:absolute;left:3px;top:.34em;
+    width:10px;font-size:9px;line-height:1;color:var(--ember);
+    opacity:0;transform:translateX(-4px);pointer-events:none}
+  .sp3 .side.lit .ln[data-sync]::before,
+  .sp3 .side.litf .ln[data-sync]::before{content:"▶";opacity:.3;
+    transform:none}
+  .sp3 .ln.src,.sp3 .ln.srcf{background:rgba(255,255,255,.04)}
+  .sp3 .ln.on,.sp3 .ln.onf,.sp3 .ln.zap{
+    background:linear-gradient(90deg,rgba(255,178,36,.11),
+    rgba(255,178,36,.02) 78%);
+    box-shadow:inset 1px 0 0 rgba(255,178,36,.55)}
+  .sp3 .ln.on::before,.sp3 .ln.onf::before,.sp3 .ln.zap::before{
+    content:"▶";opacity:1;transform:none;
+    text-shadow:0 0 7px rgba(255,178,36,.8)}
+  .sp3 .ln[data-sync]:focus-visible{
+    outline:1px dashed rgba(255,178,36,.5);outline-offset:-1px}
+
+  /* spec plate */
+  .sp3 .spec{list-style:none;margin:22px 0 0;padding:12px 16px;
+    border:1px dashed var(--line);border-radius:6px}
+  .sp3 .spec li{display:flex;align-items:baseline;gap:10px;
+    padding:4px 0;font-family:var(--mono);font-size:11.5px}
+  .sp3 .spec .k{color:var(--faint);flex:none;min-width:76px;
+    text-transform:uppercase;letter-spacing:.1em;font-size:10px}
+  .sp3 .spec .d{flex:1;min-width:14px;height:1px;
+    border-bottom:1px dotted var(--dim)}
+  .sp3 .spec .v2{color:var(--muted);text-align:right;white-space:nowrap}
+  .sp3 .desc{margin:16px 4px 0;color:var(--muted);font-size:13.5px;
+    line-height:1.65;max-width:74ch}
+  .sp3 .desc b{color:var(--ink);font-weight:500}
+  .sp3 .desc code{font-family:var(--mono);font-size:12px;color:var(--ink)}
+
+  .sp3 .foot{display:flex;align-items:center;gap:14px;margin-top:30px;
+    font-family:var(--mono);font-size:9.5px;letter-spacing:.16em;
+    color:var(--dim);text-transform:uppercase}
+  .sp3 .foot .rule{flex:1;border-top:1px dashed var(--line)}
+  .sp3 .foot .ok{color:var(--ember)}
+
+  /* ============ mobile ============ */
+  @media (max-width:700px){
+    .sp3 .head{flex-wrap:wrap;row-gap:10px;min-height:56px}
+    .sp3 .lead{display:none}
+    .sp3 .tgl{margin-left:auto}
+    .sp3 .map{order:3;flex-basis:100%;padding-left:48px}
+    .sp3 .pad{padding:6px 16px 24px 16px}
+    .sp3 .arch-grid{grid-template-columns:1fr}
+    .sp3 .pair,.sp3 .pair--seam{grid-template-columns:minmax(0,1fr)}
+    .sp3 .pair--seam>.side:first-child{border-radius:8px 8px 0 0;
+      border-right:1px solid var(--line);border-bottom:0}
+    .sp3 .pair--seam>.side.agent{border-radius:0 0 8px 8px}
+    .sp3 .pbridge{height:0;width:auto}
+    .sp3 .pcap{flex-wrap:wrap;row-gap:8px}
+    .sp3 .pcap .v{white-space:normal}
+    .sp3 .side pre{font-size:11px}
+    .sp3 .spec .v2{white-space:normal}
+  }
+  @media (max-width:460px){
+    .sp3 .chip{font-size:10px;padding:2px 6px}
+    .sp3 .map{padding-left:0}
+    .sp3 .spec .k{min-width:60px}
+  }
+
+  /* ============ motion — only when allowed ============
+     Everything below is inert under prefers-reduced-motion: rows
+     snap open, no pulse, no slide, no zap flash animation. */
+  @media (prefers-reduced-motion:no-preference){
+    .sp3 .row::before{transition:transform .28s cubic-bezier(.2,.7,.2,1)}
+    .sp3 .num{transition:color .2s}
+    .sp3 .tgl{transition:color .2s,border-color .2s}
+    .sp3 .head{transition:background .2s}
+    .sp3 .head:hover{background:linear-gradient(90deg,
+      rgba(255,178,36,.05),transparent 55%)}
+    .sp3 .all{transition:color .2s,border-color .2s}
+    .sp3 .all:hover{color:var(--ember);border-color:rgba(255,178,36,.35)}
+
+    /* row-open: height ease via grid track; visibility flips after
+     the collapse on close, immediately on open */
+    .sp3 .body{transition:grid-template-rows .4s
+      cubic-bezier(.32,.72,.24,1),visibility 0s linear .4s}
+    .sp3 .row.open .body{transition:grid-template-rows .4s
+      cubic-bezier(.32,.72,.24,1),visibility 0s}
+
+    /* panes slide toward each other from 12px offset, meet at seam */
+    .sp3 .pair--seam>.side{transition:transform .48s
+      cubic-bezier(.22,.9,.26,1) .05s}
+    .sp3 .pair--seam>.side:first-child{transform:translateX(-12px)}
+    .sp3 .pair--seam>.side.agent{transform:translateX(12px)}
+    .sp3 .row.open .pair--seam>.side{transform:translateX(0)}
+    @media (max-width:700px){
+      /* stacked panes slide to the horizontal seam instead */
+      .sp3 .pair--seam>.side:first-child{transform:translateY(-12px)}
+      .sp3 .pair--seam>.side.agent{transform:translateY(12px)}
+      .sp3 .row.open .pair--seam>.side{transform:translateY(0)}
+    }
+
+    /* seam energy: ⇄ breathes while the row is open */
+    .sp3 .pbadge{transition:box-shadow .2s,border-color .2s}
+    .sp3 .row.open .pbadge{animation:sp3pulse 2.8s ease-in-out infinite}
+    .sp3 .row.open .pair:hover .pbadge{animation:none;
+      border-color:var(--ember);
+      box-shadow:0 0 0 4px var(--card),0 0 0 6px rgba(255,178,36,.55),
+      0 0 16px rgba(255,178,36,.35)}
+    @keyframes sp3pulse{
+      0%,100%{box-shadow:0 0 0 4px var(--card);
+        border-color:rgba(255,178,36,.45)}
+      50%{box-shadow:0 0 0 4px var(--card),0 0 13px 2px
+        rgba(255,178,36,.28);border-color:rgba(255,178,36,.85)}}
+
+    /* sync markers + bands ease in */
+    .sp3 .ln{transition:background .15s ease}
+    .sp3 .ln::before{transition:opacity .15s ease,transform .15s ease}
+    .sp3 .ln[data-sync]:hover{background:rgba(255,255,255,.03)}
+    .sp3 .ln.zap{animation:sp3zap 1.4s ease-out}
+    @keyframes sp3zap{
+      0%,60%,100%{background:linear-gradient(90deg,
+        rgba(255,178,36,.11),rgba(255,178,36,.02) 78%)}
+      30%,80%{background:linear-gradient(90deg,
+        rgba(255,178,36,.22),rgba(255,178,36,.05) 78%)}}
+    .sp3 .pcap .v{transition:color .15s,border-color .15s,
+      background .15s}
+  }
+</style>
+</head>
+<body>
+<div class="sp3">
+<header class="ph">
+  <span class="tag">cinder</span>
+  <span class="hint">experiments / spec-panes v3</span>
+</header>
+<main class="wrap">
+
+<section class="sl" aria-labelledby="sl-h">
+  <div class="sl-strip">
+    <span class="tag2">02 — specification</span>
+    <span class="rule" aria-hidden="true"></span>
+    <span class="meta">ledger · 07 entries · hover a pane · click a chip</span>
+    <button class="all" id="allBtn" type="button" aria-pressed="false"
+      aria-label="expand all ledger entries">[+] all</button>
+  </div>
+
+  <h2 id="sl-h">one protocol, <em>two kinds of user</em></h2>
+  <p class="lede">Every capability below is <b>one typed JSON-RPC 2.0 method</b>.
+    The left pane is what the human sees in the TUI; the right pane is what the
+    machine sees — agent, wire, or relay. Open a row, then hover either pane:
+    the semantically paired lines light up across the seam. The caption chips
+    flash the matching wire lines in the agent pane.</p>
+
+  <div class="arch-grid">
+    <figure class="arch">
+      <figcaption>
+        <span>signal path · calls</span>
+        <span class="rt">verified</span>
+      </figcaption>
+<pre class="schematic" aria-hidden="true"><span class="w">          ┌───────────┐                ┌─────────────┐</span>
+<span class="u">human </span><span class="w">───▶│</span><span class="u">cinder tui </span><span class="w">│─</span><span class="a">unix·peer-cred</span><span class="w">▶│</span><span class="u">cinder daemon</span><span class="w">│</span>
+<span class="w">          └───────────┘                │             │</span>
+<span class="w"> </span><span class="a">stdio·ndjson</span><span class="w">                          │</span><span class="u"> json-rpc 2.0</span><span class="w">│</span>
+<span class="w">          ┌───────────┐                │</span><span class="u">     bus     </span><span class="w">│</span>
+<span class="u">agent </span><span class="w">───▶│</span><span class="u">cinder rpc </span><span class="w">│─</span><span class="a">unix·peer-cred</span><span class="w">▶│             │</span>
+<span class="w">          └───────────┘                └─────────────┘</span></pre>
+    </figure>
+
+    <figure class="arch">
+      <figcaption>
+        <span>event flow · push, no poll</span>
+        <span class="rt">verified</span>
+      </figcaption>
+<pre class="schematic" aria-hidden="true"><span class="w">┌─────────────┐                  ┌───────────┐</span>
+<span class="w">│             │</span><span class="a"> msg_state </span><span class="w">──────▶│           │</span>
+<span class="w">│</span><span class="u">cinder daemon</span><span class="w">│</span><span class="a"> ident.changed </span><span class="w">──▶│</span><span class="u"> tui + rpc </span><span class="w">│</span>
+<span class="w">│             │</span><span class="a"> net.status </span><span class="w">─────▶│           │</span>
+<span class="w">└─────────────┘</span><span class="a">  14 event kinds  </span><span class="w">└───────────┘</span></pre>
+    </figure>
+  </div>
+
+  <ol class="ledger">
+
+<!-- ─────────── 01 · agent-first json-rpc ─────────── -->
+    <li class="row">
+      <button class="head" type="button" aria-expanded="false" aria-controls="b1">
+        <span class="num">01</span>
+        <span class="title">agent-first json-rpc</span>
+        <span class="lead" aria-hidden="true"></span>
+        <span class="map">
+          <span class="chip h">type + ↵</span><span class="x" aria-hidden="true">⇄</span><span class="chip a">msg.send</span>
+        </span>
+        <span class="tgl" aria-hidden="true"></span>
+      </button>
+      <div class="body" id="b1" role="region" aria-label="agent-first json-rpc — both surfaces" aria-hidden="true" hidden>
+        <div class="bodyin"><div class="pad">
+        <div class="pair pair--seam">
+          <div class="side">
+            <div class="phead">human · tui<span class="pf">input bar</span></div>
+<pre><span class="ln" data-sync="snd" tabindex="0"><span class="p">&gt; meet at the old port, 0400</span></span><span class="ln" data-sync="ack dup" tabindex="0"><span class="p">~ sent: eidolon          … → ✓ → ✓✓</span></span></pre>
+          </div>
+          <div class="pbridge" aria-hidden="true"><span class="pbadge">⇄</span></div>
+          <div class="side agent">
+            <div class="phead">agent · json-rpc<span class="pf">ndjson</span></div>
+<pre><span class="ln" data-sync="snd" tabindex="0"><span class="g">→</span> {"id":10,"method":"<span class="m">msg.send</span>",</span><span class="ln" data-sync="snd">   "params":{"to":"contact:9f3b12",</span><span class="ln" data-sync="snd">   "body":"<span class="s">meet at the old port, 0400</span>",</span><span class="ln" data-sync="snd">   "client_msg_id":"<span class="s">agent-0001</span>"}}</span><span class="ln" data-sync="ack" tabindex="0"><span class="g">←</span> {"id":10,"result":{</span><span class="ln" data-sync="ack">   "msg_id":"<span class="s">msg:e01d7c</span>",</span><span class="ln" data-sync="ack">   "state":"queued","deduped":false}}</span><span class="ln" data-sync="dup" tabindex="0"><span class="g">→</span> {"id":11,…retry same client_msg_id}</span><span class="ln" data-sync="dup"><span class="g">←</span> {"id":11,"result":{</span><span class="ln" data-sync="dup">   "msg_id":"<span class="s">msg:e01d7c</span>",</span><span class="ln" data-sync="dup">   "state":"queued","<span class="s">deduped":true</span>}}</span></pre>
+          </div>
+        </div>
+          <div class="pcap"><span class="k">same call</span><span class="d"></span><button class="v" type="button" data-flash="snd ack" aria-label="flash the msg.send wire lines">msg.send</button></div>
+        <ul class="spec">
+          <li><span class="k">stdio</span><span class="d"></span><span class="v2">cinder rpc · newline-delimited json</span></li>
+          <li><span class="k">daemon</span><span class="d"></span><span class="v2">unix socket · peer-cred auth</span></li>
+          <li><span class="k">surface</span><span class="d"></span><span class="v2">35 methods · 14 events</span></li>
+          <li><span class="k">schema</span><span class="d"></span><span class="v2">self-describing · rpc.describe</span></li>
+          <li><span class="k">sends</span><span class="d"></span><span class="v2">idempotent · client_msg_id</span></li>
+        </ul>
+        <p class="desc">Every TUI capability is a typed JSON-RPC 2.0 method —
+          <code>cinder rpc</code> frames ndjson on stdio, <code>cinder daemon</code>
+          serves the same calls to concurrent clients over a peer-cred unix
+          socket. Retry a <code>client_msg_id</code>, get the same
+          <code>msg_id</code> back with <code>deduped:true</code>.</p>
+        </div></div>
+      </div>
+    </li>
+
+<!-- ─────────── 02 · real noise ─────────── -->
+    <li class="row">
+      <button class="head" type="button" aria-expanded="false" aria-controls="b2">
+        <span class="num">02</span>
+        <span class="title">real noise, no ceremony</span>
+        <span class="lead" aria-hidden="true"></span>
+        <span class="map">
+          <span class="chip h">/status</span><span class="x" aria-hidden="true">⇄</span><span class="chip a">xx: e,ee,s,es</span>
+        </span>
+        <span class="tgl" aria-hidden="true"></span>
+      </button>
+      <div class="body" id="b2" role="region" aria-label="real noise — both surfaces" aria-hidden="true" hidden>
+        <div class="bodyin"><div class="pad">
+        <div class="pair pair--seam">
+          <div class="side">
+            <div class="phead">human · tui<span class="pf">status line</span></div>
+<pre><span class="ln" data-sync="hs" tabindex="0"><span class="p">&gt; /status</span></span><span class="ln" data-sync="lk" tabindex="0">~ link up · peer <span class="s">oyv4kqz3n5m2…</span></span><span class="ln" data-sync="pat" tabindex="0">~ <span class="s">Noise_XX_25519_ChaChaPoly_BLAKE2s</span></span><span class="ln" data-sync="tp" tabindex="0">~ mutual auth · fs · no tls</span></pre>
+          </div>
+          <div class="pbridge" aria-hidden="true"><span class="pbadge">⇄</span></div>
+          <div class="side agent">
+            <div class="phead">wire · noise transcript<span class="pf">xx</span></div>
+<pre><span class="ln" data-sync="hs" tabindex="0"><span class="c">── handshake · frames ≤ 4096 B ──</span></span><span class="ln" data-sync="hs"><span class="g">→</span> <span class="m">Msg1</span>   e</span><span class="ln" data-sync="hs pat"><span class="g">←</span> <span class="m">Msg2</span>   e, ee, s, es   <span class="c">· s sealed</span></span><span class="ln" data-sync="hs pat"><span class="g">→</span> <span class="m">Msg3</span>   s, se          <span class="c">· s sealed</span></span><span class="ln" data-sync="lk tp" tabindex="0"><span class="c">── transport ─────────────────────</span></span><span class="ln" data-sync="lk tp">~ all frames opaque · ≤ 8210 B</span><span class="ln" data-sync="tp" tabindex="0">~ rekey every 1024 msgs</span></pre>
+          </div>
+        </div>
+          <div class="pcap"><span class="k">same wire</span><span class="d"></span><button class="v" type="button" data-flash="hs" aria-label="flash the Noise XX transcript lines">xx: e,ee,s,es</button></div>
+        <ul class="spec">
+          <li><span class="k">pattern</span><span class="d"></span><span class="v2">Noise_XX_25519_ChaChaPoly_BLAKE2s</span></li>
+          <li><span class="k">impl</span><span class="d"></span><span class="v2">snow</span></li>
+          <li><span class="k">keys</span><span class="d"></span><span class="v2">mutual auth · fs · statics sealed</span></li>
+          <li><span class="k">transport</span><span class="d"></span><span class="v2">no tls · zeroized on drop</span></li>
+        </ul>
+        <p class="desc">Sessions run <b>Noise_XX_25519_ChaChaPoly_BLAKE2s</b> via
+          snow: mutual authentication, forward secrecy, and static keys that
+          are encrypted on the wire — the Msg2/Msg3 transcript above is the
+          whole ceremony. No TLS anywhere.</p>
+        </div></div>
+      </div>
+    </li>
+
+<!-- ─────────── 03 · blind relay ─────────── -->
+    <li class="row">
+      <button class="head" type="button" aria-expanded="false" aria-controls="b3">
+        <span class="num">03</span>
+        <span class="title">blind relay</span>
+        <span class="lead" aria-hidden="true"></span>
+        <span class="map">
+          <span class="chip h">peer-id route</span><span class="x" aria-hidden="true">⇄</span><span class="chip a">Msg{opaque}</span>
+        </span>
+        <span class="tgl" aria-hidden="true"></span>
+      </button>
+      <div class="body" id="b3" role="region" aria-label="blind relay — both surfaces" aria-hidden="true" hidden>
+        <div class="bodyin"><div class="pad">
+        <div class="pair pair--seam">
+          <div class="side">
+            <div class="phead">human · tui<span class="pf">status line</span></div>
+<pre><span class="ln">~ relay connected · :7700</span><span class="ln" data-sync="rt" tabindex="0">~ route: by <span class="s">peer-id</span> only</span><span class="ln" data-sync="bl" tabindex="0">~ relay holds ciphertext +</span><span class="ln" data-sync="bl">  token hashes — nothing else</span></pre>
+          </div>
+          <div class="pbridge" aria-hidden="true"><span class="pbadge">⇄</span></div>
+          <div class="side agent">
+            <div class="phead">relay · all it sees<span class="pf">opaque</span></div>
+<pre><span class="ln" data-sync="rt" tabindex="0"><span class="m">Msg</span>{to:<span class="s">peer:oyv4kq…</span>,</span><span class="ln" data-sync="rt">    body:&lt;<span class="s">opaque ≤8210B</span>&gt;}</span><span class="ln" data-sync="bl" tabindex="0"><span class="m">MailboxOpen</span>{id:&lt;<span class="s">256-bit</span>&gt;,</span><span class="ln" data-sync="bl">    h_deposit:<span class="s">SHA-256(token)</span>}</span><span class="ln" data-sync="bl"><span class="c"># raw tokens never transit</span></span><span class="ln" data-sync="bl"><span class="c"># from: claimed, unverified</span></span></pre>
+          </div>
+        </div>
+          <div class="pcap"><span class="k">blind</span><span class="d"></span><button class="v" type="button" data-flash="rt" aria-label="flash the opaque relay frame lines">Msg{opaque}</button></div>
+        <ul class="spec">
+          <li><span class="k">routes</span><span class="d"></span><span class="v2">opaque frames · by peer-id</span></li>
+          <li><span class="k">holds</span><span class="d"></span><span class="v2">token hashes only · no keys</span></li>
+          <li><span class="k">proof</span><span class="d"></span><span class="v2">relay-blindness integration test</span></li>
+          <li><span class="k">caps</span><span class="d"></span><span class="v2">4096 mbx · 2048 inv · 2048 conns</span></li>
+        </ul>
+        <p class="desc">The relay routes <b>opaque ciphertext by peer-id</b> and
+          stores SHA-256 token hashes — it can't read, can't forge, can't MITM
+          a pinned contact. Blindness is asserted by an integration test, not
+          promised in a policy.</p>
+        </div></div>
+      </div>
+    </li>
+
+<!-- ─────────── 04 · accountless identity ─────────── -->
+    <li class="row">
+      <button class="head" type="button" aria-expanded="false" aria-controls="b4">
+        <span class="num">04</span>
+        <span class="title">accountless identity</span>
+        <span class="lead" aria-hidden="true"></span>
+        <span class="map">
+          <span class="chip h">peer:oyv4kq…</span><span class="x" aria-hidden="true">⇄</span><span class="chip a">session.hello</span>
+        </span>
+        <span class="tgl" aria-hidden="true"></span>
+      </button>
+      <div class="body" id="b4" role="region" aria-label="accountless identity — both surfaces" aria-hidden="true" hidden>
+        <div class="bodyin"><div class="pad">
+        <div class="pair pair--seam">
+          <div class="side">
+            <div class="phead">human · tui<span class="pf">first run</span></div>
+<pre><span class="ln" data-sync="hi" tabindex="0">~ no signup · no email · no phone</span><span class="ln" data-sync="pid" tabindex="0">~ you are <span class="s">peer:oyv4kqz3n5m2…</span></span><span class="ln">~ x25519 key · os keyring</span><span class="ln">~ fallback: age-encrypted file</span></pre>
+          </div>
+          <div class="pbridge" aria-hidden="true"><span class="pbadge">⇄</span></div>
+          <div class="side agent">
+            <div class="phead">agent · json-rpc<span class="pf">hello</span></div>
+<pre><span class="ln" data-sync="hi" tabindex="0"><span class="g">→</span> {"id":1,"method":"<span class="m">session.hello</span>",</span><span class="ln" data-sync="hi">   "params":{"protocol_version":[1],</span><span class="ln" data-sync="hi">   "client":{"name":"my-agent"}}}</span><span class="ln" data-sync="pid" tabindex="0"><span class="g">←</span> {"id":1,"result":{"account":{</span><span class="ln" data-sync="pid">   "peer_id":"<span class="s">peer:oyv4kqz3n5m2…</span>"},</span><span class="ln" data-sync="pid">   "auth_method":"peer_uid"}}</span></pre>
+          </div>
+        </div>
+          <div class="pcap"><span class="k">same id</span><span class="d"></span><button class="v" type="button" data-flash="hi" aria-label="flash the session.hello wire lines">session.hello</button></div>
+        <ul class="spec">
+          <li><span class="k">keypair</span><span class="d"></span><span class="v2">x25519</span></li>
+          <li><span class="k">peer-id</span><span class="d"></span><span class="v2">sha-256(pubkey)</span></li>
+          <li><span class="k">signup</span><span class="d"></span><span class="v2">no email · phone · path exists</span></li>
+          <li><span class="k">storage</span><span class="d"></span><span class="v2">os keyring · age-encrypted fallback</span></li>
+        </ul>
+        <p class="desc">Identity is an <b>X25519 keypair</b>; your peer-id is
+          <code>SHA-256(pubkey)</code>. No email, no phone, no signup — there is
+          no registration path at all. Keys live in the OS keyring with an
+          age-encrypted fallback.</p>
+        </div></div>
+      </div>
+    </li>
+
+<!-- ─────────── 05 · sas verification ─────────── -->
+    <li class="row">
+      <button class="head" type="button" aria-expanded="false" aria-controls="b5">
+        <span class="num">05</span>
+        <span class="title">sas verification</span>
+        <span class="lead" aria-hidden="true"></span>
+        <span class="map">
+          <span class="chip h">/verify</span><span class="x" aria-hidden="true">⇄</span><span class="chip a">ident.verify</span>
+        </span>
+        <span class="tgl" aria-hidden="true"></span>
+      </button>
+      <div class="body" id="b5" role="region" aria-label="sas verification — both surfaces" aria-hidden="true" hidden>
+        <div class="bodyin"><div class="pad">
+        <div class="pair pair--seam">
+          <div class="side">
+            <div class="phead">human · tui<span class="pf">/finger</span></div>
+<pre><span class="ln" data-sync="fin" tabindex="0"><span class="p">&gt; /finger</span></span><span class="ln" data-sync="fin">  eidolon · peer:<span class="s">oyv4kq…</span></span><span class="ln" data-sync="fin">  trust ○ unverified</span><span class="ln" data-sync="fin">  sas   <span class="s">44-19-07-82-56</span></span><span class="ln" data-sync="ver" tabindex="0"><span class="p">&gt; /verify 44-19-07-82-56</span></span><span class="ln" data-sync="ok" tabindex="0">~ trust <span class="v">● verified</span></span><span class="ln" data-sync="ok">~ key change ⇒ <span class="v">✕</span> · sends blocked</span></pre>
+          </div>
+          <div class="pbridge" aria-hidden="true"><span class="pbadge">⇄</span></div>
+          <div class="side agent">
+            <div class="phead">agent · json-rpc<span class="pf">verify</span></div>
+<pre><span class="ln" data-sync="fin" tabindex="0"><span class="g">←</span> event <span class="m">security.identity_changed</span></span><span class="ln" data-sync="fin">   {"contact_id":"contact:9f3b12",</span><span class="ln" data-sync="fin">    "trust":"<span class="s">key_changed</span>"}</span><span class="ln" data-sync="ver" tabindex="0"><span class="g">→</span> {"id":36,"method":"<span class="m">ident.verify</span>",</span><span class="ln" data-sync="ver">   "params":{"contact_id":</span><span class="ln" data-sync="ver">     "contact:9f3b12",</span><span class="ln" data-sync="ver">     "sas":"<span class="s">44-19-07-82-56</span>"}}</span><span class="ln" data-sync="ok" tabindex="0"><span class="g">←</span> {"id":36,"result":{</span><span class="ln" data-sync="ok">   "trust":"<span class="v">verified</span>"}}</span></pre>
+          </div>
+        </div>
+          <div class="pcap"><span class="k">same sas</span><span class="d"></span><button class="v" type="button" data-flash="ver" aria-label="flash the ident.verify wire lines">ident.verify</button></div>
+        <ul class="spec">
+          <li><span class="k">render</span><span class="d"></span><span class="v2">7 emoji · digit fallback (160-bit)</span></li>
+          <li><span class="k">binding</span><span class="d"></span><span class="v2">handshake hash + both statics, sorted</span></li>
+          <li><span class="k">key change</span><span class="d"></span><span class="v2">sends blocked until re-verify</span></li>
+          <li><span class="k">clears</span><span class="d"></span><span class="v2">ident.verify only</span></li>
+        </ul>
+        <p class="desc">SAS renders as <b>7 emoji or a digit string</b> bound to
+          the handshake hash and both static keys — compare it out-of-band
+          (digits carry 160 bits, the strong check). On any key change, sends
+          block loudly until <code>ident.verify</code> clears it. Never a
+          silent rebind.</p>
+        </div></div>
+      </div>
+    </li>
+
+<!-- ─────────── 06 · one-time links ─────────── -->
+    <li class="row">
+      <button class="head" type="button" aria-expanded="false" aria-controls="b6">
+        <span class="num">06</span>
+        <span class="title">one-time links</span>
+        <span class="lead" aria-hidden="true"></span>
+        <span class="map">
+          <span class="chip h">cinder id</span><span class="x" aria-hidden="true">⇄</span><span class="chip a">invite.create</span>
+        </span>
+        <span class="tgl" aria-hidden="true"></span>
+      </button>
+      <div class="body" id="b6" role="region" aria-label="one-time links — both surfaces" aria-hidden="true" hidden>
+        <div class="bodyin"><div class="pad">
+        <div class="pair pair--seam">
+          <div class="side">
+            <div class="phead">human · shell<span class="pf">mint</span></div>
+<pre><span class="ln" data-sync="mk" tabindex="0"><span class="p">$ cinder id</span></span><span class="ln" data-sync="lnk" tabindex="0">~ link <span class="s">cinder://oyv4kq…@relay…</span></span><span class="ln" data-sync="lnk">~   ?rendezvous=<span class="s">tok_m41x</span></span><span class="ln" data-sync="burn" tabindex="0">~ single-use · burns on consume</span></pre>
+          </div>
+          <div class="pbridge" aria-hidden="true"><span class="pbadge">⇄</span></div>
+          <div class="side agent">
+            <div class="phead">agent · json-rpc<span class="pf">invite</span></div>
+<pre><span class="ln" data-sync="mk" tabindex="0"><span class="g">→</span> {"id":34,"method":"<span class="m">invite.create</span>",</span><span class="ln" data-sync="mk">   "params":{"label":"ops-agent",</span><span class="ln" data-sync="mk">             "ttl_sec":86400}}</span><span class="ln" data-sync="lnk" tabindex="0"><span class="g">←</span> {"id":34,"result":{"link":</span><span class="ln" data-sync="lnk">   "<span class="s">cinder://oyv4kq…@relay…</span></span><span class="ln" data-sync="lnk">    <span class="s">?rendezvous=tok_m41x</span>"}}</span><span class="ln" data-sync="burn" tabindex="0"><span class="c"># replay ⇒ -32018 conflict</span></span></pre>
+          </div>
+        </div>
+          <div class="pcap"><span class="k">one slot</span><span class="d"></span><button class="v" type="button" data-flash="mk lnk" aria-label="flash the invite.create wire lines">invite.create</button></div>
+        <ul class="spec">
+          <li><span class="k">format</span><span class="d"></span><span class="v2">cinder://&lt;pubkey&gt;@&lt;relay&gt;</span></li>
+          <li><span class="k">token</span><span class="d"></span><span class="v2">?rendezvous=&lt;token&gt;</span></li>
+          <li><span class="k">slot</span><span class="d"></span><span class="v2">single-use · ticket burns on consume</span></li>
+          <li><span class="k">replay</span><span class="d"></span><span class="v2">-32018 conflict · rejected</span></li>
+        </ul>
+        <p class="desc">
+          <code>cinder://&lt;pubkey&gt;@&lt;relay&gt;?rendezvous=&lt;token&gt;</code>
+          claims a <b>single rendezvous slot</b> — the ticket burns on consume.
+          An intercepted link can't be replayed, and a copied pubkey alone
+          can't reach you.</p>
+        </div></div>
+      </div>
+    </li>
+
+<!-- ─────────── 07 · offline mailboxes ─────────── -->
+    <li class="row">
+      <button class="head" type="button" aria-expanded="false" aria-controls="b7">
+        <span class="num">07</span>
+        <span class="title">offline mailboxes</span>
+        <span class="lead" aria-hidden="true"></span>
+        <span class="map">
+          <span class="chip h">… → ✓ parked</span><span class="x" aria-hidden="true">⇄</span><span class="chip a">msg_state</span>
+        </span>
+        <span class="tgl" aria-hidden="true"></span>
+      </button>
+      <div class="body" id="b7" role="region" aria-label="offline mailboxes — both surfaces" aria-hidden="true" hidden>
+        <div class="bodyin"><div class="pad">
+        <div class="pair pair--seam">
+          <div class="side">
+            <div class="phead">human · tui<span class="pf">send glyphs</span></div>
+<pre><span class="ln" data-sync="q" tabindex="0"><span class="p">&gt; see you at 0400</span></span><span class="ln" data-sync="park" tabindex="0">~ peer offline            … → <span class="s">✓</span></span><span class="ln" data-sync="mbx" tabindex="0">~ ✓ = parked in peer's mailbox</span><span class="ln" data-sync="dlv" tabindex="0">~ peer fetched · ack       → <span class="v">✓✓</span></span></pre>
+          </div>
+          <div class="pbridge" aria-hidden="true"><span class="pbadge">⇄</span></div>
+          <div class="side agent">
+            <div class="phead">agent · json-rpc<span class="pf">events</span></div>
+<pre><span class="ln" data-sync="q" tabindex="0"><span class="g">→</span> {"id":10,"method":"<span class="m">msg.send</span>",</span><span class="ln" data-sync="q">   "params":{"to":"contact:9f3b12",…}}</span><span class="ln" data-sync="park" tabindex="0"><span class="g">←</span> {"id":10,"result":{"state":"queued"}}</span><span class="ln" data-sync="dlv" tabindex="0"><span class="g">←</span> event <span class="m">msg_state</span> {"msg_id":</span><span class="ln" data-sync="dlv">   "<span class="s">msg:e01d7c</span>","state":"<span class="v">delivered</span>"}</span><span class="ln" data-sync="mbx" tabindex="0"><span class="c"># mailbox: deposit+fetch need caps</span></span></pre>
+          </div>
+        </div>
+          <div class="pcap"><span class="k">same event</span><span class="d"></span><button class="v" type="button" data-flash="dlv" aria-label="flash the msg_state event lines">msg_state</button></div>
+        <ul class="spec">
+          <li><span class="k">offline</span><span class="d"></span><span class="v2">relay mailbox · per-peer caps</span></li>
+          <li><span class="k">fetch</span><span class="d"></span><span class="v2">mailbox.open · mailbox.fetch</span></li>
+          <li><span class="k">states</span><span class="d"></span><span class="v2">queued → delivered · msg_state events</span></li>
+          <li><span class="k">caps</span><span class="d"></span><span class="v2">4096 mbx · 30-day ttl</span></li>
+        </ul>
+        <p class="desc">Offline peers don't drop messages: the relay parks
+          ciphertext in a <b>per-peer mailbox</b> the recipient drains on
+          reconnect. Send glyphs track it — <code>✓</code> parked,
+          <code>✓✓</code> fetched and acked — mirroring the
+          <code>msg_state</code> event the agent sees.</p>
+        </div></div>
+      </div>
+    </li>
+
+  </ol>
+
+  <div class="foot">
+    <span class="ok">⇄ synced panes</span>
+    <span class="rule" aria-hidden="true"></span>
+    <span>07/07 · spec-panes v3</span>
+  </div>
+</section>
+
+</main>
+</div>
+
+<script>
+/* ================================================================
+   spec-panes v3 — IIFE, ES5 to match prod main.js
+   ---- PORT ----
+   Replaces the "spec ledger v2" IIFE in main.js.
+   API surface identical: .head button toggles .open on li.row,
+   aria-expanded/aria-controls preserved, exclusive-open (opening a
+   row closes siblings + resets #allBtn), #allBtn expand/collapse all.
+   Deltas vs prod:
+     - setRow() writes aria-hidden on .body instead of body.hidden;
+       init clears the markup `hidden` attr once (CSS grid-rows owns
+       the collapse so it can transition).
+     - sync pairing block: pointerover/pointerleave + focusin/focusout
+       per .pair. pointer classes .lit/.on/.src; focus classes
+       .litf/.onf/.srcf (kept separate so pointer+focus don't clear
+       each other's state).
+     - .pcap .v[data-flash] chips flash .ln[data-sync~="key"] in the
+       row's .side.agent for ~1.5s (.on+.zap).
+   ================================================================ */
+(function(){
+  "use strict";
+  var root=document.querySelector(".sp3");
+  if(!root)return;
+  var rows=[].slice.call(root.querySelectorAll(".row"));
+  var allBtn=root.querySelector("#allBtn");
+
+  function setRow(row,open){
+    var head=row.querySelector(".head");
+    var body=row.querySelector(".body");
+    row.classList.toggle("open",open);
+    head.setAttribute("aria-expanded",open?"true":"false");
+    body.setAttribute("aria-hidden",open?"false":"true");
+  }
+
+  rows.forEach(function(row){
+    /* markup ships `hidden` as a no-JS fallback; CSS collapse owns it now */
+    row.querySelector(".body").hidden=false;
+    row.querySelector(".head").addEventListener("click",function(){
+      var opening=!row.classList.contains("open");
+      if(opening){
+        rows.forEach(function(r){if(r!==row)setRow(r,false);});
+        if(allBtn){
+          allBtn.setAttribute("aria-pressed","false");
+          allBtn.textContent="[+] all";
+        }
+      }
+      setRow(row,opening);
+    });
+  });
+
+  if(allBtn)allBtn.addEventListener("click",function(){
+    var open=allBtn.getAttribute("aria-pressed")!=="true";
+    allBtn.setAttribute("aria-pressed",open?"true":"false");
+    allBtn.setAttribute("aria-label",
+      (open?"collapse":"expand")+" all ledger entries");
+    allBtn.textContent=(open?"[-]":"[+]")+" all";
+    rows.forEach(function(r){setRow(r,open);});
+  });
+
+  /* ---- sync pairing ----
+     data-sync="k1 k2" pairs every .ln sharing a key across the two
+     .side panes of the same .pair. Hover/focus of a paired line:
+     - sibling pane gets .lit/.litf (reveal: all its paired lines
+       show a faint ▶)
+     - matching .ln in the sibling get .on/.onf (ember ▶ + band)
+     - source line gets .src/.srcf */
+  function clearLn(pair,names){
+    names.forEach(function(n){
+      [].slice.call(pair.querySelectorAll(".ln."+n))
+        .forEach(function(el){el.classList.remove(n);});
+    });
+  }
+  function markTargets(pair,ln,cls){
+    var sides=[].slice.call(pair.querySelectorAll(".side"));
+    var side=ln.closest(".side");
+    if(!side||sides.length<2)return;
+    var other=sides[0]===side?sides[1]:sides[0];
+    (ln.getAttribute("data-sync")||"").split(/\s+/)
+      .forEach(function(k){
+        if(!k)return;
+        [].slice.call(other.querySelectorAll('.ln[data-sync~="'+k+'"]'))
+          .forEach(function(el){el.classList.add(cls);});
+      });
+  }
+
+  [].slice.call(root.querySelectorAll(".pair")).forEach(function(pair){
+    var sides=[].slice.call(pair.querySelectorAll(".side"));
+    if(sides.length<2)return;
+    var a=sides[0],b=sides[1];
+    function otherOf(side){return side===a?b:a;}
+    function litOff(){a.classList.remove("lit");b.classList.remove("lit");}
+    function litfOff(){a.classList.remove("litf");b.classList.remove("litf");}
+
+    pair.addEventListener("pointerover",function(e){
+      var t=e.target;
+      var side=t&&t.closest?t.closest(".side"):null;
+      litOff();
+      if(!side||!pair.contains(side))return;
+      otherOf(side).classList.add("lit");
+      clearLn(pair,["on","src"]);
+      var ln=t.closest?t.closest(".ln[data-sync]"):null;
+      if(ln&&side.contains(ln)){
+        ln.classList.add("src");
+        markTargets(pair,ln,"on");
+      }
+    });
+    pair.addEventListener("pointerleave",function(){
+      litOff();
+      clearLn(pair,["on","src"]);
+    });
+
+    pair.addEventListener("focusin",function(e){
+      var t=e.target;
+      var side=t&&t.closest?t.closest(".side"):null;
+      litfOff();
+      if(!side)return;
+      otherOf(side).classList.add("litf");
+      clearLn(pair,["onf","srcf"]);
+      var ln=t.closest?t.closest(".ln[data-sync]"):null;
+      if(ln){
+        ln.classList.add("srcf");
+        markTargets(pair,ln,"onf");
+      }
+    });
+    pair.addEventListener("focusout",function(){
+      setTimeout(function(){
+        if(!pair.contains(document.activeElement)){
+          litfOff();
+          clearLn(pair,["onf","srcf"]);
+        }
+      },0);
+    });
+  });
+
+  /* ---- pcap chips: flash paired agent-pane lines ---- */
+  [].slice.call(root.querySelectorAll(".pcap .v[data-flash]"))
+    .forEach(function(chip){
+      chip.addEventListener("click",function(){
+        var body=chip.closest(".body");
+        var agent=body?body.querySelector(".side.agent"):null;
+        if(!agent)return;
+        var hits=[];
+        (chip.getAttribute("data-flash")||"").split(/\s+/)
+          .forEach(function(k){
+            if(!k)return;
+            hits=hits.concat([].slice.call(
+              agent.querySelectorAll('.ln[data-sync~="'+k+'"]')));
+          });
+        hits.forEach(function(el){
+          el.classList.remove("zap");
+          void el.offsetWidth;   /* restart the animation on re-click */
+          el.classList.add("on","zap");
+        });
+        clearTimeout(agent._zt);
+        agent._zt=setTimeout(function(){
+          hits.forEach(function(el){el.classList.remove("on","zap");});
+        },1500);
+      });
+    });
+})();
+</script>
+</body>
+</html>

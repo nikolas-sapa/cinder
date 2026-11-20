@@ -1,0 +1,937 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="color-scheme" content="dark">
+<title>cinder — ident + ticket v2</title>
+<!--
+  ident-ticket-v2 — peer-fingerprint evidence card (fig·04) + tearing
+  invite ticket (fig·05). Isolated prototype: every CSS selector is
+  scoped under .idt2 (the <body> class), the script is one IIFE, and
+  there are no runtime assets beyond the mono font link.
+
+  See the /* ---- PORT ---- */ block inside <style> for lift notes and
+  the [ port-map ] section at the bottom of the page for the rename table.
+-->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+  /* ============ tokens + base (scoped) ============ */
+  .idt2{
+    --ground:#0B0B0D; --panel:#0E1013; --card:#12151A; --ink:#E6E9EF;
+    --muted:#8A919E; --faint:#565D68;
+    --ember:#FFB224; --ember-dim:#B87A18; --danger:#FF5D5D;
+    --line:rgba(255,255,255,.07);
+    --mono:'JetBrains Mono',ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+    margin:0; min-height:100vh;
+    background:var(--ground); color:var(--muted);
+    font-family:var(--mono); font-size:14px; line-height:1.6;
+    -webkit-font-smoothing:antialiased;
+  }
+  .idt2 *, .idt2 *::before, .idt2 *::after{box-sizing:border-box;margin:0}
+  .idt2 canvas{display:block}
+  .idt2 [hidden]{display:none !important}
+  .idt2 ::selection{background:rgba(255,178,36,.22);color:var(--ink)}
+  .idt2 .sr{position:absolute;width:1px;height:1px;overflow:hidden;
+    clip:rect(0 0 0 0);white-space:nowrap}
+
+/* ---- PORT ---------------------------------------------------------------
+   LIFT BLOCKS (drop into style.css, strip the .idt2 scope):
+     fig·04  .fp-card · .plate/.pl-* · .seg · .fp-solo/.fp-cmp/.cmp-grid/
+             .cmp-side/.vs · .scr(+ticks) · .dmark · .ro/.ilab · .fp-hex ·
+             .verdict · .fp-foot
+     fig·05  .tk housing+screws · .tk-art flex wrapper · .tk-main/.tk-stub/
+             .tk-mtop/.tk-mstub · .tk-void stamp · fray ::before/::after ·
+             .torn states · .tk-keys/.tk-reset/.tk-live
+     shared  .screw (exists on .board/.ticket already — merge) ·
+             .plate/.seg (already lifted in board-head-v2 — reuse) · .sr
+
+   PROD RENAMES (index.html / style.css / main.js):
+     .ticket              -> .tk            same housing; add overflow:hidden
+                                            under .torn so the sliding stub
+                                            can't grow the scroll width
+     .ticket.burned       -> .tk.torn       JS toggles .torn; port keeps the
+                                            .burned->.torn mapping 1:1
+     .stamp (2 pre rows)  -> .tk-void       absolute overlay stamped onto the
+                                            MAIN half; or keep inline rows and
+                                            animate the .stamp spans instead
+     .lnk / .cur          -> unchanged inside .tk
+     .sr                  -> .idt2 .sr      identical clip rule
+     .t-desktop/.t-mobile -> .tk-art.t-desktop / .tk-art.t-mobile wrappers;
+                             desktop pre splits at col 57: .tk-main (58 cols,
+                             keeps the ┊ perf line) + .tk-stub (15 cols);
+                             mobile pre splits at the ├┄┤ row: .tk-mtop
+                             (13 rows) + .tk-mstub (5 rows)
+     #cv-fp               -> id stays on the solo canvas; prod's singleton
+                             fingerprint IIFE becomes Matrix(cv,seed,diff).
+                             PAL/TH8/hash53/ign/cellField/draw lift verbatim;
+                             driver loops over [solo, you, claimed].
+   PROD DELTAS:
+     · mobile pre kept at 50 cols, not 48 — the 45-char invite link needs it.
+     · stub rows 13–14 lose the inline stamp (it moved to .tk-void on main);
+       stub gains KEEP STUB + NO·8F2A serial rows.
+     · all motion lives under prefers-reduced-motion:no-preference; every
+       .torn end-state is a plain class, so reduce = instant, still legible.
+   ------------------------------------------------------------------------- */
+
+  /* ============ demo chrome (not ported) ============ */
+  .idt2 .pg-hd{display:flex;justify-content:space-between;align-items:baseline;
+    padding:22px 30px;border-bottom:1px solid var(--line);font-size:12px}
+  .idt2 .pg-hd .tag{color:var(--ember);font-weight:500}
+  .idt2 .pg-hd .hint{color:var(--faint);font-size:11px;letter-spacing:.1em}
+  .idt2 .pg-wrap{max-width:960px;margin:0 auto;padding:0 24px}
+  .idt2 .pg-intro{padding:52px 0 10px}
+  .idt2 .kicker{font-size:10px;letter-spacing:.22em;color:var(--ember-dim);
+    margin-bottom:16px;text-transform:uppercase}
+  .idt2 h1{font-size:clamp(24px,4vw,34px);font-weight:600;color:var(--ink);
+    letter-spacing:-.01em;line-height:1.2;margin-bottom:14px}
+  .idt2 h1 em{font-style:normal;color:var(--ember)}
+  .idt2 .lede{color:var(--muted);max-width:66ch;font-size:13px;line-height:1.7}
+  .idt2 .lede b{color:var(--ink);font-weight:500}
+  .idt2 .lede code{color:var(--ember);font-size:12px}
+  .idt2 .fig-zone{padding:44px 0 8px}
+
+  /* ============ shared: instrument plate + screws ============ */
+  .idt2 .plate{display:flex;align-items:center;gap:9px;flex-wrap:wrap;
+    padding:13px 30px 12px;background:var(--card);
+    border-bottom:1px dashed var(--line);border-radius:9px 9px 0 0;
+    font:500 11px/1.2 var(--mono);letter-spacing:.07em;white-space:nowrap}
+  .idt2 .plate .br{color:var(--faint)}
+  .idt2 .pl-tag{color:var(--ember)}
+  .idt2 .pl-sep{color:var(--faint)}
+  .idt2 .pl-title{color:var(--ink)}
+  .idt2 .pl-meta{color:var(--muted)}
+  .idt2 .pl-meta b{color:var(--ink);font-weight:500}
+  .idt2 .pl-meta .bad{color:var(--danger);font-weight:500}
+  .idt2 .pl-leader{flex:1 1 40px;min-width:16px;height:0;
+    border-bottom:1px dashed var(--faint);opacity:.5;margin:0 8px}
+  .idt2 .screw{position:absolute;font:400 11px/1 var(--mono);
+    color:var(--faint);user-select:none;z-index:2}
+  .idt2 .screw.tl{top:9px;left:11px}
+  .idt2 .screw.tr{top:9px;right:11px}
+  .idt2 .screw.bl{bottom:9px;left:11px}
+  .idt2 .screw.br{bottom:9px;right:11px}
+
+  /* segmented mono chip (same recipe as board-head-v2 .seg) */
+  .idt2 .seg{flex:none;font:500 11px/1.1 var(--mono);letter-spacing:.05em;
+    color:var(--faint);background:var(--ground);border:1px solid var(--line);
+    border-radius:4px;padding:5px 9px;cursor:pointer;white-space:nowrap}
+  .idt2 .seg:hover{border-color:var(--ember-dim)}
+  .idt2 .seg:focus-visible{outline:1px solid var(--ember);outline-offset:2px}
+  .idt2 .seg .br{color:var(--faint)}
+  .idt2 .seg .sep{color:var(--faint)}
+  .idt2 .seg .opt{color:var(--faint);padding:1px 4px;border-radius:2px}
+  .idt2 .seg:hover .opt{color:var(--muted)}
+  .idt2 .seg .opt.on{color:var(--ember);background:rgba(255,178,36,.10)}
+  .idt2 .seg:hover .opt.on{color:var(--ember)}
+  .idt2 .seg .kk{font-family:inherit;color:var(--faint);
+    margin-left:8px;padding-left:8px;border-left:1px solid var(--line)}
+
+  /* ============ fig·04 — fingerprint evidence card ============ */
+  .idt2 .fp-card{position:relative;overflow:hidden;
+    border:1px solid var(--line);border-radius:10px;
+    background:
+      repeating-linear-gradient(0deg,rgba(255,255,255,.012) 0 1px,transparent 1px 3px),
+      var(--panel);
+    box-shadow:0 30px 80px rgba(0,0,0,.55),0 0 0 1px rgba(255,255,255,.02) inset}
+  .idt2 .fp-body{padding:24px 28px 26px;display:grid;place-items:center}
+  .idt2 .ilab{display:flex;justify-content:space-between;gap:12px;
+    font-size:9px;letter-spacing:.18em;color:var(--faint);
+    text-transform:uppercase;margin-bottom:7px}
+  .idt2 .ilab .badt{color:var(--danger)}
+
+  .idt2 .scr{position:relative;overflow:hidden;
+    border:1px solid var(--line);border-radius:6px;
+    background:var(--ground);aspect-ratio:1}
+  .idt2 .scr canvas{position:absolute;inset:0;width:100%;height:100%;
+    image-rendering:pixelated}
+  /* instrument bezel corner ticks */
+  .idt2 .scr::before,.idt2 .scr::after{content:"";position:absolute;
+    width:9px;height:9px;border:1px solid var(--faint);
+    pointer-events:none;z-index:2}
+  .idt2 .scr::before{top:-1px;left:-1px;border-right:0;border-bottom:0}
+  .idt2 .scr::after{bottom:-1px;right:-1px;border-left:0;border-top:0}
+  .idt2 .scr .st{position:absolute;font-size:8px;letter-spacing:.22em;
+    color:var(--faint);pointer-events:none;z-index:2}
+  .idt2 .scr .st.tl{top:5px;left:8px}
+  .idt2 .scr .st.br{bottom:5px;right:8px;color:var(--ember-dim)}
+
+  /* differing cell-block marker (compare mode) */
+  .idt2 .dmark{display:none;position:absolute;width:6.25%;height:6.25%;
+    border:1px dashed var(--danger);background:rgba(255,93,93,.09);
+    box-shadow:0 0 10px rgba(255,93,93,.25),inset 0 0 8px rgba(255,93,93,.18);
+    pointer-events:none;z-index:3}
+  .idt2 .fp-card.cmp .dmark{display:block}
+
+  .idt2 .ro{display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;
+    margin-top:9px;font-size:10px;letter-spacing:.1em;color:var(--faint)}
+  .idt2 .ro b{color:var(--muted);font-weight:400}
+  .idt2 .ro b.hot{color:var(--ink)}
+
+  /* selectable full fingerprint */
+  .idt2 .fp-hex{margin-top:12px;padding:10px 12px;cursor:text;
+    border:1px solid var(--line);border-radius:6px;background:var(--card);
+    font-size:11px;line-height:2;letter-spacing:.04em;color:var(--ink);
+    user-select:text;-webkit-user-select:text;word-spacing:.55em}
+  .idt2 .fp-hex.sm{font-size:10px;word-spacing:.4em}
+  .idt2 .fp-hex .ref{color:var(--ink);padding:0 1px;border-radius:2px;
+    box-shadow:0 0 0 1px var(--faint)}
+  .idt2 .fp-hex .bad{color:var(--danger);padding:0 1px;border-radius:2px;
+    background:rgba(255,93,93,.10);box-shadow:0 0 0 1px rgba(255,93,93,.5)}
+  .idt2 .fp-note{margin-top:10px;font-size:10px;letter-spacing:.06em;
+    color:var(--faint);max-width:38ch}
+  .idt2 .fp-note b{color:var(--muted);font-weight:500}
+
+  .idt2 .fp-solo{width:min(320px,100%)}
+  .idt2 .fp-cmp{width:min(680px,100%)}
+  .idt2 .cmp-grid{display:grid;align-items:start;
+    grid-template-columns:minmax(0,1fr) 30px minmax(0,1fr);gap:16px}
+  .idt2 .cmp-side{min-width:0}
+  .idt2 .vs{align-self:center;justify-self:center;text-align:center;
+    color:var(--danger);font-size:17px;line-height:1;padding-top:38%}
+  .idt2 .vs i{display:block;font-style:normal;font-size:8px;
+    letter-spacing:.16em;color:var(--faint);margin-top:6px}
+  .idt2 .verdict{display:flex;justify-content:space-between;gap:10px;
+    flex-wrap:wrap;margin-top:16px;padding:10px 13px;
+    border:1px solid rgba(255,93,93,.28);border-radius:6px;
+    background:rgba(255,93,93,.05);
+    font-size:10px;letter-spacing:.13em}
+  .idt2 .verdict .v1{color:var(--danger)}
+  .idt2 .verdict .v2{color:var(--faint)}
+
+  .idt2 .fp-foot{display:flex;justify-content:space-between;gap:12px;
+    flex-wrap:wrap;padding:11px 28px;border-top:1px dashed var(--line);
+    font-size:9px;letter-spacing:.15em;color:var(--faint)}
+  .idt2 .fp-foot b{color:var(--muted);font-weight:400}
+
+  /* ============ fig·05 — invite ticket v2 ============ */
+  .idt2 .tk-stage{margin-top:44px}
+  .idt2 .tk-frame{position:relative;overflow:hidden;
+    border:1px solid var(--line);border-radius:10px;
+    background:var(--panel)}
+  .idt2 .tk-shell{display:flex;flex-direction:column;align-items:center;
+    padding:34px 22px 30px}
+
+  .idt2 .tk{position:relative;cursor:pointer;max-width:100%;
+    border:1px solid var(--line);border-radius:10px;
+    background:
+      repeating-linear-gradient(0deg,rgba(255,255,255,.012) 0 1px,transparent 1px 3px),
+      var(--card);
+    box-shadow:0 24px 60px rgba(0,0,0,.5),0 0 0 1px rgba(255,255,255,.02) inset;
+    padding:26px 30px 28px;overflow-x:auto}
+  .idt2 .tk:focus-visible{outline:2px solid var(--ember);outline-offset:3px}
+  .idt2 .tk.torn{cursor:default;overflow:hidden}
+  .idt2 .tk pre{margin:0;letter-spacing:0;white-space:pre;color:var(--muted);
+    font:400 13px/1.5 var(--mono);user-select:text;
+    font-variant-ligatures:none;font-feature-settings:"liga" 0,"calt" 0}
+
+  /* two ASCII halves; perf column (col 57) belongs to .tk-main */
+  .idt2 .tk-art{position:relative;display:flex;flex:none}
+  .idt2 .tk-art.t-mobile{display:none}
+  .idt2 .tk-main,.idt2 .tk-stub,.idt2 .tk-mtop,.idt2 .tk-mstub{
+    position:relative;flex:none}
+
+  /* ink palette — same letters as prod .ticket */
+  .idt2 .tk .e{color:var(--ember)}
+  .idt2 .tk .i{color:var(--ink)}
+  .idt2 .tk .m{color:var(--muted)}
+  .idt2 .tk .f{color:var(--faint)}
+  .idt2 .tk .d{color:var(--ember-dim)}
+  .idt2 .tk .b{font-weight:700}
+  .idt2 .tk .lnk{color:var(--ember);text-decoration:none}
+  .idt2 .tk .cur{color:var(--ember)}
+
+  /* ---- torn end-states (unconditional — instant under reduce) ---- */
+  .idt2 .tk.torn .tk-stub{
+    transform:translate(16px,9px) rotate(3.6deg);
+    transform-origin:top left;opacity:.48;
+    clip-path:polygon(5px 0,100% 0,100% 100%,5px 100%,
+      0 93.75%,5px 87.5%,0 81.25%,5px 75%,0 68.75%,5px 62.5%,
+      0 56.25%,5px 50%,0 43.75%,5px 37.5%,0 31.25%,5px 25%,
+      0 18.75%,5px 12.5%,0 6.25%)}
+  .idt2 .tk.torn .tk-main{opacity:.4;
+    clip-path:polygon(0 0,calc(100% - 5px) 0,
+      100% 6.25%,calc(100% - 5px) 12.5%,100% 18.75%,calc(100% - 5px) 25%,
+      100% 31.25%,calc(100% - 5px) 37.5%,100% 43.75%,calc(100% - 5px) 50%,
+      100% 56.25%,calc(100% - 5px) 62.5%,100% 68.75%,calc(100% - 5px) 75%,
+      100% 81.25%,calc(100% - 5px) 87.5%,100% 93.75%,calc(100% - 5px) 100%,
+      0 100%)}
+  .idt2 .tk.torn .tk-mstub{
+    transform:translate(11px,10px) rotate(-3.2deg);
+    transform-origin:top left;opacity:.48;
+    clip-path:polygon(0 5px,6.25% 0,12.5% 5px,18.75% 0,25% 5px,31.25% 0,
+      37.5% 5px,43.75% 0,50% 5px,56.25% 0,62.5% 5px,68.75% 0,75% 5px,
+      81.25% 0,87.5% 5px,93.75% 0,100% 5px,100% 100%,0 100%)}
+  .idt2 .tk.torn .tk-mtop{opacity:.4;
+    clip-path:polygon(0 0,100% 0,100% calc(100% - 5px),
+      93.75% 100%,87.5% calc(100% - 5px),81.25% 100%,75% calc(100% - 5px),
+      68.75% 100%,62.5% calc(100% - 5px),56.25% 100%,50% calc(100% - 5px),
+      43.75% 100%,37.5% calc(100% - 5px),31.25% 100%,25% calc(100% - 5px),
+      18.75% 100%,12.5% calc(100% - 5px),6.25% 100%,0 calc(100% - 5px))}
+  .idt2 .tk.torn .lnk{color:var(--faint);text-decoration:line-through}
+  .idt2 .tk.torn .cur{visibility:hidden}
+
+  /* dithered fray — one glyph per row/col along each torn edge */
+  .idt2 .tk-main::after{
+    content:"░\A▒\A░\A▓\A░\A▒\A▓\A░\A▒\A░\A▓\A░\A▒\A░\A▓\A░";
+    position:absolute;top:0;right:0;white-space:pre;line-height:1.5;
+    color:var(--faint);opacity:0;pointer-events:none}
+  .idt2 .tk-stub::before{
+    content:"▒\A░\A▓\A░\A▒\A░\A▓\A░\A▒\A░\A▓\A░\A▒\A░\A▓\A▒";
+    position:absolute;top:0;left:0;white-space:pre;line-height:1.5;
+    color:var(--faint);opacity:0;pointer-events:none;z-index:1}
+  .idt2 .tk-mtop::after{
+    content:"░▒░▓▒░▓░▒░▓▒░▒░▓░▒░▓▒░▓░▒░▓░▒░▓░▒░▓▒░▒░▓░▒░▓░▒▓░▒";
+    position:absolute;bottom:0;left:0;white-space:pre;line-height:1.5;
+    color:var(--faint);opacity:0;pointer-events:none}
+  .idt2 .tk-mstub::before{
+    content:"▒░▓░▒░▓▒░▒░▓░▒░▓░▒░▓▒░▒░▓░▒░▓▒░▓░▒░▓░▒░▓░▒░▓░▒░";
+    position:absolute;top:0;left:0;white-space:pre;line-height:1.5;
+    color:var(--faint);opacity:0;pointer-events:none;z-index:1}
+  .idt2 .tk.torn .tk-main::after,.idt2 .tk.torn .tk-stub::before,
+  .idt2 .tk.torn .tk-mtop::after,.idt2 .tk.torn .tk-mstub::before{opacity:.85}
+
+  /* ---- VOID AFTER USE — overlay stamp, slams onto the main half ---- */
+  .idt2 .tk-void{position:absolute;z-index:3;pointer-events:none;
+    white-space:pre;text-align:left;
+    font:700 13px/1.45 var(--mono);letter-spacing:0;color:var(--ember);
+    text-shadow:0 0 12px rgba(255,178,36,.4);
+    transform:rotate(-7deg);opacity:0;user-select:none}
+  .idt2 .t-desktop .tk-void{top:30%;left:25%}
+  .idt2 .t-mobile  .tk-void{top:32%;left:12%;font-size:clamp(9px,2.9vw,12px)}
+  .idt2 .tk.torn .tk-void{opacity:1}
+
+  .idt2 .tk-keys{display:flex;align-items:center;gap:14px;flex-wrap:wrap;
+    margin-top:16px;font-size:11px;letter-spacing:.08em;color:var(--ember-dim)}
+  .idt2 .tk-keys b{color:var(--muted);font-weight:500}
+  .idt2 .tk-reset{font:500 11px/1.1 var(--mono);letter-spacing:.05em;
+    color:var(--faint);background:none;border:1px solid var(--line);
+    border-radius:4px;padding:4px 9px;cursor:pointer}
+  .idt2 .tk-reset:hover{color:var(--muted);border-color:var(--ember-dim)}
+  .idt2 .tk-reset:focus-visible{outline:1px solid var(--ember);outline-offset:2px}
+
+  /* ============ port-map block (demo chrome) ============ */
+  .idt2 .pmap{margin:56px 0 0;border:1px solid var(--line);border-radius:8px;
+    background:var(--card);overflow:hidden}
+  .idt2 .pmap-h{padding:9px 14px;border-bottom:1px solid var(--line);
+    background:var(--panel);font-size:9.5px;letter-spacing:.18em;
+    color:var(--faint);text-transform:uppercase;
+    display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap}
+  .idt2 .pmap ul{list-style:none;padding:8px 0;margin:0}
+  .idt2 .pmap li{display:flex;gap:12px;padding:4px 14px;
+    font-size:11px;line-height:1.8}
+  .idt2 .pmap .pn{flex:none;min-width:170px;color:var(--ink)}
+  .idt2 .pmap .pa{color:var(--ember-dim);flex:none}
+  .idt2 .pmap .po{color:var(--muted)}
+  .idt2 .pmap .po b{color:var(--ink);font-weight:400}
+
+  .idt2 .pg-ft{margin-top:64px;border-top:1px solid var(--line);
+    padding:16px 30px;display:flex;justify-content:space-between;
+    gap:16px;flex-wrap:wrap;font-size:10px;letter-spacing:.12em;
+    color:var(--faint)}
+  .idt2 .pg-ft b{color:var(--muted);font-weight:400}
+
+  /* ============ responsive ============ */
+  @media (max-width:44rem){
+    .idt2 .tk{padding:22px 18px 24px}
+    .idt2 .tk-art.t-desktop{display:none}
+    .idt2 .tk-art.t-mobile{display:block;font-size:clamp(9px,2.9vw,12px)}
+    .idt2 .tk-art.t-mobile pre{font-size:inherit}
+    .idt2 .tk-main::after,.idt2 .tk-stub::before{display:none}
+  }
+  @media (max-width:640px){
+    .idt2 .cmp-grid{grid-template-columns:1fr}
+    .idt2 .vs{justify-self:start;align-self:start;padding:2px 0 8px 6px}
+    .idt2 .vs i{display:inline;margin-left:8px}
+    .idt2 .fp-body{padding:20px 18px 22px}
+    .idt2 .plate{padding:12px 20px 11px}
+    .idt2 .fp-foot{padding:10px 18px}
+    .idt2 .pmap .pn{min-width:120px}
+  }
+
+  /* ============ motion — only when allowed ============ */
+  @media (prefers-reduced-motion:no-preference){
+    .idt2 .tk{transition:border-color .3s ease}
+    .idt2 .tk:hover{border-color:rgba(255,255,255,.14)}
+    .idt2 .seg,.idt2 .tk-reset{transition:color .2s,border-color .2s}
+    .idt2 .cur{animation:idt2-blink 1.1s steps(1) infinite}
+    @keyframes idt2-blink{50%{opacity:0}}
+
+    /* tear choreography: stub slides -> fray fades -> stamp slams -> main dims */
+    .idt2 .tk-stub,.idt2 .tk-mstub{
+      transition:transform .55s cubic-bezier(.2,.85,.25,1) .12s,
+                 opacity .45s ease .55s}
+    .idt2 .tk-main,.idt2 .tk-mtop{transition:opacity .5s ease .62s}
+    .idt2 .tk-main::after,.idt2 .tk-stub::before,
+    .idt2 .tk-mtop::after,.idt2 .tk-mstub::before{
+      transition:opacity .3s ease .4s}
+    .idt2 .tk.torn .tk-void{
+      animation:idt2-slam .52s cubic-bezier(.16,1.4,.3,1) .32s both}
+    @keyframes idt2-slam{
+      0%{opacity:0;transform:rotate(-7deg) scale(2.2)}
+      55%{opacity:1;transform:rotate(-7deg) scale(.92)}
+      78%{transform:rotate(-7deg) scale(1.05)}
+      100%{opacity:1;transform:rotate(-7deg) scale(1)}}
+
+    /* compare mode: mismatch marker flashes like prod's SAS bad row */
+    .idt2 .fp-card.cmp .dmark{animation:idt2-dflash 1.4s steps(1) infinite}
+    @keyframes idt2-dflash{0%,55%{opacity:1}55.01%,100%{opacity:.15}}
+    .idt2 .fp-cmp{animation:idt2-cmpin .35s cubic-bezier(.2,.7,.2,1)}
+    @keyframes idt2-cmpin{from{opacity:0;transform:translateY(-6px)}
+      to{opacity:1;transform:none}}
+    .idt2 .verdict .v1{animation:idt2-dflash 1.4s steps(1) infinite}
+  }
+</style>
+</head>
+<body class="idt2">
+
+<header class="pg-hd">
+  <span class="tag">cinder / experiments</span>
+  <span class="hint">ident + ticket v2</span>
+</header>
+
+<main class="pg-wrap">
+  <div class="pg-intro">
+    <p class="kicker">// identity surfaces — v2</p>
+    <h1>read the key, <em>tear the stub.</em></h1>
+    <p class="lede"><b>fig·04</b> — the peer fingerprint as a Bayered
+      identicon, deterministic from peer-id: same key, same glyph, anywhere.
+      <code>[ compare ]</code> puts your matrix beside the claimed peer's and
+      flags the one cell-block a relay can't fake. <b>fig·05</b> — the
+      admit-one invite: redeem it and the stub tears off along the
+      perforation, the void stamp slams down, the link dies.</p>
+  </div>
+
+  <!-- ================= fig·04 · fingerprint evidence ================= -->
+  <section class="fig-zone" aria-label="peer fingerprint evidence card">
+    <figure class="fp-card" id="fpCard">
+      <span class="screw tl">+</span><span class="screw tr">+</span>
+      <span class="screw bl">+</span><span class="screw br">+</span>
+      <div class="plate">
+        <span class="pl-tag"><span class="br">[</span> fig·04 <span class="br">]</span></span>
+        <span class="pl-sep">·</span>
+        <span class="pl-title">peer-fingerprint evidence</span>
+        <span class="pl-leader" aria-hidden="true"></span>
+        <span class="pl-meta">mode:<b id="fpMode">solo</b><span class="pl-sep"> · </span>seed <b>9c1f…aa07</b></span>
+        <button class="seg" id="cmpBtn" type="button" aria-pressed="false"
+          aria-label="toggle compare view" title="toggle compare view (c)"><span class="br">[</span> <span class="opt on">solo</span> <span class="sep">|</span> <span class="opt">compare</span> <span class="br">]</span><kbd class="kk">c</kbd></button>
+      </div>
+
+      <div class="fp-body">
+        <!-- solo: one glyph, one fingerprint -->
+        <div class="fp-solo" id="fpSolo">
+          <div class="ilab"><span>// fingerprint matrix — computed locally</span><span>B8×8 · 16 CELL · DITHER</span></div>
+          <div class="scr" role="img"
+            aria-label="Ordered-dither fingerprint matrix derived from the peer's key hash">
+            <canvas id="cv-fp" aria-hidden="true"></canvas>
+            <span class="st tl">FP-16</span><span class="st br">SIG-MAP</span>
+          </div>
+          <div class="ro">
+            <span>PEER-ID <b class="hot">9c1f…aa07</b></span>
+            <span>CELLS <b>16×16</b> · RAMP <b>13</b></span>
+          </div>
+          <div class="fp-hex" id="hexSolo"
+            title="full peer fingerprint — select to copy">…</div>
+          <p class="fp-note">same key, same glyph — anywhere. press
+            <b>[ compare ]</b> to hold it against a claimed peer.</p>
+        </div>
+
+        <!-- compare: your glyph vs the wire's claim -->
+        <div class="fp-cmp" id="fpCmp" hidden>
+          <div class="cmp-grid">
+            <div class="cmp-side">
+              <div class="ilab"><span>// you — local seed</span><span>TRUSTED SRC</span></div>
+              <div class="scr" role="img" aria-label="Your fingerprint matrix">
+                <canvas id="cv-fp-l" aria-hidden="true"></canvas>
+                <i class="dmark" id="dmA" aria-hidden="true"></i>
+              </div>
+              <div class="fp-hex sm" id="hexA">…</div>
+            </div>
+            <div class="vs" aria-hidden="true">≠<i>MITM?</i></div>
+            <div class="cmp-side">
+              <div class="ilab"><span>// claimed — via relay</span><span class="badt">UNVERIFIED</span></div>
+              <div class="scr" role="img" aria-label="Claimed peer's fingerprint matrix">
+                <canvas id="cv-fp-r" aria-hidden="true"></canvas>
+                <i class="dmark" id="dmB" aria-hidden="true"></i>
+              </div>
+              <div class="fp-hex sm" id="hexB">…</div>
+            </div>
+          </div>
+          <div class="verdict" role="status">
+            <span class="v1" id="vdText">≠ MISMATCH — DO NOT TRUST</span>
+            <span class="v2" id="vdStat">—/— CELLS</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="fp-foot">
+        <span>FP = SHA-256(PK) → 128-BIT FIELD · MIRRORED L→R</span>
+        <span>MATRIX <b>DETERMINISTIC</b> · SWEEP <b>DECORATIVE</b> · DEMO VECTOR</span>
+      </div>
+    </figure>
+  </section>
+
+  <!-- ================= fig·05 · one-time invite ================= -->
+  <section class="fig-zone" aria-label="one-time invite ticket">
+    <figure class="tk-stage">
+      <div class="tk-frame">
+        <div class="plate">
+          <span class="pl-tag"><span class="br">[</span> fig·05 <span class="br">]</span></span>
+          <span class="pl-sep">·</span>
+          <span class="pl-title">one-time invite — admit one</span>
+          <span class="pl-leader" aria-hidden="true"></span>
+          <span class="pl-meta">single-use · <b>d:73×16</b> · <b>m:50×18</b></span>
+        </div>
+        <div class="tk-shell">
+          <section class="tk" id="tk" role="button" tabindex="0"
+            aria-label="invite ticket — click or press Enter to simulate redemption">
+            <span class="screw tl">+</span><span class="screw tr">+</span>
+            <span class="screw bl">+</span><span class="screw br">+</span>
+            <p class="sr">One-time cinder invite. cinder://9c1f…aa07@relay:8443?rendezvous=8f2a. Single use. Expires on use. Intercepted links cannot be replayed. Activating redeems the ticket and tears off the stub.</p><div class="tk-art t-desktop" aria-hidden="true"><pre class="tk-main"><span class="f">┌────────────────────────────────────────────────────────</span><span class="d">┬</span>
+<span class="f">┊</span>   <span class="m">CINDER · E2E TERMINAL MESSENGER</span>                      <span class="d">┊</span>
+<span class="f">┊</span>                                                        <span class="d">┊</span>
+<span class="f">┊</span>   <span class="e">\|/</span>   <span class="i b">ADMIT ONE</span>                                      <span class="d">┊</span>
+<span class="f">┊</span>   <span class="e">-*-</span>   <span class="m">ONE-TIME LINK</span>                                  <span class="d">┊</span>
+<span class="f">┊</span>   <span class="e">/|\</span>                                                  <span class="d">┊</span>
+<span class="f">┊</span>                                                        <span class="d">┊</span>
+<span class="f">┊</span>   <a class="lnk" href="cinder://9c1f%e2%80%a6aa07@relay:8443?rendezvous=8f2a">cinder://9c1f…aa07@relay:8443?rendezvous=8f2a</a><span class="cur">▌</span>       <span class="d">┊</span>
+<span class="f">┊</span>                                                        <span class="d">┊</span>
+<span class="f">┊</span>   <span class="m">one-time · expires on use</span>                            <span class="d">┊</span>
+<span class="f">┊</span>   <span class="m">intercepted links can't be replayed</span>                  <span class="d">┊</span>
+<span class="f">┊</span>                                                        <span class="d">┊</span>
+<span class="f">┊</span>                                                        <span class="d">┊</span>
+<span class="f">┊</span>   <span class="f">NO·8F2A</span>                           <span class="f">TEAR ALONG LINE </span><span class="e">»</span>  <span class="d">┊</span>
+<span class="f">┊</span>                                                        <span class="d">┊</span>
+<span class="f">└────────────────────────────────────────────────────────</span><span class="d">┴</span></pre><pre class="tk-stub"><span class="d">╌╌╌╌╌╌╌╌╌╌╌╌╌╌</span><span class="f">┐</span>
+<span class="f">     STUB     ┊</span>
+<span class="f">              ┊</span>
+<span class="m">       S      </span><span class="f">┊</span>
+<span class="m">       I      </span><span class="f">┊</span>
+<span class="m">       N      </span><span class="f">┊</span>
+<span class="m">       G      </span><span class="f">┊</span>
+<span class="m">       L      </span><span class="f">┊</span>
+<span class="m">       E      </span><span class="f">┊</span>
+<span class="m">       ·      </span><span class="f">┊</span>
+<span class="m">       U      </span><span class="f">┊</span>
+<span class="m">       S      </span><span class="f">┊</span>
+<span class="m">       E      </span><span class="f">┊</span>
+<span class="f"> KEEP STUB    ┊</span>
+<span class="f"> NO·8F2A      ┊</span>
+<span class="d">╌╌╌╌╌╌╌╌╌╌╌╌╌╌</span><span class="f">┘</span></pre><span class="tk-void">░░░░░░░░░░░░░░
+░ VOID AFTER ░
+░    USE     ░
+░░░░░░░░░░░░░░</span></div><div class="tk-art t-mobile" aria-hidden="true"><pre class="tk-mtop"><span class="f">┌────────────────────────────────────────────────┐</span>
+<span class="f">┊</span>  <span class="m">CINDER · E2E TERMINAL MESSENGER</span>               <span class="f">┊</span>
+<span class="f">┊</span>                                                <span class="f">┊</span>
+<span class="f">┊</span>  <span class="e">\|/</span>   <span class="i b">ADMIT ONE</span>                               <span class="f">┊</span>
+<span class="f">┊</span>  <span class="e">-*-</span>   <span class="m">ONE-TIME LINK</span>                           <span class="f">┊</span>
+<span class="f">┊</span>  <span class="e">/|\</span>                                           <span class="f">┊</span>
+<span class="f">┊</span>                                                <span class="f">┊</span>
+<span class="f">┊</span>  <a class="lnk" href="cinder://9c1f%e2%80%a6aa07@relay:8443?rendezvous=8f2a">cinder://9c1f…aa07@relay:8443?rendezvous=8f2a</a> <span class="f">┊</span>
+<span class="f">┊</span>                                                <span class="f">┊</span>
+<span class="f">┊</span>  <span class="m">one-time · expires on use</span>                     <span class="f">┊</span>
+<span class="f">┊</span>  <span class="m">intercepted links can't be replayed</span>           <span class="f">┊</span>
+<span class="f">┊</span>                                                <span class="f">┊</span>
+<span class="d">├┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┤</span></pre><pre class="tk-mstub"><span class="f">┊</span>                                                <span class="f">┊</span>
+<span class="f">┊</span>  <span class="m">SINGLE USE · TEAR HERE</span>                        <span class="f">┊</span>
+<span class="f">┊</span>  <span class="m">KEEP STUB · </span><span class="f">NO·8F2A</span>                           <span class="f">┊</span>
+<span class="f">┊</span>                                                <span class="f">┊</span>
+<span class="f">└────────────────────────────────────────────────┘</span></pre><span class="tk-void">░░░░░░░░░░░░░░
+░ VOID AFTER ░
+░    USE     ░
+░░░░░░░░░░░░░░</span></div>
+          </section>
+          <div class="tk-keys">
+            <span id="tkKeysTxt">click the ticket <b>burns the link</b> · intercepted copies can't replay</span>
+            <button class="tk-reset" id="tkReset" type="button" hidden>[ reset ]</button>
+          </div>
+          <p class="sr" id="tkLive" aria-live="polite"></p>
+        </div>
+      </div>
+    </figure>
+  </section>
+
+  <!-- ================= port map (demo chrome) ================= -->
+  <section class="fig-zone" aria-label="port map">
+    <div class="pmap">
+      <div class="pmap-h"><span>[ port-map ] — v2 blocks → prod</span><span>scope: .idt2 → strip on lift</span></div>
+      <ul>
+        <li><span class="pn">.tk (housing+screws+pre)</span><span class="pa">←</span><span class="po"><b>.ticket</b> — unchanged shell; add <b>overflow:hidden</b> under torn so the sliding stub can't grow scroll width</span></li>
+        <li><span class="pn">.tk.torn</span><span class="pa">←</span><span class="po"><b>.ticket.burned</b> — same state hook; JS toggles <b>.torn</b> instead of .burned</span></li>
+        <li><span class="pn">.tk-void</span><span class="pa">←</span><span class="po"><b>.stamp</b> rows — inline 2-row stamp becomes an abs overlay on the main half (idt2-slam keyframe); alternative: keep rows + animate .stamp spans</span></li>
+        <li><span class="pn">.tk-art + .tk-main/.tk-stub</span><span class="pa">←</span><span class="po"><b>.t-desktop</b> pre — split at col 57: main 58c (keeps ┊ perf) + stub 15c</span></li>
+        <li><span class="pn">.tk-mtop/.tk-mstub</span><span class="pa">←</span><span class="po"><b>.t-mobile</b> pre — split at ├┄┤ row: top 13r + stub 5r; mobile stays 50c (45-char link needs it)</span></li>
+        <li><span class="pn">Matrix(cv,seed,diff)</span><span class="pa">←</span><span class="po"><b>#cv-fp IIFE</b> — PAL/TH8/hash53/ign/cellField/draw lift verbatim; driver loops [solo, you, claimed]</span></li>
+        <li><span class="pn">.fp-card .plate .seg</span><span class="pa">←</span><span class="po">merge with <b>.board .plate/.screw</b> + board-head-v2 <b>.seg</b> — same recipes</span></li>
+        <li><span class="pn">.sr .lnk .cur .e .i .m .f .d .b</span><span class="pa">←</span><span class="po">names kept verbatim so prod markup ports with zero class edits</span></li>
+        <li><span class="pn">.tk-live (aria-live)</span><span class="pa">←</span><span class="po">new <b>.sr</b> region; announces "ticket redeemed" on burn — a11y gap in prod</span></li>
+      </ul>
+    </div>
+  </section>
+</main>
+
+<footer class="pg-ft">
+  <span><b>cinder</b> — ident + ticket v2</span>
+  <span>B8×8 + IGN · 0 DEPS · IO-GATED · PRM-SAFE · DPR≤2</span>
+</footer>
+
+<script>
+(function(){
+'use strict';
+
+/* ================================================================
+   ident-ticket-v2 — one IIFE:
+     1. Matrix() fingerprint factory (prod #cv-fp code, parameterized
+        by seed + optional single-cell diff for the MITM compare)
+     2. hex fingerprint text (selectable, one forged group on claimed)
+     3. compare toggle
+     4. ticket tear + aria-live announce + reset
+     5. ASCII column-width assertions
+   ================================================================ */
+var RM = matchMedia('(prefers-reduced-motion: reduce)');
+var reduced = RM.matches;
+var STATIC_T = 4.61;          // frozen frame: scanline mid-field, flare dying
+
+function el(id){ return document.getElementById(id); }
+function clamp01(v){ return v<0 ? 0 : (v>1 ? 1 : v); }
+
+/* cyrb53 — small deterministic string hash (prod verbatim) */
+function hash53(str, seed){
+  var h1 = 0xdeadbeef ^ (seed||0), h2 = 0x41c6ce57 ^ (seed||0);
+  for (var i=0; i<str.length; i++){
+    var ch = str.charCodeAt(i);
+    h1 = Math.imul(h1 ^ ch, 2654435761);
+    h2 = Math.imul(h2 ^ ch, 1597334677);
+  }
+  h1 = Math.imul(h1 ^ (h1>>>16), 2246822507) ^ Math.imul(h2 ^ (h2>>>13), 3266489909);
+  h2 = Math.imul(h2 ^ (h2>>>16), 2246822507) ^ Math.imul(h1 ^ (h1>>>13), 3266489909);
+  return (h2>>>0) * 4294967296 + (h1>>>0);
+}
+
+/* shared ordered-dither recipe (prod verbatim) */
+var PAL = [
+  [ 11, 11, 13],[ 20, 21, 25],[ 33, 35, 41],[ 50, 47, 38],[ 74, 55, 22],
+  [106, 71, 20],[146, 96, 24],[196,127, 27],[232,152, 30],[255,178, 36],
+  [255,190, 52],[255,214,110],[255,240,196]
+];
+var LEVELS = PAL.length - 1;
+var TH8 = new Float32Array([
+   0,32, 8,40, 2,34,10,42, 48,16,56,24,50,18,58,26,
+  12,44, 4,36,14,46, 6,38, 60,28,52,20,62,30,54,22,
+   3,35,11,43, 1,33, 9,41, 51,19,59,27,49,17,57,25,
+  15,47, 7,39,13,45, 5,37, 63,31,55,23,61,29,53,21]);
+for (var i=0; i<64; i++) TH8[i] = (TH8[i]+0.5)/64;
+function ign(x, y){
+  var f = (0.06711056*x + 0.00583715*y) % 1;
+  return (52.9829189*f) % 1;
+}
+
+/* ================= fingerprint matrix factory =================
+   prod's #cv-fp singleton becomes Matrix(cvEl, seed, diff):
+   16×16 cells, mirrored L→R; Gaussian feature field + per-cell detail
+   seeded by `seed`; diff={x,y} overrides ONE full-grid cell on the
+   right half so the claimed glyph differs in a single cell-block. */
+var GRID = 16, HALF = 8;
+
+function Matrix(cvEl, seed, diff){
+  var cx2d = cvEl.getContext('2d', {alpha:false});
+  var DPR = Math.min(window.devicePixelRatio || 1, 2);
+  var PITCH = 9 * DPR;
+  var BUF = GRID * PITCH + 1, IMG = null, V = null;
+  var CELL = new Float32Array(HALF * GRID);
+  var ENERGY = new Float32Array(GRID * GRID);
+  var FEAT = [], nextIgn = 0;
+
+  (function seedField(){
+    var s = seed + ':feat';
+    for (var f=0; f<7; f++){
+      FEAT.push({
+        x: 0.5 + (hash53(s+':x'+f, f) % 1000)/1000 * (HALF-1),
+        y:      (hash53(s+':y'+f, f) % 1000)/1000 * (GRID-1),
+        r: 1.6 + (hash53(s+':r'+f, f) % 1000)/1000 * 3.4,
+        a: 0.45 + (hash53(s+':a'+f, f) % 1000)/1000 * 0.55
+      });
+    }
+  })();
+
+  function cellField(hx, y){
+    var base = 0;
+    for (var f=0; f<FEAT.length; f++){
+      var g = FEAT[f], dx = hx-g.x, dy = y-g.y;
+      var b = g.a * Math.exp(-(dx*dx+dy*dy)/(g.r*g.r));
+      if (b > base) base = b;
+    }
+    var det = (hash53(seed+':c:'+hx+':'+y, 7) % 10000)/10000;
+    return clamp01(base*(0.50 + 0.62*det) + 0.16*det*det*det*det - 0.02);
+  }
+  for (var y0=0; y0<GRID; y0++)
+    for (var hx0=0; hx0<HALF; hx0++)
+      CELL[y0*HALF+hx0] = cellField(hx0, y0);
+
+  /* forge one cell-block: keep it clearly different from the real cell */
+  if (diff){
+    var orig = CELL[diff.y*HALF + (GRID-1-diff.x)];   // mirrored half-cell src
+    diff.v = 0.30 + (hash53(seed+':fv', 11) % 560)/1000;
+    if (Math.abs(diff.v - orig) < 0.30)
+      diff.v = diff.v > orig ? Math.max(0.12, orig-0.34)
+                             : Math.min(0.95, orig+0.34);
+  }
+
+  function cellAt(cx, cy){
+    if (diff && cx===diff.x && cy===diff.y) return diff.v;
+    var hx = cx < HALF ? cx : GRID-1-cx;
+    return CELL[cy*HALF+hx];
+  }
+
+  function fit(){
+    DPR = Math.min(window.devicePixelRatio || 1, 2);
+    PITCH = 9 * DPR;
+    BUF = GRID * PITCH + 1;
+    cvEl.width = BUF; cvEl.height = BUF;
+    IMG = cx2d.createImageData(BUF, BUF);
+    V = new Float32Array(BUF * BUF);
+  }
+
+  function quantize(){
+    var d = IMG.data, p = 0, o = 0;
+    for (var y=0; y<BUF; y++){
+      var brow = (y&7)<<3;
+      for (var x=0; x<BUF; x++){
+        var v = V[p];
+        var th = TH8[brow|(x&7)]*0.62 + ign(x,y)*0.38;
+        var f = v*LEVELS, l = f|0;
+        if (f-l > th) l++;
+        if (l<0) l = 0; else if (l>LEVELS) l = LEVELS;
+        var c = PAL[l];
+        d[o]=c[0]; d[o+1]=c[1]; d[o+2]=c[2]; d[o+3]=255;
+        p++; o+=4;
+      }
+    }
+    cx2d.putImageData(IMG, 0, 0);
+  }
+
+  function ignite(t, dt){
+    if (t >= nextIgn){
+      ENERGY[(Math.random()*GRID*GRID)|0] = 1;
+      nextIgn = t + 0.7 + Math.random()*1.9;
+    }
+    var decay = Math.exp(-dt*2.4);
+    for (var i=0; i<ENERGY.length; i++)
+      if (ENERGY[i] > 0.002) ENERGY[i] *= decay; else ENERGY[i] = 0;
+  }
+
+  function draw(t, dt){
+    ignite(t, dt);
+    var margin = 8*DPR, span = BUF + margin*2;
+    var sy = ((t*0.145) % 1) * span - margin;
+    var sHW = 5*DPR;
+    for (var y=0; y<BUF; y++){
+      var cy = (y/PITCH)|0; if (cy > GRID-1) cy = GRID-1;
+      var gY = (y % PITCH) < DPR;
+      var scan = 1 - Math.abs(y-sy)/sHW;
+      if (scan < 0) scan = 0;
+      var brow = (y&7)<<3;
+      for (var x=0; x<BUF; x++){
+        var o = y*BUF + x, v;
+        var cx = (x/PITCH)|0; if (cx > GRID-1) cx = GRID-1;
+        if (gY || (x % PITCH) < DPR){
+          v = 0.055 + 0.05*scan;
+        } else {
+          var ci = cy*GRID + cx;
+          var cv0 = cellAt(cx, cy);
+          var e = ENERGY[ci];
+          var dens = cv0*(0.25 + 0.72*cv0) + 0.38*e;
+          if (dens > 1) dens = 1;
+          var th = TH8[brow|(x&7)]*0.70 + ign(x+31, y+57)*0.30;
+          if (th < dens){
+            v = 0.30 + 0.62*cv0 + 0.55*e;
+          } else {
+            v = 0.012 + 0.010*ign(x*3+y, y*7+x);
+          }
+          v += 0.13*scan*(0.35 + 0.65*cv0);
+        }
+        V[o] = v > 1 ? 1 : v;
+      }
+    }
+    quantize();
+  }
+
+  function warmup(tEnd, n){
+    for (var i=0; i<ENERGY.length; i++) ENERGY[i] = 0;
+    nextIgn = 0;
+    for (i=n; i>0; i--) draw(tEnd - i/60, 1/60);
+    draw(tEnd, 1/60);
+  }
+
+  fit();
+  return { draw:draw, warmup:warmup, fit:fit };
+}
+
+/* ---- three instances: solo, compare-you, compare-claimed ---- */
+var SEED = '9c1f7bd24e88a1c3f50d6b4e9a2d7710c86be412f9aa07';
+var DC = 8 + hash53(SEED+':dc', 3) % 8;      // diff cell, right half only
+var DR = hash53(SEED+':dr', 5) % GRID;      // (mirror keeps it a single block)
+
+var mats = [];
+function addM(id, diff){ var c = el(id); if (c) mats.push(Matrix(c, SEED, diff)); }
+addM('cv-fp',   null);
+addM('cv-fp-l', null);
+addM('cv-fp-r', {x:DC, y:DR});
+
+var fpCard = el('fpCard');
+var raf = 0, running = false, inView = false, last = 0;
+
+function loop(now){
+  raf = 0;
+  var t = now/1000, dt = t - last;
+  if (dt > 0.05) dt = 0.05;
+  if (dt < 0) dt = 0;
+  for (var i=0; i<mats.length; i++) mats[i].draw(t, dt);
+  last = t;
+  if (running) raf = requestAnimationFrame(loop);
+}
+function start(){
+  if (!running && !reduced && !document.hidden && inView){
+    running = true;
+    last = performance.now()/1000;
+    if (!raf) raf = requestAnimationFrame(loop);
+  }
+}
+function stop(){
+  running = false;
+  if (raf){ cancelAnimationFrame(raf); raf = 0; }
+}
+function fitAll(){
+  for (var i=0; i<mats.length; i++){
+    mats[i].fit();
+    if (reduced) mats[i].warmup(STATIC_T, 90);
+  }
+}
+document.addEventListener('visibilitychange', function(){
+  document.hidden ? stop() : start();
+});
+new IntersectionObserver(function(e){
+  inView = e[0].isIntersecting;
+  inView ? start() : stop();
+}).observe(fpCard);
+if (RM.addEventListener) RM.addEventListener('change', function(e){
+  reduced = e.matches;
+  if (reduced){ stop(); for (var i=0;i<mats.length;i++) mats[i].warmup(STATIC_T,90); }
+  else start();
+});
+var rt; window.addEventListener('resize', function(){
+  clearTimeout(rt); rt = setTimeout(fitAll, 150);
+});
+if (reduced) for (var j=0; j<mats.length; j++) mats[j].warmup(STATIC_T, 90);
+start();
+
+/* ================= fingerprint hex (selectable) ================= */
+function chunks(s, n){ var a=[],i; for(i=0;i<s.length;i+=n) a.push(s.slice(i,i+n)); return a; }
+var GROUPS = chunks(SEED, 4);                 // 14 groups · 56 hex chars
+var FH = ('0000000' + (hash53(SEED+':fg',13)>>>0).toString(16)).slice(-8);
+var FORGE = FH.slice(0,4);
+if (FORGE === GROUPS[4]) FORGE = 'dead';
+var CGROUPS = GROUPS.slice(); CGROUPS[4] = FORGE;   // claimed: group 05 forged
+
+function hexLine(groups, markCls){
+  return groups.map(function(g,i){
+    return i===4 ? '<b class="'+markCls+'">'+g+'</b>' : g;
+  }).join(' ');
+}
+var hx;
+if (hx = el('hexSolo')) hx.innerHTML = hexLine(GROUPS, 'ref');
+if (hx = el('hexA'))    hx.innerHTML = hexLine(GROUPS, 'ref');
+if (hx = el('hexB'))    hx.innerHTML = hexLine(CGROUPS, 'bad');
+
+/* diff-cell markers + verdict */
+function hex2(n){ return ('0'+n.toString(16)).slice(-2).toUpperCase(); }
+['dmA','dmB'].forEach(function(id){
+  var d = el(id); if (!d) return;
+  d.style.left = (DC*6.25)+'%';
+  d.style.top  = (DR*6.25)+'%';
+});
+var vd;
+if (vd = el('vdText'))
+  vd.textContent = '≠ MISMATCH — cell ('+hex2(DC)+'·'+hex2(DR)+') + hex group 05 differ — DO NOT TRUST';
+if (vd = el('vdStat')) vd.textContent = '255/256 CELLS EQUAL';
+
+/* ================= compare toggle ================= */
+var cmpBtn = el('cmpBtn'), modeEl = el('fpMode');
+var opts = cmpBtn ? cmpBtn.querySelectorAll('.opt') : [];
+function setCmp(on){
+  fpCard.classList.toggle('cmp', on);
+  cmpBtn.setAttribute('aria-pressed', String(on));
+  el('fpSolo').hidden = on;
+  el('fpCmp').hidden = !on;
+  for (var i=0; i<opts.length; i++)
+    opts[i].classList.toggle('on', (i===1) === on);
+  if (modeEl) modeEl.textContent = on ? 'compare' : 'solo';
+}
+if (cmpBtn){
+  cmpBtn.addEventListener('click', function(){ setCmp(el('fpCmp').hidden); });
+  document.addEventListener('keydown', function(e){
+    if (e.key !== 'c' && e.key !== 'C') return;
+    var t = e.target;
+    if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
+    setCmp(el('fpCmp').hidden);
+  });
+}
+
+/* ================= ticket tear ================= */
+var tk = el('tk'), keysTxt = el('tkKeysTxt'),
+    live = el('tkLive'), reset = el('tkReset');
+var KEYS_HTML = keysTxt ? keysTxt.innerHTML : '';
+
+function redeem(){
+  if (tk.classList.contains('torn')) return;
+  tk.classList.add('torn');
+  tk.setAttribute('aria-disabled', 'true');
+  keysTxt.innerHTML = 'link consumed · <b>replay rejected</b> — stub detached';
+  live.textContent = 'ticket redeemed — link consumed · replay rejected';
+  if (reset) reset.hidden = false;
+}
+if (tk){
+  tk.addEventListener('click', function(e){ e.preventDefault(); redeem(); });
+  tk.addEventListener('keydown', function(e){
+    if (e.key === 'Enter' || e.key === ' '){ e.preventDefault(); redeem(); }
+  });
+}
+if (reset){
+  reset.addEventListener('click', function(){
+    tk.classList.remove('torn');
+    tk.removeAttribute('aria-disabled');
+    keysTxt.innerHTML = KEYS_HTML;
+    live.textContent = '';
+    reset.hidden = true;
+  });
+}
+
+/* ---- ASCII column audit --------------------------------------------
+   verified widths (this checker re-runs them on every load):
+     .tk-main  58 cols × 16 rows  (prod desktop pre, cols 0–57, keeps ┊ perf)
+     .tk-stub  15 cols × 16 rows  (prod desktop pre, cols 58–72)
+     .tk-mtop  50 cols × 13 rows  (prod mobile pre, through the ├┄┤ row)
+     .tk-mstub 50 cols ×  5 rows  (blank / SINGLE USE / serial / blank / └┘)
+     .tk-void  14 cols ×  4 rows  (stamp overlay)
+   combined desktop width = 73 cols — identical to prod's single pre.
+   ------------------------------------------------------------------- */
+(function checkCols(){
+  var pres = document.querySelectorAll('.tk-art pre');
+  for (var p=0; p<pres.length; p++){
+    var rows = pres[p].textContent.replace(/\n$/, '').split('\n');
+    var w = -1, ok = true;
+    for (var r=0; r<rows.length; r++){
+      var n = Array.from(rows[r]).length;
+      if (w < 0) w = n; else if (n !== w) ok = false;
+    }
+    console[ok ? 'log' : 'warn'](
+      '[idt2]', pres[p].className, w + '×' + rows.length,
+      ok ? 'aligned' : 'MISALIGNED');
+  }
+})();
+})();
+</script>
+</body>
+</html>

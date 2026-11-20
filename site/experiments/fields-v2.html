@@ -1,0 +1,650 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>cinder — fields v2 · ember weather</title>
+<!--
+  FIELDS V2 — unified "ember weather" field system
+
+  Three canvas fields, one painter:
+    a · ember field v2   -> ports to #emberCanvas  (main.js L57-215)
+    b · molten strip v2  -> ports to #moltenCanvas (main.js L690+)
+    c · edge dissolve v2 -> ports to .dissolve-cv  (main.js L557-568)
+
+  New vs prod:
+    ember   — ember pockets flare & relax to the 0.30 smolder floor;
+              heat bleeds to neighbours through a cheap blur/decay pass
+    molten  — periodic Bayer-ordered charge fill: blocks accumulate
+              along the strip, then dissolve in matrix order
+    dissolve— sparse corrosion "creep" grows inward a few cells,
+              holds, recedes
+-->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --ground:#0B0B0D; --panel:#14161A; --card:#101216; --ink:#EDEDE8;
+    --muted:#9BA0A6; --dim:#565D68; --faint:#3D434B; --line:#23262D;
+    --ember:#FFB224; --ember-dim:#B87A18;
+    --mono:'JetBrains Mono',ui-monospace,monospace;
+  }
+  *{box-sizing:border-box;margin:0}
+  body{background:var(--ground);color:var(--ink);font-family:var(--mono);
+    font-size:13px;line-height:1.65;-webkit-font-smoothing:antialiased}
+
+  /* ============ demo chrome (not for port) ============ */
+  .fld2 .page{position:relative;z-index:1;min-height:100vh;
+    display:flex;flex-direction:column}
+  .fld2 .bar{padding:26px 32px;display:flex;justify-content:space-between;
+    align-items:baseline;border-bottom:1px solid var(--line);
+    background:rgba(11,11,13,.78);font-size:13px}
+  .fld2 .tag{color:var(--ember);font-weight:500}
+  .fld2 .hint{color:var(--muted);font-size:11px;letter-spacing:.08em}
+  .fld2 .wrap{max-width:980px;margin:0 auto;padding:0 24px;width:100%}
+  .fld2 main{flex:1;padding-bottom:180px}
+  .fld2 .sl{padding:64px 0 8px}
+  .fld2 .strip{display:flex;align-items:center;gap:14px;font-size:10px;
+    letter-spacing:.2em;color:var(--dim);text-transform:uppercase;
+    margin-bottom:18px}
+  .fld2 .strip .t2{color:var(--ember)}
+  .fld2 .strip .rule{flex:1;border-top:1px dashed var(--line)}
+  .fld2 .strip .meta{color:var(--faint);letter-spacing:.12em}
+  .fld2 h2{font-weight:500;font-size:22px;letter-spacing:-.01em;
+    margin-bottom:10px}
+  .fld2 h2 em{font-style:normal;color:var(--ember)}
+  .fld2 .lede{color:var(--muted);max-width:66ch;font-size:12.5px;
+    line-height:1.7;margin-bottom:22px}
+  .fld2 .lede b{color:var(--ink);font-weight:500}
+  .fld2 .cap{display:flex;gap:10px;margin:10px 2px 0;font-size:9.5px;
+    letter-spacing:.15em;text-transform:uppercase;color:var(--dim)}
+  .fld2 .cap .k{color:var(--ember)}
+  .fld2 .cap .d{flex:1;border-bottom:1px dotted var(--faint);
+    transform:translateY(-4px)}
+  .fld2 .cap .v{color:var(--faint)}
+  .fld2 .note{margin:2px 2px 0;font-size:10.5px;color:var(--dim);
+    letter-spacing:.04em}
+  .fld2 .note b{color:var(--muted);font-weight:500}
+  .fld2 pre.port{margin-top:22px;background:var(--card);
+    border:1px solid var(--line);border-radius:8px;padding:18px 20px;
+    font-family:var(--mono);font-size:11px;line-height:1.8;
+    color:var(--muted);overflow-x:auto}
+  .fld2 pre.port .h{color:var(--ember)}
+  .fld2 pre.port .c{color:var(--faint)}
+
+  /* ============ PORT -> style.css : field mounts ============ */
+  /* ember field — same mount as prod #emberCanvas (200px, v-mask) */
+  .fld2 .ember-v2{display:block;width:100%;height:200px;
+    image-rendering:pixelated;pointer-events:none;
+    -webkit-mask-image:linear-gradient(180deg,transparent 0%,#000 14%,#000 84%,transparent 100%);
+            mask-image:linear-gradient(180deg,transparent 0%,#000 14%,#000 84%,transparent 100%)}
+  /* molten strip — same mount as prod #moltenCanvas (240px, v-mask) */
+  .fld2 .molten-v2{display:block;width:100%;height:240px;
+    image-rendering:pixelated;pointer-events:none;background:var(--ground);
+    -webkit-mask-image:linear-gradient(180deg,transparent 0%,#000 16%,#000 82%,transparent 100%);
+            mask-image:linear-gradient(180deg,transparent 0%,#000 16%,#000 82%,transparent 100%)}
+  /* dissolve — same mount as prod .dissolve-cv (150px, in-flow) */
+  .fld2 .dissolve-v2{display:block;width:100%;height:150px;
+    image-rendering:pixelated;pointer-events:none}
+  /* fixed page-edge variant (experiment only — prod mounts in-flow) */
+  .fld2 .edge{position:fixed;left:0;right:0;z-index:0;pointer-events:none}
+  .fld2 .edge.top{top:0;height:110px}
+  .fld2 .edge.bot{bottom:0;height:130px}
+  .fld2 .edge canvas{width:100%;height:100%;image-rendering:pixelated}
+</style>
+</head>
+<body>
+<div class="fld2">
+
+  <!-- c · edge dissolve v2: fixed page-edge strips (top dir=up, bottom dir=down) -->
+  <div class="edge top" aria-hidden="true"><canvas class="edgeCv" data-dir="up"></canvas></div>
+  <div class="edge bot" aria-hidden="true"><canvas class="edgeCv" data-dir="down"></canvas></div>
+
+  <div class="page">
+    <header class="bar">
+      <span class="tag">cinder</span>
+      <span class="hint">experiments / fields v2 · ember weather</span>
+    </header>
+
+    <main class="wrap">
+
+      <section class="sl" aria-labelledby="h1">
+        <div class="strip">
+          <span class="t2">a · ember field</span>
+          <span class="rule" aria-hidden="true"></span>
+          <span class="meta">ports to #emberCanvas · cell 4px</span>
+        </div>
+        <h2 id="h1">smolder floor, <em>ember pockets</em></h2>
+        <p class="lede">Same twin-front envelope as prod — 0.30 floor keeps the
+          centre breathing — plus <b>pockets</b>: localised hot spots that flare,
+          then relax. Heat bleeds into neighbouring cells through a one-pass
+          blur/decay, so flares read molten, not pixelated. Edge sparks still
+          rise; pocket cores spit their own.</p>
+        <canvas id="emberV2" class="ember-v2" aria-hidden="true"></canvas>
+        <p class="cap"><span class="k">ember-v2</span><span class="d" aria-hidden="true"></span><span class="v">pockets + heat diffusion + sparks</span></p>
+      </section>
+
+      <section class="sl" aria-labelledby="h2">
+        <div class="strip">
+          <span class="t2">b · molten strip</span>
+          <span class="rule" aria-hidden="true"></span>
+          <span class="meta">ports to #moltenCanvas · cell 8px</span>
+        </div>
+        <h2 id="h2">the strip <em>charges</em></h2>
+        <p class="lede">Molten noise bed as before — plus a periodic
+          <b>Bayer fill</b> that travels the strip: cells light in matrix order
+          at a ragged front, so the fill reads as <b>accumulating blocks</b>,
+          never a gradient wipe. Hold, then the charge dissolves block-by-block
+          in reverse threshold order.</p>
+        <canvas id="moltenV2" class="molten-v2" aria-hidden="true"></canvas>
+        <p class="cap"><span class="k">molten-v2</span><span class="d" aria-hidden="true"></span><span class="v">charge sweep ≈ every 9.5s</span></p>
+      </section>
+
+      <section class="sl" aria-labelledby="h3">
+        <div class="strip">
+          <span class="t2">c · edge dissolve</span>
+          <span class="rule" aria-hidden="true"></span>
+          <span class="meta">ports to .dissolve-cv · cell 4px</span>
+        </div>
+        <h2 id="h3">edges <em>creep</em></h2>
+        <p class="lede">The static vignette is unchanged — density still falls
+          off with <b>pow(depth)</b>. Now corrosion occasionally
+          <b>creeps inward</b>: a ragged dithered tongue grows a few cells past
+          the rim, holds, and recedes. Slow, sparse, one or two live at a time.
+          Fixed top/bottom strips show it here; prod mounts in-flow.</p>
+        <p class="note"><b>live:</b> watch the page edges — creep appears every
+          ~7–12s, tinting its advancing front ember-dim.</p>
+      </section>
+
+      <section class="sl" aria-labelledby="h4">
+        <div class="strip">
+          <span class="t2">d · port map</span>
+          <span class="rule" aria-hidden="true"></span>
+          <span class="meta">what lifts, where it lands</span>
+        </div>
+<pre class="port"><span class="h">/* ---- PORT ---- */</span>
+<span class="c">shared (already in prod, do NOT duplicate):</span>
+  B8 · h2d(x,y,s) · paint(cv,cell,vfn,cfn) · PRM     main.js L424-453
+
+<span class="c">#emberCanvas  &lt;- ember v2 IIFE:</span>
+  RAMP, stepHeat(), stamp(), pockets[], sparks[],
+  base() envelope (0.30 floor kept)                replaces L57-215
+
+<span class="c">#moltenCanvas &lt;- molten v2 IIFE:</span>
+  charge() cycler (T_CYC/T_FILL/T_HOLD/T_REL),
+  molten() bed, FILL ramp                          2D path of L690+
+
+<span class="c">.dissolve-cv  &lt;- dissolve v2 IIFE:</span>
+  creeps[] (env: grow/hold/recede), data-dir attr   extends L557-568
+
+<span class="c">all three:</span> fieldLoop() helper = IO + visibility +
+  PRM wiring; prod may keep its own start/stop      new, lift once</pre>
+      </section>
+
+    </main>
+  </div>
+
+  <!-- prod-style in-flow mount for the dissolve (like .page-dissolve) -->
+  <canvas class="edgeCv dissolve-v2" data-dir="down" aria-hidden="true"></canvas>
+
+</div>
+
+<script>
+(function(){
+'use strict';
+
+/* ================================================================
+   SHARED ORDERED-DITHER PRIMITIVES
+   verbatim signatures — identical to prod main.js L424-453.
+   ---- PORT: already in prod; skip when merging. ----
+================================================================ */
+const B8=[0,32,8,40,2,34,10,42,48,16,56,24,50,18,58,26,
+          12,44,4,36,14,46,6,38,60,28,52,20,62,30,54,22,
+          3,35,11,43,1,33,9,41,51,19,59,27,49,17,57,25,
+          15,47,7,39,13,45,5,37,63,31,55,23,61,29,53,21];
+const PRM=matchMedia('(prefers-reduced-motion: reduce)');
+function h2d(x,y,s){
+  let n=(x*374761393+y*668265263+(s|0)*2246822519)>>>0;
+  n=Math.imul(n^(n>>>13),1274126177)>>>0;
+  return ((n^(n>>>16))>>>0)/4294967296;
+}
+function paint(cv,cell,vfn,cfn){
+  const dpr=Math.min(devicePixelRatio||1,2);
+  const w=cv.clientWidth,h=cv.clientHeight;
+  if(!w||!h)return;
+  const W=Math.round(w*dpr),H=Math.round(h*dpr);
+  if(cv.width!==W||cv.height!==H){cv.width=W;cv.height=H;}
+  const g=cv.getContext('2d');
+  g.clearRect(0,0,W,H);
+  const s=cell*dpr,cols=Math.ceil(w/cell),rows=Math.ceil(h/cell);
+  for(let y=0;y<rows;y++)for(let x=0;x<cols;x++){
+    const v=vfn(x,y,cols,rows);
+    if(v<=0)continue;
+    const t=(B8[(y&7)*8+(x&7)]+.5)/64;
+    const c=cfn(v,t,x,y);
+    if(!c)continue;
+    g.fillStyle=c;
+    g.fillRect(Math.round(x*s),Math.round(y*s),Math.ceil(s),Math.ceil(s));
+  }
+}
+
+/* ----------------------------------------------------------------
+   fieldLoop — shared lifecycle: IntersectionObserver + document.hidden
+   + PRM + debounced resize. api = {resize(), tick(t,dt), still()}.
+   still() paints ONE fully-rendered static frame (PRM + first paint).
+   ---- PORT: new helper, lift once; replaces per-canvas start/stop. --
+---------------------------------------------------------------- */
+function fieldLoop(cv,api){
+  let running=false,inView=false,raf=0,last=0,t=6+Math.random()*30;
+  function frame(now){
+    raf=0;
+    const nt=now/1000,dt=Math.min(.05,Math.max(0,nt-last));
+    last=nt;t+=dt;api.tick(t,dt);
+    if(running)raf=requestAnimationFrame(frame);
+  }
+  function want(){return !PRM.matches&&!document.hidden&&inView;}
+  function sync(){
+    if(want()&&!running){running=true;last=performance.now()/1000;
+      raf=requestAnimationFrame(frame);}
+    else if(!want()&&running){running=false;
+      if(raf){cancelAnimationFrame(raf);raf=0;}}
+  }
+  new IntersectionObserver(es=>{
+    inView=es[0].isIntersecting;sync();
+  },{rootMargin:'60px 0px'}).observe(cv);
+  document.addEventListener('visibilitychange',sync);
+  if(PRM.addEventListener)PRM.addEventListener('change',()=>{
+    sync();if(PRM.matches)api.still();
+  });
+  let rt;addEventListener('resize',()=>{
+    clearTimeout(rt);rt=setTimeout(()=>{
+      api.resize();if(PRM.matches)api.still();},140);
+  });
+  api.resize();
+  api.still();            /* first paint for everyone; PRM keeps just this */
+}
+
+/* ================================================================
+   EMBER FIELD V2 — twin fronts + ember pockets + heat diffusion
+   ----------------------------------------------------------------
+   ---- PORT -> #emberCanvas ---------------------------------------
+   lift: RAMP, resize(), stepHeat(), stamp(), spawnPocket(),
+   spawnSpark(), tick(), vfn(), cfn(). base() keeps prod's
+   smoothstep² envelope with the 0.30 smolder floor. Replaces
+   prod's ImageData loop with the shared paint() path — swap the
+   canvas to paint(cv,4,...) and the palettes below do the rest.
+================================================================ */
+(function(){
+  const cv=document.getElementById('emberV2');if(!cv)return;
+  const CELL=4,MAX_POCKETS=4,MAX_SPARKS=26;
+  /* charcoal -> ember-dim -> ember -> pale ramp (ground = unpainted) */
+  const RAMP=['#2A1D08','#3E2B0C','#573B10','#735011','#916517',
+              '#B87A18','#D9961D','#FFB224','#FFC85C','#FFE3A1','#FFF4D8'];
+  let cols=0,rows=0,heat=null,tmp=null;
+  let t=0,bL=1,bR=1,nextPocket=0,nextSpark=0;
+  const pockets=[],sparks=[];
+
+  function resize(){
+    cols=Math.max(1,Math.ceil(cv.clientWidth/CELL));
+    rows=Math.max(1,Math.ceil(cv.clientHeight/CELL));
+    heat=new Float32Array(cols*rows);
+    tmp=new Float32Array(cols*rows);
+  }
+
+  /* twin-front smolder floor — prod envelope, compressed sines */
+  function base(x,y){
+    const mx=x/(cols-1)*2-1,a=mx<0?-mx:mx;
+    let e=a*a*(3-2*a);e=e*e*(3-2*e);
+    e=(.30+.70*e)*(mx<0?bL:bR);                 /* 0.30 floor = centre smolder */
+    const q=y/(rows-1),vp=q*q;
+    const warp=4.5*Math.sin(y*.13+t*.27)+2*Math.sin(y*.29-t*.19);
+    const wx=x+warp;
+    let v=.42*Math.sin(wx*.030+t*.50+y*.110)
+         +.26*Math.sin(wx*.073-t*.38+y*.190+1.7)
+         +.16*Math.sin(wx*.160+t*.72-y*.090+4.1)
+         +.10*Math.sin(wx*.310-t*1.15+y*.240+2.3);
+    v=v*.68+.5;
+    v=v*e*vp*1.42+.006+.010*h2d(x,y,4);
+    v=v<0?0:v>1?1:v;
+    return v*v*(3-2*v)*.45+v*.55;
+  }
+
+  /* cheap blur/decay: each cell relaxes toward its neighbour mean at
+     rate D while cooling at rate K — energy is lost every pass, so
+     flares bleed a molten halo then die back to the smolder floor. */
+  function stepHeat(dt){
+    const D=Math.min(1,dt*6.5),K=Math.min(1,dt*1.9);
+    for(let y=0;y<rows;y++){
+      const yr=y*cols,up=y>0?-cols:0,dn=y<rows-1?cols:0;
+      for(let x=0;x<cols;x++){
+        const i=yr+x,h0=heat[i];
+        const n=(x>0?heat[i-1]:0)+(x<cols-1?heat[i+1]:0)
+               +(up?heat[i+up]:0)+(dn?heat[i+dn]:0);
+        let nh=h0*(1-K)+(n*.25-h0)*D;
+        tmp[i]=nh<0?0:nh>1.2?1.2:nh;
+      }
+    }
+    const sw=heat;heat=tmp;tmp=sw;
+  }
+
+  /* stamp a soft heat disc — pocket cores & spark heads */
+  function stamp(cx,cy,r,v){
+    const x0=Math.max(0,(cx-r)|0),x1=Math.min(cols-1,Math.ceil(cx+r)),
+          y0=Math.max(0,(cy-r)|0),y1=Math.min(rows-1,Math.ceil(cy+r));
+    for(let y=y0;y<=y1;y++)for(let x=x0;x<=x1;x++){
+      const dx=x-cx,dy=(y-cy)*1.15,d=Math.sqrt(dx*dx+dy*dy);
+      if(d>=r)continue;
+      const f=1-d/r,i=y*cols+x,hv=v*f*(1.4-.4*f);
+      if(heat[i]<hv)heat[i]=hv;
+    }
+  }
+
+  function spawnPocket(){
+    pockets.push({
+      x:cols*(.12+.76*Math.random()),
+      y:rows*(.45+.52*Math.random()),
+      r:2.5+Math.random()*3.5,
+      atk:.22+Math.random()*.30,           /* flare-up seconds */
+      dec:1.9+Math.random()*2.6,           /* relax seconds */
+      pk:.62+Math.random()*.50,t0:t
+    });
+  }
+  function spawnSpark(){
+    let x,y;
+    const r=Math.random();
+    if(r<.5){                              /* edge fronts, like prod */
+      x=Math.random()<.5?2+Math.random()*cols*.22:cols-3-Math.random()*cols*.22;
+      y=rows*(.6+.36*Math.random());
+    }else if(r<.8&&pockets.length){        /* pocket cores spit embers */
+      const p=pockets[(Math.random()*pockets.length)|0];
+      x=p.x;y=p.y;
+    }else{
+      x=2+Math.random()*(cols-4);y=rows*(.7+.26*Math.random());
+    }
+    sparks.push({x,y,vx:(Math.random()-.5)*1.6,vy:4.5+Math.random()*5,
+      amp:.5+Math.random()*1.6,wf:1.4+Math.random()*2.4,
+      ph:Math.random()*6.28,t0:t,ttl:2.6+Math.random()*2.4});
+  }
+
+  function vfn(x,y){
+    const v=base(x,y)+heat[y*cols+x]*.9;
+    return v>1.15?1.15:v;
+  }
+  function cfn(v,th,x,y){
+    const tt=th*.60+h2d(x,y,9)*.40;        /* hybrid bayer+hash threshold */
+    if(v<=tt)return h2d(x,y,2)<.028?'#1B1E23':null;
+    const h=v*.82+(v-tt)*.55,hi=h>1?1:h;   /* palette ~∝ v, like prod */
+    return RAMP[Math.min(RAMP.length-1,(hi*(RAMP.length-1))|0)];
+  }
+
+  function tick(nt,dt){
+    t=nt;
+    bL=.90+.10*Math.sin(t*.33);
+    bR=.90+.10*Math.sin(t*.33+2.3);
+    if(t>=nextPocket&&pockets.length<MAX_POCKETS){
+      spawnPocket();nextPocket=t+1.6+Math.random()*2.6;
+    }
+    if(t>=nextSpark&&sparks.length<MAX_SPARKS){
+      spawnSpark();nextSpark=t+.22+Math.random()*.4;
+    }
+    for(let i=pockets.length-1;i>=0;i--){
+      const p=pockets[i],age=t-p.t0;
+      let env;
+      if(age<p.atk){const u=age/p.atk;env=u*u*(3-2*u);}
+      else env=1-(age-p.atk)/p.dec;
+      if(env<=0){pockets.splice(i,1);continue;}
+      stamp(p.x,p.y,p.r*(0.8+.3*env),p.pk*env);
+    }
+    for(let i=sparks.length-1;i>=0;i--){
+      const s=sparks[i],age=t-s.t0;
+      if(age>s.ttl){sparks.splice(i,1);continue;}
+      const fade=1-age/s.ttl;
+      const sx=s.x+s.vx*age+s.amp*Math.sin(t*s.wf+s.ph),
+            sy=s.y-s.vy*age;
+      stamp(sx,sy,1.1,.55+.45*fade);
+      stamp(sx,sy+2,.8,.3*fade);
+    }
+    stepHeat(dt);
+    paint(cv,CELL,vfn,cfn);
+  }
+
+  /* one static frame: pockets mid-flare, spark trails, heat pre-bled */
+  function still(){
+    heat.fill(0);pockets.length=0;sparks.length=0;t=6;
+    bL=.98;bR=.94;
+    const sd=[[.22,.72,4.2,.95],[.55,.62,3.2,.8],[.78,.8,5,.9]];
+    for(const s of sd)stamp(s[0]*cols,s[1]*rows,s[2],s[3]);
+    for(let i=0;i<22;i++)stepHeat(.05);     /* pre-diffuse */
+    for(const s of sd)stamp(s[0]*cols,s[1]*rows,s[2]*.7,s[3]*.8);
+    stamp(cols*.34,rows*.55,1.1,.9);stamp(cols*.34,rows*.48,.8,.5);
+    stamp(cols*.86,rows*.6,1.1,.8);
+    paint(cv,CELL,vfn,cfn);
+  }
+
+  fieldLoop(cv,{resize,tick,still});
+})();
+
+/* ================================================================
+   MOLTEN STRIP V2 — molten bed + Bayer-ordered charge fill
+   ----------------------------------------------------------------
+   ---- PORT -> #moltenCanvas --------------------------------------
+   lift: CELL/SKY, charge() cycler + cycle constants, molten() bed,
+   FILL ramp. Prod renders WebGL — this is the shared-paint 2D path;
+   to keep GL, port charge() to the frag shader (uniforms uP,uRel,
+   same cycle math). Fill advances as ordered blocks because the
+   2.6-cell front feather is quantised by the B8 matrix in cfn.
+================================================================ */
+(function(){
+  const cv=document.getElementById('moltenV2');if(!cv)return;
+  const CELL=8,SKY=.22;
+  const T_CYC=9.5,T_FILL=5.0,T_HOLD=1.4,T_REL=1.4;   /* charge cycle, s */
+  const FILL=['#8A5F17','#B87A18','#DB9A1F','#FFB224','#FFCE66','#FFE7AC'];
+  const BED=['#241A0B','#33230D','#452F10','#5C3F12','#755213',
+             '#8F6516','#B87A18','#D9961D','#FFB224','#FFD073'];
+  let t=0,cols=0,rows=0,skyRows=0,P=0,REL=0;
+
+  function resize(){
+    cols=Math.max(1,Math.ceil(cv.clientWidth/CELL));
+    rows=Math.max(1,Math.ceil(cv.clientHeight/CELL));
+    skyRows=Math.max(1,Math.round(rows*SKY));
+  }
+
+  /* charge fill value per cell: ragged front, ordered blocks.
+     P = fill progress 0..1, REL = dissolve progress 0..1 */
+  function charge(x,y){
+    if(P<=0)return 0;
+    const fx=P*(cols+8)-4+(h2d(x,3,13)-.5)*3.6;   /* per-column front jitter */
+    let fv=(fx-x)/2.6;
+    fv=fv<0?0:fv>1?1:fv;
+    if(REL>0)fv-=REL*1.3;                         /* blocks dissolve in B8 order */
+    if(fv>0)fv*=.72+.28*h2d(x,y,21+((t*5)|0));    /* interior shimmer */
+    return fv<0?0:fv;
+  }
+
+  /* molten bed — bottom-anchored noise + rising pulses */
+  function molten(x,y){
+    const fy=(y-skyRows)/(rows-skyRows);
+    let n=.5+.5*Math.sin(x*.055+t*.9+y*.11)
+        +.3*Math.sin(x*.11-t*.6-y*.04+1.9)
+        +.2*Math.sin(x*.21+t*1.7-y*.13+4.2);
+    n*=.5;
+    let v=(fy*fy*.85+fy*.35)*(.4+.95*n);
+    v+=.18*fy*fy*Math.max(0,Math.sin(x*.09-t*.7)+Math.sin(x*.031+t*.43+2))*.5;
+    const ex=x/cols;
+    v*=Math.min(1,ex*14)*Math.min(1,(1-ex)*14);
+    return v<0?0:v>1?1:v;
+  }
+
+  function vfn(x,y){
+    if(y<skyRows)return 0;
+    const f=charge(x,y),m=molten(x,y);
+    return f>m?f:m;
+  }
+  function cfn(v,th,x,y){
+    if(y<skyRows){                                /* star sliver */
+      const s=h2d(x,y,31);
+      if(s<.05&&Math.sin(t*(1+s*9)+s*40)>.2)
+        return s<.012?'#FFE9C0':'#8A6A2A';
+      return null;
+    }
+    const tt=th*.62+h2d(x,y,9)*.38;
+    const f=charge(x,y);
+    if(f>tt){                                     /* charge blocks lead */
+      const h=.32+(1-f)*.56+h2d(x,y,27)*.2;       /* fresh front cells burn palest */
+      return FILL[Math.min(FILL.length-1,(h*(FILL.length-1))|0)];
+    }
+    if(v>tt){                                     /* molten bed */
+      const h=Math.min(1,v*.8+(v-tt)*.5);
+      return BED[Math.min(BED.length-1,(h*(BED.length-1))|0)];
+    }
+    return v>.3&&h2d(x,y,5)<.4?'#1C130A':null;    /* warm ground haze */
+  }
+
+  function tick(nt){
+    t=nt;
+    const ph=t%T_CYC;
+    if(ph<T_FILL){const u=ph/T_FILL;P=u<.12?u*u/.12:u;REL=0;}
+    else if(ph<T_FILL+T_HOLD){P=1;REL=0;}
+    else if(ph<T_FILL+T_HOLD+T_REL){P=1;REL=(ph-T_FILL-T_HOLD)/T_REL;}
+    else{P=0;REL=0;}
+    paint(cv,CELL,vfn,cfn);
+  }
+
+  function still(){t=6;P=.62;REL=0;paint(cv,CELL,vfn,cfn);}
+
+  fieldLoop(cv,{resize,tick,still});
+})();
+
+/* ================================================================
+   EDGE DISSOLVE V2 — static vignette + corrosion creep
+   ----------------------------------------------------------------
+   ---- PORT -> .dissolve-cv ----------------------------------------
+   lift: whole IIFE. Base density identical to prod
+   (pow(depth,1.5)); data-dir="down" reproduces prod's bottom-anchored
+   .page-dissolve, "up" mirrors for a top edge. creeps[] is the only
+   new state; loop repaints only while a creep is live, otherwise the
+   field is as static as prod.
+================================================================ */
+(function(){
+  const CELL=4,MAX_CREEPS=2;
+  const insts=[];
+  document.querySelectorAll('.edgeCv').forEach(cv=>{
+    insts.push({cv,dir:cv.dataset.dir==='up'?'up':'down',
+      cols:0,rows:0,t:0,nextSpawn:4+Math.random()*6,
+      creeps:[],dirty:true,inView:false});
+  });
+  if(!insts.length)return;
+
+  /* per-strip visibility: offscreen strips keep sim time but skip paint */
+  const io=new IntersectionObserver(es=>{
+    for(const e of es){
+      const st=insts.find(s=>s.cv===e.target);
+      if(st){const was=st.inView;st.inView=e.isIntersecting;
+        if(st.inView&&!was)st.dirty=true;}
+    }
+  },{rootMargin:'60px 0px'});
+  insts.forEach(st=>io.observe(st.cv));
+
+  function resizeAll(){
+    for(const st of insts){
+      st.cols=Math.max(1,Math.ceil(st.cv.clientWidth/CELL));
+      st.rows=Math.max(1,Math.ceil(st.cv.clientHeight/CELL));
+      st.creeps.length=0;st.dirty=true;
+    }
+  }
+
+  /* creep depth (cells) contributed at column x — smoothstep taper
+     across its width + ragged hash edge = corrosion, not a rectangle */
+  function creepDepth(st,x){
+    let dp=0;
+    for(const k of st.creeps){
+      const u=1-Math.abs(x-k.x0)/k.w;
+      if(u<=0)continue;
+      const shape=u*u*(3-2*u),
+            d=k.depth*k.env*shape+(h2d(x,k.seed,23)-.5)*2.6;
+      if(d>dp)dp=d;
+    }
+    return dp;
+  }
+
+  function makeVfn(st){
+    return function(x,y,c,r){
+      const din=st.dir==='up'?y:(r-1-y);       /* distance from edge */
+      let v=Math.pow(1-din/r,1.5);             /* prod base, unchanged */
+      const dp=creepDepth(st,x);
+      if(dp>din){
+        const cv2=(dp-din)/2.4;                /* ~2-cell dithered front */
+        const cc=cv2>1?1:cv2;
+        if(cc*.92>v)v=cc*.92;
+      }
+      return v;
+    };
+  }
+  function makeCfn(st){
+    return function(v,th,x,y){
+      if(v<=th)return null;
+      const din=st.dir==='up'?y:(st.rows-1-y);
+      const s=h2d(x,y,3);
+      /* advancing creep front glints warm */
+      const dpv=st.creeps.length?creepDepth(st,x):0;
+      if(dpv>0&&Math.abs(dpv-din)<1.4){
+        if(s<.08)return '#FFB224';
+        if(s<.30)return '#B87A18';
+      }
+      if(s<.02)return s<.006?'#FFB224':'#B87A18';
+      return v>.82?'#565D68':v>.5?'#3D434B':'#292D33';
+    };
+  }
+
+  function spawnCreep(st){
+    st.creeps.push({
+      x0:st.cols*(.1+.8*Math.random()),
+      w:5+Math.random()*8,
+      depth:4+Math.random()*5,                 /* cells inward */
+      grow:5+Math.random()*2,hold:2+Math.random()*1.5,
+      fade:6+Math.random()*2.5,
+      seed:(Math.random()*97)|0,env:0,t0:st.t
+    });
+  }
+
+  function tick(nt){
+    for(const st of insts){
+      st.t=nt;
+      if(nt>=st.nextSpawn&&st.creeps.length<MAX_CREEPS){
+        if(Math.random()>.45)spawnCreep(st);   /* sparse: ~55% of windows skip */
+        st.nextSpawn=nt+7+Math.random()*5;
+      }
+      let live=false;
+      for(let i=st.creeps.length-1;i>=0;i--){
+        const k=st.creeps[i],age=nt-k.t0;
+        if(age<k.grow){const u=age/k.grow;k.env=u*u*(3-2*u);}
+        else if(age<k.grow+k.hold)k.env=1;
+        else k.env=1-(age-k.grow-k.hold)/k.fade;
+        if(k.env<=0&&age>k.grow+k.hold){st.creeps.splice(i,1);continue;}
+        live=true;
+      }
+      if(st.inView&&(live||st.dirty)){
+        paint(st.cv,CELL,makeVfn(st),makeCfn(st));
+        st.dirty=live;                          /* one more paint after last creep */
+      }
+    }
+  }
+
+  function stillAll(){
+    for(const st of insts){
+      st.t=6;
+      st.creeps=[{x0:st.cols*.63,w:9,depth:6.5,env:1,seed:11}];
+      paint(st.cv,CELL,makeVfn(st),makeCfn(st));
+      st.creeps=[];st.dirty=false;
+    }
+  }
+
+  /* one loop instance drives every .edgeCv canvas */
+  const driver=document.querySelector('.edgeCv');
+  fieldLoop(driver,{resize:resizeAll,tick,still:stillAll});
+})();
+})();
+</script>
+</body>
+</html>

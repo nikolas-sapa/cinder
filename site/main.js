@@ -1,11 +1,90 @@
-/* ---- install strip: copy chip + click-to-select ---- */
-document.querySelectorAll('.install').forEach(installEl=>{
-  const copyBtn=installEl.querySelector('.copychip');
-  const installCmd=installEl.querySelector('.install-cmd')||installEl.querySelector('code');
-  if(!copyBtn||!installCmd)return;
+(function(){
 
-  copyBtn.addEventListener('click',async()=>{
-    const text=installCmd.textContent.trim();
+/* ====================== PORT ======================
+ * ctrl-v4 · install strip + copy keycap
+ *
+ * LIFT markup : one .ctl4-strip subtree — .ctl4-well (.ctl4-rail>.ctl4-led,
+ *               .ctl4-body>.ctl4-prompt+.ctl4-cmd>.ctl4-caret + .ctl4-ghost),
+ *               button.ctl4-key (.ctl4-key-cap>.ctl4-key-tex canvas +
+ *               .ctl4-key-l label), and sibling .ctl4-sr live region.
+ *               Optional: the .ctl4-echo block (drop it to skip feature 4).
+ * LIFT css    : all rules between "LIFT FROM HERE / LIFT TO HERE" markers
+ *               incl. @keyframes ctl4ledblip/ctl4pp/ctl4blink/ctl4pop,
+ *               the --stack/media rules, and the PRM block's .ctl4-led and
+ *               .ctl4-ghost entries.
+ * LIFT js     : this whole IIFE — [P1] cap texture, [P2] copy handler,
+ *               [P3] echo typer. All selectors are per-strip scoped; N
+ *               strips on one page are supported (querySelectorAll).
+ *
+ * RENAME MAP — prod collisions avoided (prod names in index.html/style.css):
+ *   .install      -> .ctl4-strip     .install-body -> .ctl4-well+.ctl4-body
+ *   .prompt       -> .ctl4-prompt    .install-cmd   -> .ctl4-cmd
+ *   .caret        -> .ctl4-caret     .copychip      -> .ctl4-key
+ *   .cc-l         -> .ctl4-key-l     .copied        -> .is-copied
+ *   .done         -> .is-done        #install-cmd   -> .ctl4-cmd (class)
+ *   #copy-btn     -> .ctl4-key       new: .ctl4-rail .ctl4-led .ctl4-ghost
+ *   new: .ctl4-key-cap .ctl4-key-tex .ctl4-key-l .ctl4-sr .ctl4-echo-*
+ *   state classes are only ever combined as .ctl4-*.is-* — no bare globals.
+ *
+ * BEHAVIOR PARITY: clipboard write + execCommand fallback, click-to-select,
+ * [ ⧉ copy ]<->[ ✓ copied ] swap, 1.5s window — identical to prod
+ * main.js L1-33. Label width locked at 13ch so the swap never reflows.
+ * No <input>/<textarea> in markup (fallback textarea is transient) — no
+ * data-1p-ignore attributes needed. Echo line is aria-hidden decoration.
+ * ====================== /PORT ====================== */
+(()=>{
+'use strict';
+const RM=matchMedia('(prefers-reduced-motion: reduce)');
+const B8=[0,32,8,40,2,34,10,42,48,16,56,24,50,18,58,26,
+          12,44,4,36,14,46,6,38,60,28,52,20,62,30,54,22,
+          3,35,11,43,1,33,9,41,51,19,59,27,49,17,57,25,
+          15,47,7,39,13,45,5,37,63,31,55,23,61,29,53,21];
+
+function h2(x,y,s){
+  let n=(x*374761393+y*668265263+(s|0)*2246822519)>>>0;
+  n=Math.imul(n^(n>>>13),1274126177)>>>0;
+  return ((n^(n>>>16))>>>0)/4294967296;
+}
+
+/* [P1] keycap face: ordered-Bayer sheen + sparse ember grain */
+function paintTex(cv){
+  const d=Math.min(devicePixelRatio||1,2);
+  const w=cv.clientWidth,h=cv.clientHeight;
+  if(!w||!h)return;
+  const W=Math.max(1,Math.round(w*d)),H=Math.max(1,Math.round(h*d));
+  if(cv.width!==W||cv.height!==H){cv.width=W;cv.height=H;}
+  const g=cv.getContext('2d');
+  g.clearRect(0,0,W,H);
+  const cell=2*d,cols=Math.ceil(W/cell),rows=Math.ceil(H/cell);
+  for(let y=0;y<rows;y++)for(let x=0;x<cols;x++){
+    const n=h2(x,y,3);
+    const sheen=.62-(y/rows)*.55+n*.18;
+    const t=(B8[(y&7)*8+(x&7)]+.5)/64;
+    if(sheen>t*1.5){
+      g.fillStyle='rgba(255,255,255,.045)';
+      g.fillRect(x*cell,y*cell,cell,cell);
+    }else if(n>.97){
+      g.fillStyle='rgba(255,178,36,.09)';
+      g.fillRect(x*cell,y*cell,cell,cell);
+    }
+  }
+}
+const texs=document.querySelectorAll('.ctl4-key-tex');
+texs.forEach(paintTex);
+if(document.fonts&&document.fonts.ready)
+  document.fonts.ready.then(()=>texs.forEach(paintTex));
+
+/* [P2] copy key: clipboard + label swap + done flash + aria-live */
+document.querySelectorAll('.ctl4-strip').forEach(strip=>{
+  const key=strip.querySelector('.ctl4-key');
+  const lbl=strip.querySelector('.ctl4-key-l');
+  const cmd=strip.querySelector('.ctl4-cmd');
+  const live=strip.querySelector('.ctl4-sr');
+  if(!key||!lbl||!cmd)return;
+  let t=null;
+
+  key.addEventListener('click',async()=>{
+    const text=cmd.textContent.trim();
     try{
       await navigator.clipboard.writeText(text);
     }catch{
@@ -13,24 +92,59 @@ document.querySelectorAll('.install').forEach(installEl=>{
       ta.value=text;document.body.appendChild(ta);ta.select();
       document.execCommand('copy');ta.remove();
     }
-    copyBtn.classList.add('copied');
-    installEl.classList.add('done');
-    copyBtn.querySelector('.cc-l').textContent='[ ✓ copied ]';
-    setTimeout(()=>{
-      copyBtn.classList.remove('copied');
-      installEl.classList.remove('done');
-      copyBtn.querySelector('.cc-l').textContent='[ ⧉ copy ]';
+    clearTimeout(t);
+    key.classList.add('is-copied');
+    strip.classList.add('is-done');
+    lbl.textContent='[ ✓ copied ]';
+    if(live)live.textContent='install command copied to clipboard';
+    t=setTimeout(()=>{
+      key.classList.remove('is-copied');
+      strip.classList.remove('is-done');
+      lbl.textContent='[ ⧉ copy ]';
+      if(live)live.textContent='';
     },1500);
   });
 
-  installEl.addEventListener('click',e=>{
-    if(e.target.closest('.copychip'))return;
+  strip.addEventListener('click',e=>{
+    if(e.target.closest('.ctl4-key'))return;
     const r=document.createRange();
-    r.selectNodeContents(installCmd);
+    r.selectNodeContents(cmd);
     const sel=getSelection();
     sel.removeAllRanges();sel.addRange(r);
   });
 });
+
+/* [P3] echo line: $ cinder id -> peer hash, types once on scroll-in */
+const EC='cinder id',EO='peer: 4d2e…f18c';
+const wait=ms=>new Promise(r=>setTimeout(r,ms));
+document.querySelectorAll('.ctl4-echo').forEach(el=>{
+  const t1=el.querySelector('.ctl4-echo-t1');
+  const t2=el.querySelector('.ctl4-echo-t2');
+  const cr=el.querySelector('.ctl4-echo-caret');
+  const out=el.querySelector('.ctl4-echo-out');
+  if(!t1||!t2)return;
+  const showAll=()=>{
+    t1.textContent=EC;t2.textContent=EO;
+    if(cr&&out)out.appendChild(cr);
+    el.classList.add('is-static');
+  };
+  const type=async()=>{
+    if(RM.matches){showAll();return;}
+    for(const ch of EC){t1.textContent+=ch;await wait(46+Math.random()*54);}
+    await wait(340);
+    if(cr&&out)out.appendChild(cr);
+    for(const ch of EO){t2.textContent+=ch;await wait(26+Math.random()*30);}
+    el.classList.add('is-static');
+  };
+  if(RM.matches||!('IntersectionObserver' in window)){showAll();return;}
+  const io=new IntersectionObserver(es=>{
+    es.forEach(e=>{if(e.isIntersecting){io.disconnect();type();}});
+  },{threshold:.4});
+  io.observe(el);
+});
+})();
+
+})();
 
 /* ---- nav: scrolled state ---- */
 const navEl = document.querySelector(".nav");
@@ -54,164 +168,218 @@ const io = new IntersectionObserver(
 
 for (const el of document.querySelectorAll("[data-reveal]")) io.observe(el);
 
-/* ---- ember field: twin firefronts burn in from the page edges.
-   8x8 Bayer + interleaved gradient noise hybrid threshold, 13-level
-   charcoal->ember->white ramp, sparks rise from the fronts. ---- */
-(function(){
-  const cv = document.getElementById("emberCanvas");
-  if (!cv) return;
-  const CELL = 4, ROWS = 50, MAX_COLS = 480, STAR_TOP = 13, STATIC_T = 6.0;
-  const PAL = [
-    [ 11, 12, 14],[ 20, 21, 25],[ 33, 35, 41],[ 50, 47, 38],
-    [ 74, 55, 22],[106, 71, 20],[146, 96, 24],[196,127, 27],
-    [232,152, 30],[255,178, 36],[255,190, 52],[255,214,110],[255,240,196]
-  ];
-  const LEVELS = PAL.length - 1;
-  const TH8 = new Float32Array([
-     0,32, 8,40, 2,34,10,42, 48,16,56,24,50,18,58,26,
-    12,44, 4,36,14,46, 6,38, 60,28,52,20,62,30,54,22,
-     3,35,11,43, 1,33, 9,41, 51,19,59,27,49,17,57,25,
-    15,47, 7,39,13,45, 5,37, 63,31,55,23,61,29,53,21]);
-  for (let i = 0; i < 64; i++) TH8[i] = (TH8[i] + 0.5) / 64;
-  const ign = (x, y) => {
-    const f = (0.06711056 * x + 0.00583715 * y) % 1;
-    return (52.9829189 * f) % 1;
-  };
-  const ctx = cv.getContext("2d", { alpha: false });
-  const mq = matchMedia("(prefers-reduced-motion: reduce)");
-  let reduced = mq.matches;
-  let cols = 0, img = null, lvls = null, raf = 0, running = false, inView = true;
-  let last = 0, nextSpawn = 0;
-  const stars = [], sparks = [];
-  for (let i = 0; i < 16; i++)
-    stars.push([Math.random(), Math.random(), 0.4 + Math.random() * 1.8, Math.random() * 6.28]);
+/* ---- shared ordered-dither painter (Bayer 8x8) ---- */
+const B8=[0,32,8,40,2,34,10,42,48,16,56,24,50,18,58,26,
+          12,44,4,36,14,46,6,38,60,28,52,20,62,30,54,22,
+          3,35,11,43,1,33,9,41,51,19,59,27,49,17,57,25,
+          15,47,7,39,13,45,5,37,63,31,55,23,61,29,53,21];
+const PRM = matchMedia('(prefers-reduced-motion: reduce)');
+function h2d(x,y,s){
+  let n=(x*374761393+y*668265263+(s|0)*2246822519)>>>0;
+  n=Math.imul(n^(n>>>13),1274126177)>>>0;
+  return ((n^(n>>>16))>>>0)/4294967296;
+}
+function paint(cv,cell,vfn,cfn){
+  const dpr=Math.min(devicePixelRatio||1,2);
+  const w=cv.clientWidth,h=cv.clientHeight;
+  if(!w||!h)return;
+  const W=Math.round(w*dpr),H=Math.round(h*dpr);
+  if(cv.width!==W||cv.height!==H){cv.width=W;cv.height=H;}
+  const g=cv.getContext('2d');
+  g.clearRect(0,0,W,H);
+  const s=cell*dpr,cols=Math.ceil(w/cell),rows=Math.ceil(h/cell);
+  for(let y=0;y<rows;y++)for(let x=0;x<cols;x++){
+    const v=vfn(x,y,cols,rows);
+    if(v<=0)continue;
+    const t=(B8[(y&7)*8+(x&7)]+.5)/64;
+    const c=cfn(v,t,x,y);
+    if(!c)continue;
+    g.fillStyle=c;
+    g.fillRect(Math.round(x*s),Math.round(y*s),Math.ceil(s),Math.ceil(s));
+  }
+}
 
-  function resize() {
-    cols = Math.min(MAX_COLS, Math.max(80, Math.ceil(cv.clientWidth / CELL)));
-    cv.width = cols; cv.height = ROWS;
-    img = ctx.createImageData(cols, ROWS);
-    lvls = new Uint8Array(cols * ROWS);
-    if (reduced) { seedStatic(); draw(STATIC_T); }
+
+/* ---- fieldLoop: shared canvas lifecycle (IO+visibility+PRM+resize) ---- */
+function fieldLoop(cv,api){
+  let running=false,inView=false,raf=0,last=0,t=6+Math.random()*30;
+  function frame(now){
+    raf=0;
+    const nt=now/1000,dt=Math.min(.05,Math.max(0,nt-last));
+    last=nt;t+=dt;api.tick(t,dt);
+    if(running)raf=requestAnimationFrame(frame);
   }
-  function spawn(t) {
-    const r = Math.random();
-    const x0 = r < 0.38 ? 2 + Math.random() * cols * 0.26
-             : r < 0.76 ? cols - 3 - Math.random() * cols * 0.26
-             : 2 + Math.random() * (cols - 4);
-    const left = x0 < cols / 2;
-    return {
-      x0,
-      y0: ROWS * 0.60 + Math.random() * ROWS * 0.36,
-      vx: (left ? 1 : -1) * (0.4 + Math.random() * 1.4),
-      vy: 4.5 + Math.random() * 5.5,
-      amp: 0.6 + Math.random() * 1.8, wf: 1.2 + Math.random() * 2.6,
-      ph: Math.random() * 6.283, t0: t, ttl: 3.2 + Math.random() * 3.0,
-      big: Math.random() < 0.12
-    };
+  function want(){return !PRM.matches&&!document.hidden&&inView;}
+  function sync(){
+    if(want()&&!running){running=true;last=performance.now()/1000;
+      raf=requestAnimationFrame(frame);}
+    else if(!want()&&running){running=false;
+      if(raf){cancelAnimationFrame(raf);raf=0;}}
   }
-  function seedStatic() {
-    sparks.length = 0;
-    for (let k = 0; k < 14; k++) {
-      const s = spawn(STATIC_T - 0.4 - k * 0.31);
-      s.ttl = 99; sparks.push(s);
-    }
+  new IntersectionObserver(es=>{
+    inView=es[0].isIntersecting;sync();
+  },{rootMargin:'60px 0px'}).observe(cv);
+  document.addEventListener('visibilitychange',sync);
+  if(PRM.addEventListener)PRM.addEventListener('change',()=>{
+    sync();if(PRM.matches)api.still();
+  });
+  let rt;addEventListener('resize',()=>{
+    clearTimeout(rt);rt=setTimeout(()=>{
+      api.resize();if(PRM.matches)api.still();},140);
+  });
+  api.resize();
+  api.still();            /* first paint for everyone; PRM keeps just this */
+}
+
+/* ---- ember field v2 ---- */
+(function(){
+  const cv=document.getElementById('emberCanvas');if(!cv)return;
+  const CELL=4,MAX_POCKETS=4,MAX_SPARKS=26;
+  /* charcoal -> ember-dim -> ember -> pale ramp (ground = unpainted) */
+  const RAMP=['#2A1D08','#3E2B0C','#573B10','#735011','#916517',
+              '#B87A18','#D9961D','#FFB224','#FFC85C','#FFE3A1','#FFF4D8'];
+  let cols=0,rows=0,heat=null,tmp=null;
+  let t=0,bL=1,bR=1,nextPocket=0,nextSpark=0;
+  const pockets=[],sparks=[];
+
+  function resize(){
+    cols=Math.max(1,Math.ceil(cv.clientWidth/CELL));
+    rows=Math.max(1,Math.ceil(cv.clientHeight/CELL));
+    heat=new Float32Array(cols*rows);
+    tmp=new Float32Array(cols*rows);
   }
-  function put(x, y, lvl) {
-    if (x < 0 || x >= cols || y < 0 || y >= ROWS) return;
-    const p = y * cols + x;
-    if (lvls[p] >= lvl) return;
-    lvls[p] = lvl;
-    const o = p * 4, c = PAL[lvl];
-    img.data[o] = c[0]; img.data[o+1] = c[1]; img.data[o+2] = c[2]; img.data[o+3] = 255;
+
+  /* twin-front smolder floor — prod envelope, compressed sines */
+  function base(x,y){
+    const mx=x/(cols-1)*2-1,a=mx<0?-mx:mx;
+    let e=a*a*(3-2*a);e=e*e*(3-2*e);
+    e=(.30+.70*e)*(mx<0?bL:bR);                 /* 0.30 floor = centre smolder */
+    const q=y/(rows-1),vp=q*q;
+    const warp=4.5*Math.sin(y*.13+t*.27)+2*Math.sin(y*.29-t*.19);
+    const wx=x+warp;
+    let v=.42*Math.sin(wx*.030+t*.50+y*.110)
+         +.26*Math.sin(wx*.073-t*.38+y*.190+1.7)
+         +.16*Math.sin(wx*.160+t*.72-y*.090+4.1)
+         +.10*Math.sin(wx*.310-t*1.15+y*.240+2.3);
+    v=v*.68+.5;
+    v=v*e*vp*1.42+.006+.010*h2d(x,y,4);
+    v=v<0?0:v>1?1:v;
+    return v*v*(3-2*v)*.45+v*.55;
   }
-  function draw(t) {
-    const d = img.data;
-    const bL = 0.90 + 0.10 * Math.sin(t * 0.33);
-    const bR = 0.90 + 0.10 * Math.sin(t * 0.33 + 2.3);
-    const inv = 1 / (cols - 1);
-    for (let y = 0; y < ROWS; y++) {
-      const q = y / (ROWS - 1);
-      const vp = q * q;
-      const warp = 7.0 * Math.sin(y * 0.09 + t * 0.27)
-                 + 3.0 * Math.sin(y * 0.23 - t * 0.19)
-                 + 1.2 * Math.sin(t * 0.11 + y * 0.05);
-      const yrow = y * cols, brow = (y & 7) << 3;
-      for (let x = 0; x < cols; x++) {
-        const mx = x * inv * 2 - 1;
-        const a = mx < 0 ? -mx : mx;
-        let e = a * a * (3 - 2 * a); e = e * e * (3 - 2 * e);
-        e = (0.30 + 0.70 * e) * (mx < 0 ? bL : bR);
-        const wx = x + warp;
-        let v = 0.42 * Math.sin(wx * 0.030 + t * 0.50 + y * 0.110)
-              + 0.26 * Math.sin(wx * 0.073 - t * 0.38 + y * 0.190 + 1.7)
-              + 0.16 * Math.sin(wx * 0.160 + t * 0.72 - y * 0.090 + 4.1)
-              + 0.10 * Math.sin(wx * 0.310 - t * 1.15 + y * 0.240 + 2.3)
-              + 0.06 * Math.sin(wx * 0.520 + t * 1.70 - y * 0.380 + 5.6);
-        v = v * 0.68 + 0.5;
-        v = v * e * vp * 1.6;
-        v += 0.004 + 0.007 * ign(x + 31, y + 57);
-        v = v < 0 ? 0 : (v > 1 ? 1 : v);
-        v = v * v * (3 - 2 * v) * 0.45 + v * 0.55;
-        const th = TH8[brow | (x & 7)] * 0.62 + ign(x, y) * 0.38;
-        const f = v * LEVELS;
-        let lvl = f | 0;
-        if (f - lvl > th) lvl++;
-        if (lvl > LEVELS) lvl = LEVELS;
-        const p = yrow + x;
-        lvls[p] = lvl;
-        const o = p * 4, c = PAL[lvl];
-        d[o] = c[0]; d[o+1] = c[1]; d[o+2] = c[2]; d[o+3] = 255;
+
+  /* cheap blur/decay: each cell relaxes toward its neighbour mean at
+     rate D while cooling at rate K — energy is lost every pass, so
+     flares bleed a molten halo then die back to the smolder floor. */
+  function stepHeat(dt){
+    const D=Math.min(1,dt*6.5),K=Math.min(1,dt*1.9);
+    for(let y=0;y<rows;y++){
+      const yr=y*cols,up=y>0?-cols:0,dn=y<rows-1?cols:0;
+      for(let x=0;x<cols;x++){
+        const i=yr+x,h0=heat[i];
+        const n=(x>0?heat[i-1]:0)+(x<cols-1?heat[i+1]:0)
+               +(up?heat[i+up]:0)+(dn?heat[i+dn]:0);
+        let nh=h0*(1-K)+(n*.25-h0)*D;
+        tmp[i]=nh<0?0:nh>1.2?1.2:nh;
       }
     }
-    for (const st of stars) {
-      if (0.5 + 0.5 * Math.sin(t * st[2] + st[3]) > 0.74)
-        put((st[0] * cols) | 0, (st[1] * STAR_TOP) | 0, 3);
-    }
-    for (let k = sparks.length - 1; k >= 0; k--) {
-      const s = sparks[k], age = t - s.t0;
-      if (age > s.ttl) { sparks.splice(k, 1); continue; }
-      const sx = (s.x0 + s.vx * age + s.amp * Math.sin(t * s.wf + s.ph)) | 0;
-      const sy = (s.y0 - s.vy * age) | 0;
-      const fade = 1 - age / s.ttl;
-      let head = fade > 0.55 ? 12 : (fade > 0.3 ? 10 : 8);
-      if (Math.sin(t * 27 + s.ph) > 0.7) head = Math.min(head + 1, LEVELS);
-      put(sx, sy, head);
-      if (s.big) put(sx + 1, sy, head - 1);
-      put(sx, sy + 1, Math.max(head - 3, 4));
-      put(sx, sy + 2, Math.max(head - 6, 4));
-      put(sx, sy + 3, 4);
-    }
-    ctx.putImageData(img, 0, 0);
+    const sw=heat;heat=tmp;tmp=sw;
   }
-  function loop(now) {
-    raf = 0;
-    const t = now / 1000;
-    if (t - last > 0.05) last = t - 0.05;
-    if (t >= nextSpawn && sparks.length < 36) {
-      sparks.push(spawn(t));
-      nextSpawn = t + 0.18 + Math.random() * 0.35;
-    }
-    draw(t);
-    last = t;
-    if (running) raf = requestAnimationFrame(loop);
-  }
-  function start() {
-    if (!running && !reduced && !document.hidden && inView) {
-      running = true;
-      if (!raf) raf = requestAnimationFrame(loop);
+
+  /* stamp a soft heat disc — pocket cores & spark heads */
+  function stamp(cx,cy,r,v){
+    const x0=Math.max(0,(cx-r)|0),x1=Math.min(cols-1,Math.ceil(cx+r)),
+          y0=Math.max(0,(cy-r)|0),y1=Math.min(rows-1,Math.ceil(cy+r));
+    for(let y=y0;y<=y1;y++)for(let x=x0;x<=x1;x++){
+      const dx=x-cx,dy=(y-cy)*1.15,d=Math.sqrt(dx*dx+dy*dy);
+      if(d>=r)continue;
+      const f=1-d/r,i=y*cols+x,hv=v*f*(1.4-.4*f);
+      if(heat[i]<hv)heat[i]=hv;
     }
   }
-  function stop() { running = false; if (raf) { cancelAnimationFrame(raf); raf = 0; } }
-  document.addEventListener("visibilitychange", () => document.hidden ? stop() : start());
-  new IntersectionObserver((e) => {
-    inView = e[0].isIntersecting; inView ? start() : stop();
-  }).observe(cv);
-  if (mq.addEventListener) mq.addEventListener("change", (e) => {
-    reduced = e.matches;
-    if (reduced) { stop(); seedStatic(); draw(STATIC_T); } else start();
-  });
-  let rt; addEventListener("resize", () => { clearTimeout(rt); rt = setTimeout(resize, 150); });
-  resize(); start();
+
+  function spawnPocket(){
+    pockets.push({
+      x:cols*(.12+.76*Math.random()),
+      y:rows*(.45+.52*Math.random()),
+      r:2.5+Math.random()*3.5,
+      atk:.22+Math.random()*.30,           /* flare-up seconds */
+      dec:1.9+Math.random()*2.6,           /* relax seconds */
+      pk:.62+Math.random()*.50,t0:t
+    });
+  }
+  function spawnSpark(){
+    let x,y;
+    const r=Math.random();
+    if(r<.5){                              /* edge fronts, like prod */
+      x=Math.random()<.5?2+Math.random()*cols*.22:cols-3-Math.random()*cols*.22;
+      y=rows*(.6+.36*Math.random());
+    }else if(r<.8&&pockets.length){        /* pocket cores spit embers */
+      const p=pockets[(Math.random()*pockets.length)|0];
+      x=p.x;y=p.y;
+    }else{
+      x=2+Math.random()*(cols-4);y=rows*(.7+.26*Math.random());
+    }
+    sparks.push({x,y,vx:(Math.random()-.5)*1.6,vy:4.5+Math.random()*5,
+      amp:.5+Math.random()*1.6,wf:1.4+Math.random()*2.4,
+      ph:Math.random()*6.28,t0:t,ttl:2.6+Math.random()*2.4});
+  }
+
+  function vfn(x,y){
+    const v=base(x,y)+heat[y*cols+x]*.9;
+    return v>1.15?1.15:v;
+  }
+  function cfn(v,th,x,y){
+    const tt=th*.60+h2d(x,y,9)*.40;        /* hybrid bayer+hash threshold */
+    if(v<=tt)return h2d(x,y,2)<.028?'#1B1E23':null;
+    const h=v*.82+(v-tt)*.55,hi=h>1?1:h;   /* palette ~∝ v, like prod */
+    return RAMP[Math.min(RAMP.length-1,(hi*(RAMP.length-1))|0)];
+  }
+
+  function tick(nt,dt){
+    t=nt;
+    bL=.90+.10*Math.sin(t*.33);
+    bR=.90+.10*Math.sin(t*.33+2.3);
+    if(t>=nextPocket&&pockets.length<MAX_POCKETS){
+      spawnPocket();nextPocket=t+1.6+Math.random()*2.6;
+    }
+    if(t>=nextSpark&&sparks.length<MAX_SPARKS){
+      spawnSpark();nextSpark=t+.22+Math.random()*.4;
+    }
+    for(let i=pockets.length-1;i>=0;i--){
+      const p=pockets[i],age=t-p.t0;
+      let env;
+      if(age<p.atk){const u=age/p.atk;env=u*u*(3-2*u);}
+      else env=1-(age-p.atk)/p.dec;
+      if(env<=0){pockets.splice(i,1);continue;}
+      stamp(p.x,p.y,p.r*(0.8+.3*env),p.pk*env);
+    }
+    for(let i=sparks.length-1;i>=0;i--){
+      const s=sparks[i],age=t-s.t0;
+      if(age>s.ttl){sparks.splice(i,1);continue;}
+      const fade=1-age/s.ttl;
+      const sx=s.x+s.vx*age+s.amp*Math.sin(t*s.wf+s.ph),
+            sy=s.y-s.vy*age;
+      stamp(sx,sy,1.1,.55+.45*fade);
+      stamp(sx,sy+2,.8,.3*fade);
+    }
+    stepHeat(dt);
+    paint(cv,CELL,vfn,cfn);
+  }
+
+  /* one static frame: pockets mid-flare, spark trails, heat pre-bled */
+  function still(){
+    heat.fill(0);pockets.length=0;sparks.length=0;t=6;
+    bL=.98;bR=.94;
+    const sd=[[.22,.72,4.2,.95],[.55,.62,3.2,.8],[.78,.8,5,.9]];
+    for(const s of sd)stamp(s[0]*cols,s[1]*rows,s[2],s[3]);
+    for(let i=0;i<22;i++)stepHeat(.05);     /* pre-diffuse */
+    for(const s of sd)stamp(s[0]*cols,s[1]*rows,s[2]*.7,s[3]*.8);
+    stamp(cols*.34,rows*.55,1.1,.9);stamp(cols*.34,rows*.48,.8,.5);
+    stamp(cols*.86,rows*.6,1.1,.8);
+    paint(cv,CELL,vfn,cfn);
+  }
+
+  fieldLoop(cv,{resize,tick,still});
 })();
 
 /* ---- interactive terminal demo ---- */
@@ -241,7 +409,7 @@ if (transcript && input) {
     operator: { status: "· unverified", fp: "77aa…01c3",
       lines: [
         `${D}22:10</span>  ${A}operator</span>  new key — verify me before anything`,
-        `${D}22:10</span>  ${D}— key change detected · sends blocked until /sas —`,
+        `${D}22:10</span>  ${D}— key change detected · sends blocked until /verify —`,
       ],
       replies: ["verify first, then we talk", "still waiting on sas"] },
   };
@@ -260,14 +428,16 @@ if (transcript && input) {
   const sys = (html) => line(`${D}${html}</span>`, "msg dim");
   const stamp = () => "13:" + String(14 + Math.floor(Math.random() * 40)).padStart(2, "0");
 
+  let peerGen = 0;
   function loadPeer(name) {
+    const g = ++peerGen;
     peer = name;
     replyIdx = 0;
     transcript.innerHTML = "";
     peerName.textContent = name;
     peerStatus.textContent = PEERS[name].status;
     PEERS[name].lines.forEach((l, i) =>
-      setTimeout(() => line(l), 120 + i * 160));
+      setTimeout(() => { if (g === peerGen) line(l); }, 120 + i * 160));
   }
 
   document.querySelectorAll(".peer[data-peer]").forEach((el) => {
@@ -281,14 +451,14 @@ if (transcript && input) {
   });
 
   const CMDS = {
-    "/help": () => sys("commands: /help · /finger · /sas · /msg &lt;text&gt; · /invite · /contacts · /deny · /wipe"),
-    "/finger": () => sys(`peer ${PEERS[peer].fp} · X25519 · ${peer === "operator" ? "UNVERIFIED — run /sas" : "verified · session pinned"}`),
-    "/sas": () => {
+    "/help": () => sys("commands: /help · /finger · /verify · /msg &lt;text&gt; · /invite · /contacts · /deny · /wipe"),
+    "/finger": () => sys(`peer ${PEERS[peer].fp} · X25519 · ${peer === "operator" ? "UNVERIFIED — run /verify" : "verified · session pinned"}`),
+    "/verify": () => {
       sys("sas: 041 · 229 · 088 · 611 · 204 · 773 · 512");
       setTimeout(() => sys("— read aloud out-of-band · if it matches, session pinned —"), 350);
       if (peer === "operator") setTimeout(() => { sys("— operator verified · sends unblocked —"); peerStatus.textContent = "· verified"; }, 800);
     },
-    "/invite": () => sys(`cinder://${PEERS[peer].fp.replace("…", "")}…@relay:8443?rendezvous=8f2a · one-time, expires on use`),
+    "/invite": () => sys("alias for /add — consumes a cinder:// link · minting is invite.create (rpc) or cinder id"),
     "/contacts": () => sys("eidolon ✓ · k-9 ✓ · operator ⚠ unverified · denied: 0"),
     "/deny": () => { sys(`— ${peer} denied · sessions torn down · grants revoked · token rotated —`); sys("no un-deny via rpc — manual db surgery only"); },
     "/wipe": () => { transcript.innerHTML = ""; sys(`— chat wiped · 214 events · 3 files · dedup rows —`); sys("authenticated ChatWipe sent · peer's client destroys its copy"); },
@@ -362,7 +532,7 @@ if (transcript && input) {
   }
   function resize(){
     const dpr = Math.min(devicePixelRatio||1, 2);
-    W = innerWidth; H = innerHeight;
+    W = document.documentElement.clientWidth; H = document.documentElement.clientHeight;
     canvas.width = W*dpr; canvas.height = H*dpr;
     canvas.style.width = W+'px'; canvas.style.height = H+'px';
     ctx.setTransform(dpr,0,0,dpr,0,0);
@@ -420,37 +590,6 @@ if (transcript && input) {
   let rt; addEventListener('resize', () => { clearTimeout(rt); rt = setTimeout(resize, 150); });
   resize(); start();
 })();
-
-/* ---- shared ordered-dither painter (Bayer 8x8) ---- */
-const B8=[0,32,8,40,2,34,10,42,48,16,56,24,50,18,58,26,
-          12,44,4,36,14,46,6,38,60,28,52,20,62,30,54,22,
-          3,35,11,43,1,33,9,41,51,19,59,27,49,17,57,25,
-          15,47,7,39,13,45,5,37,63,31,55,23,61,29,53,21];
-const PRM = matchMedia('(prefers-reduced-motion: reduce)');
-function h2d(x,y,s){
-  let n=(x*374761393+y*668265263+(s|0)*2246822519)>>>0;
-  n=Math.imul(n^(n>>>13),1274126177)>>>0;
-  return ((n^(n>>>16))>>>0)/4294967296;
-}
-function paint(cv,cell,vfn,cfn){
-  const dpr=Math.min(devicePixelRatio||1,2);
-  const w=cv.clientWidth,h=cv.clientHeight;
-  if(!w||!h)return;
-  const W=Math.round(w*dpr),H=Math.round(h*dpr);
-  if(cv.width!==W||cv.height!==H){cv.width=W;cv.height=H;}
-  const g=cv.getContext('2d');
-  g.clearRect(0,0,W,H);
-  const s=cell*dpr,cols=Math.ceil(w/cell),rows=Math.ceil(h/cell);
-  for(let y=0;y<rows;y++)for(let x=0;x<cols;x++){
-    const v=vfn(x,y,cols,rows);
-    if(v<=0)continue;
-    const t=(B8[(y&7)*8+(x&7)]+.5)/64;
-    const c=cfn(v,t,x,y);
-    if(!c)continue;
-    g.fillStyle=c;
-    g.fillRect(Math.round(x*s),Math.round(y*s),Math.ceil(s),Math.ceil(s));
-  }
-}
 
 /* ---- card burn: the terminal's top edge dithers out ---- */
 function paintBurns(){
@@ -554,22 +693,114 @@ document.querySelectorAll('.btn-ghost,.vtag').forEach(el=>{
   el.addEventListener('keyup',e=>{if(e.key===' ')el.click();});
 });
 
-/* ---- page-edge dissolve: floor erodes upward into noise ---- */
-function paintDissolve(){
+/* ---- page-edge dissolve v2 ---- */
+(function(){
+  const CELL=4,MAX_CREEPS=2;
+  const insts=[];
   document.querySelectorAll('.dissolve-cv').forEach(cv=>{
-    paint(cv,3,(x,y,c,r)=>Math.pow(y/r,1.5),(v,t,x,y)=>{
-      if(v<=t)return null;
-      const s=h2d(x,y,3);
-      if(s<.018)return '#5A4114';
-      if(s<.022)return '#FFB224';
-      return v>.8?'#3D4249':v>.45?'#2E3238':'#22252B';
-    });
+    insts.push({cv,dir:cv.dataset.dir==='up'?'up':'down',
+      cols:0,rows:0,t:0,nextSpawn:4+Math.random()*6,creeps:[],dirty:true});
   });
-}
-function paintStatics(){paintBurns();paintDissolve();}
-let statRT=null;
-addEventListener('resize',()=>{clearTimeout(statRT);statRT=setTimeout(paintStatics,120);});
-paintStatics();
+  if(!insts.length)return;
+
+  function resizeAll(){
+    for(const st of insts){
+      st.cols=Math.max(1,Math.ceil(st.cv.clientWidth/CELL));
+      st.rows=Math.max(1,Math.ceil(st.cv.clientHeight/CELL));
+      st.creeps.length=0;st.dirty=true;
+    }
+  }
+
+  /* creep depth (cells) contributed at column x — smoothstep taper
+     across its width + ragged hash edge = corrosion, not a rectangle */
+  function creepDepth(st,c,x){
+    let dp=0;
+    for(const k of st.creeps){
+      const u=1-Math.abs(x-k.x0)/k.w;
+      if(u<=0)continue;
+      const shape=u*u*(3-2*u),
+            d=k.depth*k.env*shape+(h2d(x,k.seed,23)-.5)*2.6;
+      if(d>dp)dp=d;
+    }
+    return dp;
+  }
+
+  function makeVfn(st){
+    return function(x,y,c,r){
+      const din=st.dir==='up'?y:(r-1-y);       /* distance from edge */
+      let v=Math.pow(1-din/r,1.5);             /* prod base, unchanged */
+      const dp=creepDepth(st,c,x);
+      if(dp>din){
+        const cv2=(dp-din)/2.4;                /* ~2-cell dithered front */
+        const cc=cv2>1?1:cv2;
+        if(cc*.92>v)v=cc*.92;
+      }
+      return v;
+    };
+  }
+  function makeCfn(st){
+    return function(v,th,x,y){
+      if(v<=th)return null;
+      const din=st.dir==='up'?y:(st.rows-1-y);
+      const s=h2d(x,y,3);
+      /* advancing creep front glints warm */
+      const dpv=st.creeps.length?creepDepth(st,st.cols,x):0;
+      if(dpv>0&&Math.abs(dpv-din)<1.4){
+        if(s<.08)return '#FFB224';
+        if(s<.30)return '#B87A18';
+      }
+      if(s<.02)return s<.006?'#FFB224':'#B87A18';
+      return v>.82?'#565D68':v>.5?'#3D434B':'#292D33';
+    };
+  }
+
+  function spawnCreep(st){
+    st.creeps.push({
+      x0:st.cols*(.1+.8*Math.random()),
+      w:5+Math.random()*8,
+      depth:4+Math.random()*5,                 /* cells inward */
+      grow:5+Math.random()*2,hold:2+Math.random()*1.5,
+      fade:6+Math.random()*2.5,
+      seed:(Math.random()*97)|0,env:0,t0:st.t
+    });
+  }
+
+  function tick(nt){
+    for(const st of insts){
+      st.t=nt;
+      if(nt>=st.nextSpawn&&st.creeps.length<MAX_CREEPS){
+        if(Math.random()>.45)spawnCreep(st);   /* sparse: ~55% of windows skip */
+        st.nextSpawn=nt+7+Math.random()*5;
+      }
+      let live=false;
+      for(let i=st.creeps.length-1;i>=0;i--){
+        const k=st.creeps[i],age=nt-k.t0;
+        if(age<k.grow){const u=age/k.grow;k.env=u*u*(3-2*u);}
+        else if(age<k.grow+k.hold)k.env=1;
+        else k.env=1-(age-k.grow-k.hold)/k.fade;
+        if(k.env<=0&&age>k.grow+k.hold){st.creeps.splice(i,1);continue;}
+        live=true;
+      }
+      if(live||st.dirty){
+        paint(st.cv,CELL,makeVfn(st),makeCfn(st));
+        st.dirty=live;                          /* one more paint after last creep */
+      }
+    }
+  }
+
+  function stillAll(){
+    for(const st of insts){
+      st.t=6;
+      st.creeps=[{x0:st.cols*.63,w:9,depth:6.5,env:1,seed:11}];
+      paint(st.cv,CELL,makeVfn(st),makeCfn(st));
+      st.creeps=[];st.dirty=false;
+    }
+  }
+
+  /* one loop instance drives every .dissolve-cv canvas */
+  const driver=document.querySelector('.dissolve-cv');
+  fieldLoop(driver,{resize:resizeAll,tick,still:stillAll});
+})();
 
 /* ---- ascii glyph-dither band: text-ramp halftone, bayer 8x8 ---- */
 (function(){
@@ -687,230 +918,86 @@ paintStatics();
   resize(); sync();
 })();
 
-/* ---- molten field: webgl fragment-shader bayer dither (2d fallback) ---- */
+/* ---- molten field v2 ---- */
 (function(){
-  const canvas = document.getElementById("moltenCanvas");
-  if (!canvas) return;
-  const CELL_PX = 8, DPR_CAP = 2, SKY = 0.22;
-  const FSCALE = 0.055, DRIFT = 0.14, WARP = 1.55, RISE = 0.22;
-  const STAR_TARGET = 30, T0 = 40.0;
-  const reduced = matchMedia("(prefers-reduced-motion: reduce)").matches;
-  const dpr = () => Math.min(devicePixelRatio || 1, DPR_CAP);
-  let raf = 0, running = false, inView = true, pageVisible = !document.hidden;
-  let simT = T0, lastNow = 0;
-  function wantFrames() { return !reduced && inView && pageVisible; }
-  function pump() {
-    if (wantFrames() && !running) {
-      running = true; lastNow = performance.now();
-      raf = requestAnimationFrame(tick);
-    } else if (!wantFrames() && running) {
-      running = false; cancelAnimationFrame(raf);
+  const cv=document.getElementById('moltenCanvas');if(!cv)return;
+  const CELL=8,SKY=.22;
+  const T_CYC=9.5,T_FILL=5.0,T_HOLD=1.4,T_REL=1.4;   /* charge cycle, s */
+  const FILL=['#8A5F17','#B87A18','#DB9A1F','#FFB224','#FFCE66','#FFE7AC'];
+  const BED=['#241A0B','#33230D','#452F10','#5C3F12','#755213',
+             '#8F6516','#B87A18','#D9961D','#FFB224','#FFD073'];
+  let t=0,cols=0,rows=0,skyRows=0,P=0,REL=0;
+
+  function resize(){
+    cols=Math.max(1,Math.ceil(cv.clientWidth/CELL));
+    rows=Math.max(1,Math.ceil(cv.clientHeight/CELL));
+    skyRows=Math.max(1,Math.round(rows*SKY));
+  }
+
+  /* charge fill value per cell: ragged front, ordered blocks.
+     P = fill progress 0..1, REL = dissolve progress 0..1 */
+  function charge(x,y){
+    if(P<=0)return 0;
+    const fx=P*(cols+8)-4+(h2d(x,3,13)-.5)*3.6;   /* per-column front jitter */
+    let fv=(fx-x)/2.6;
+    fv=fv<0?0:fv>1?1:fv;
+    if(REL>0)fv-=REL*1.3;                         /* blocks dissolve in B8 order */
+    if(fv>0)fv*=.72+.28*h2d(x,y,21+((t*5)|0));    /* interior shimmer */
+    return fv<0?0:fv;
+  }
+
+  /* molten bed — bottom-anchored noise + rising pulses */
+  function molten(x,y){
+    const fy=(y-skyRows)/(rows-skyRows);
+    let n=.5+.5*Math.sin(x*.055+t*.9+y*.11)
+        +.3*Math.sin(x*.11-t*.6-y*.04+1.9)
+        +.2*Math.sin(x*.21+t*1.7-y*.13+4.2);
+    n*=.5;
+    let v=(fy*fy*.85+fy*.35)*(.4+.95*n);
+    v+=.18*fy*fy*Math.max(0,Math.sin(x*.09-t*.7)+Math.sin(x*.031+t*.43+2))*.5;
+    const ex=x/cols;
+    v*=Math.min(1,ex*14)*Math.min(1,(1-ex)*14);
+    return v<0?0:v>1?1:v;
+  }
+
+  function vfn(x,y){
+    if(y<skyRows)return 0;
+    const f=charge(x,y),m=molten(x,y);
+    return f>m?f:m;
+  }
+  function cfn(v,th,x,y){
+    if(y<skyRows){                                /* star sliver */
+      const s=h2d(x,y,31);
+      if(s<.05&&Math.sin(t*(1+s*9)+s*40)>.2)
+        return s<.012?'#FFE9C0':'#8A6A2A';
+      return null;
     }
-  }
-  function tick(now) {
-    const dt = Math.min(0.1, (now - lastNow) / 1000);
-    lastNow = now; simT += dt;
-    draw(simT);
-    if (running) raf = requestAnimationFrame(tick);
-  }
-  const VERT = "attribute vec2 aP;void main(){gl_Position=vec4(aP,0.,1.);}";
-  const FRAG = `
-#ifdef GL_FRAGMENT_PRECISION_HIGH
-precision highp float;
-#else
-precision mediump float;
-#endif
-uniform vec2 uRes;
-uniform float uT;
-uniform float uStarD;
-const float SKY=${SKY.toFixed(4)};
-const float FSCALE=${FSCALE.toFixed(4)};
-const float DRIFT=${DRIFT.toFixed(4)};
-const float WARP=${WARP.toFixed(3)};
-const float RISE=${RISE.toFixed(3)};
-float hash(vec2 p){return fract(sin(dot(p,vec2(127.1,311.7)))*43758.5453123);}
-float vnoise(vec2 p){
-  vec2 i=floor(p),f=fract(p);
-  vec2 u=f*f*(3.-2.*f);
-  return mix(mix(hash(i),hash(i+vec2(1.,0.)),u.x),
-             mix(hash(i+vec2(0.,1.)),hash(i+vec2(1.,1.)),u.x),u.y);
-}
-float fbm(vec2 p){
-  float v=0.,a=.5;
-  for(int i=0;i<4;i++){v+=a*vnoise(p);p=p*2.03+vec2(1.7,9.2);a*=.5;}
-  return v;
-}
-float bayer2(vec2 a){a=floor(a);return fract(a.x*.5+a.y*a.y*.75);}
-float bayer4(vec2 a){return bayer2(a*.5)*.25+bayer2(a);}
-float bayer8(vec2 a){return bayer4(a*.5)*.25+bayer2(a);}
-void main(){
-  vec2 cell=floor(gl_FragCoord.xy);
-  vec3 col=vec3(0.043,0.047,0.055);
-  float skyBase=uRes.y*(1.-SKY);
-  if(cell.y>skyBase){
-    float h=hash(cell);
-    if(h<uStarD){
-      float tw=.5+.5*sin(uT*(.7+h*40.)+h*217.);
-      float s=smoothstep(.25,.95,tw);
-      col+=vec3(1.,.80,.30)*s*(.55+.45*h/uStarD);
-      if(h<uStarD*.18) col+=vec3(.9,.85,.7)*s*.6;
+    const tt=th*.62+h2d(x,y,9)*.38;
+    const f=charge(x,y);
+    if(f>tt){                                     /* charge blocks lead */
+      const h=.32+(1-f)*.56+h2d(x,y,27)*.2;       /* fresh front cells burn palest */
+      return FILL[Math.min(FILL.length-1,(h*(FILL.length-1))|0)];
     }
-  }else{
-    float fy=(skyBase-cell.y)/skyBase;
-    vec2 p=cell*FSCALE;
-    p.x+=uT*DRIFT;
-    vec2 q=vec2(fbm(p+vec2(0.,uT*.05)),
-                fbm(p+vec2(5.2,1.3)-uT*.035));
-    float f=fbm(p+WARP*q+vec2(0.,uT*.025));
-    float v=(fy*fy*.75+fy*.35)*(.30+.95*f);
-    v+=.06*sin(cell.x*.13-uT*.9)*fy;
-    float rise=vnoise(vec2(cell.x*.18,cell.y*.06-uT*1.1));
-    v+=RISE*smoothstep(.72,.95,rise)*fy*fy;
-    vec2 e=cell/uRes;
-    v*=smoothstep(0.,.05,e.x)*smoothstep(1.,.95,e.x);
-    v=clamp(v,0.,1.);
-    float b=bayer8(cell);
-    if(v>b){
-      float heat=clamp((v-b)*2.6,0.,1.)*.6+v*.4;
-      vec3 em=mix(vec3(.353,.255,.078),vec3(1.,.698,.141),smoothstep(0.,.85,heat));
-      em=mix(em,vec3(1.,.90,.60),smoothstep(.80,1.,heat));
-      em=mix(em,vec3(1.,.42,.37),smoothstep(.93,1.,heat)*.35);
-      col=em;
-    }else{
-      col+=vec3(.09,.045,.012)*smoothstep(.35,1.,v);
+    if(v>tt){                                     /* molten bed */
+      const h=Math.min(1,v*.8+(v-tt)*.5);
+      return BED[Math.min(BED.length-1,(h*(BED.length-1))|0)];
     }
+    return v>.3&&h2d(x,y,5)<.4?'#1C130A':null;    /* warm ground haze */
   }
-  gl_FragColor=vec4(col,1.);
-}`;
-  let gl = canvas.getContext("webgl", { alpha: false, antialias: false, depth: false,
-    stencil: false, powerPreference: "low-power", preserveDrawingBuffer: false })
-    || canvas.getContext("experimental-webgl");
-  let uRes, uT, uStarD;
-  function glInit() {
-    const compile = (type, src) => {
-      const s = gl.createShader(type);
-      gl.shaderSource(s, src);
-      gl.compileShader(s);
-      if (!gl.getShaderParameter(s, gl.COMPILE_STATUS))
-        throw new Error(gl.getShaderInfoLog(s) || "shader compile failed");
-      return s;
-    };
-    const prog = gl.createProgram();
-    gl.attachShader(prog, compile(gl.VERTEX_SHADER, VERT));
-    gl.attachShader(prog, compile(gl.FRAGMENT_SHADER, FRAG));
-    gl.linkProgram(prog);
-    if (!gl.getProgramParameter(prog, gl.LINK_STATUS))
-      throw new Error(gl.getProgramInfoLog(prog) || "link failed");
-    gl.useProgram(prog);
-    const buf = gl.createBuffer();
-    gl.bindBuffer(gl.ARRAY_BUFFER, buf);
-    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW);
-    const aP = gl.getAttribLocation(prog, "aP");
-    gl.enableVertexAttribArray(aP);
-    gl.vertexAttribPointer(aP, 2, gl.FLOAT, false, 0, 0);
-    uRes = gl.getUniformLocation(prog, "uRes");
-    uT = gl.getUniformLocation(prog, "uT");
-    uStarD = gl.getUniformLocation(prog, "uStarD");
+
+  function tick(nt){
+    t=nt;
+    const ph=t%T_CYC;
+    if(ph<T_FILL){const u=ph/T_FILL;P=u<.12?u*u/.12:u;REL=0;}
+    else if(ph<T_FILL+T_HOLD){P=1;REL=0;}
+    else if(ph<T_FILL+T_HOLD+T_REL){P=1;REL=(ph-T_FILL-T_HOLD)/T_REL;}
+    else{P=0;REL=0;}
+    paint(cv,CELL,vfn,cfn);
   }
-  function glResize() {
-    const w = Math.max(16, Math.round(canvas.clientWidth * dpr() / CELL_PX));
-    const h = Math.max(8, Math.round(canvas.clientHeight * dpr() / CELL_PX));
-    if (canvas.width === w && canvas.height === h) return;
-    canvas.width = w; canvas.height = h;
-    gl.viewport(0, 0, w, h);
-    const skyCells = Math.max(1, Math.round(h * SKY));
-    gl.uniform1f(uStarD, Math.min(0.06, STAR_TARGET / (w * skyCells)));
-    gl.uniform2f(uRes, w, h);
-  }
-  function drawGL(t) {
-    gl.uniform1f(uT, t);
-    gl.drawArrays(gl.TRIANGLES, 0, 3);
-  }
-  function start2D(cv) {
-    const ctx = cv.getContext("2d");
-    if (!ctx) { draw = () => {}; return; }
-    const B4 = [[0,8,2,10],[12,4,14,6],[3,11,1,9],[15,7,13,5]];
-    let W = 0, H = 0;
-    const stars = [];
-    for (let i = 0; i < STAR_TARGET; i++)
-      stars.push([Math.random(), Math.random(), .6 + Math.random() * 2.4, Math.random() * 6.28]);
-    function rs() {
-      const w = Math.max(16, Math.round(cv.clientWidth * dpr() / CELL_PX));
-      const h = Math.max(8, Math.round(cv.clientHeight * dpr() / CELL_PX));
-      if (w === W && h === H) return;
-      W = w; H = h; cv.width = w; cv.height = h;
-    }
-    function fr(t) {
-      const im = ctx.createImageData(W, H), d = im.data;
-      const skyH = Math.max(1, Math.round(H * SKY));
-      for (let y = 0; y < H; y++) {
-        const inSky = y < skyH;
-        const fy = inSky ? 0 : (y - skyH) / (H - skyH);
-        for (let x = 0; x < W; x++) {
-          let v = 0;
-          if (!inSky) {
-            v = (fy * fy * .75 + fy * .35) * .8
-              + .13 * Math.sin(x * .055 + t * 1.3 + y * .10)
-              + .10 * Math.sin(x * .11 - t * .8 + y * .05)
-              + .05 * Math.sin(x * .23 + t * 2.0 - y * .09);
-            if (x < 3 || x > W - 4) v *= .4;
-            v = Math.max(0, Math.min(1, v));
-          }
-          const th = (B4[y & 3][x & 3] + .5) / 16;
-          const i = (y * W + x) * 4;
-          if (v > th) {
-            const heat = Math.min(1, (v - th) * 2.4 + v * .4);
-            d[i] = 255;
-            d[i+1] = Math.round(65 + heat * 115 + (heat > .8 ? (heat - .8) * 60 : 0));
-            d[i+2] = Math.round(20 + heat * 40 + (heat > .85 ? (heat - .85) * 120 : 0));
-            d[i+3] = 255;
-          } else if (!inSky && v > .35) {
-            d[i] = 28; d[i+1] = 14; d[i+2] = 4; d[i+3] = 255;
-          }
-        }
-      }
-      for (const [sx, sy, sp, ph] of stars) {
-        if (.5 + .5 * Math.sin(t * sp + ph) > .55) {
-          const i = (((sy * skyH) | 0) * W + ((sx * W) | 0)) * 4;
-          d[i] = 255; d[i+1] = 204; d[i+2] = 77; d[i+3] = 255;
-        }
-      }
-      ctx.putImageData(im, 0, 0);
-    }
-    draw = fr; resize = rs;
-    rs(); fr(simT);
-  }
-  let draw, resize, cur = canvas;
-  try {
-    if (!gl) throw new Error("webgl unavailable");
-    glInit();
-    draw = drawGL; resize = glResize;
-    canvas.addEventListener("webglcontextlost", (e) => {
-      e.preventDefault();
-      running = false; cancelAnimationFrame(raf);
-      const cv = canvas.cloneNode();
-      canvas.replaceWith(cv);
-      io.unobserve(cur); ro.unobserve(cur);
-      cur = cv;
-      io.observe(cv); ro.observe(cv);
-      start2D(cv); pump();
-    });
-  } catch (err) {
-    start2D(canvas);
-  }
-  const io = new IntersectionObserver(
-    (en) => { inView = en[0].isIntersecting; pump(); },
-    { threshold: 0.01 }
-  );
-  const ro = new ResizeObserver(() => {
-    resize();
-    if (!running) draw(simT);
-  });
-  io.observe(canvas); ro.observe(canvas);
-  document.addEventListener("visibilitychange", () => {
-    pageVisible = !document.hidden; pump();
-  });
-  resize(); draw(simT); pump();
+
+  function still(){t=6;P=.62;REL=0;paint(cv,CELL,vfn,cfn);}
+
+  fieldLoop(cv,{resize,tick,still});
 })();
 
 /* ---- boot panel: cinderd types its startup, then the banner ---- */
@@ -1135,7 +1222,7 @@ void main(){
   var lit = [], igns = [], raf = 0, running = false;
   var nextSpawn = 0;
   function build(){
-    var w = window.innerWidth, h = window.innerHeight;
+    var w = document.documentElement.clientWidth, h = document.documentElement.clientHeight;
     base.width = fx.width = Math.ceil(w/RES);
     base.height = fx.height = Math.ceil(h/RES);
     var o = {l:EDGE_L, r:EDGE_R, t:EDGE_T, b:EDGE_B};
@@ -2079,22 +2166,22 @@ var LATEST0 = 1180;
 var seq = LATEST0;
 
 var SCRIPT = [
-  {d: 650, m:'message.received', sev:'info',   p:[['chat_id','"chat:77aa01"'],['msg_id','"m:9c4f"'],['dir','"in"'],['bytes','42']]},
+  {d: 650, m:'message.received', sev:'info',   p:[['chat_id','"chat:77aa01"'],['msg_id','"msg:9c4f"'],['dir','"in"'],['bytes','42']]},
   {d: 380, m:'message.received', sev:'info',   p:[['chat_id','"chat:77aa01"'],['msg_id','"m:9c50"'],['dir','"in"'],['bytes','17']]},
-  {d:1250, m:'file.offered',     sev:'warn',   p:[['chat_id','"chat:77aa01"'],['file_id','"f:2b11"'],['name','"keys.tar.zst"'],['bytes','184220'],['sha256','"9f2c71ab…e40d"']]},
+  {d:1250, m:'file_state',       sev:'warn',   p:[['file_id','"file:2b11"'],['msg_id','"msg:9c4f"'],['chat_id','"chat:77aa01"'],['dir','"in"'],['state','"offered"'],['bytes_done','0'],['bytes_total','184220']]},
   {d: 900, m:'message.received', sev:'info',   p:[['chat_id','"chat:4d08be"'],['msg_id','"m:71c2"'],['dir','"out"'],['bytes','96'],['acked','true']]},
-  {d:1700, m:'peer.denied',      sev:'danger', p:[['peer','"umbra-9"'],['reason','"ticket_burned"'],['retryable','false']]},
+  {d:1700, m:'contact.denied',   sev:'danger', p:[['contact_id','"contact:7f44ae"'],['peer_id','"peer:umbra-9"']]},
   {d: 700, m:'message.received', sev:'info',   p:[['chat_id','"chat:77aa01"'],['msg_id','"m:9c55"'],['dir','"in"'],['bytes','31']]},
   {d: 600, m:'message.received', sev:'info',   p:[['chat_id','"chat:77aa01"'],['msg_id','"m:9c56"'],['dir','"in"'],['bytes','58'],['kind','"react"']]},
   {d:1600, gap:23},
   {d: 850, m:'message.received', sev:'info',   p:[['chat_id','"chat:77aa01"'],['msg_id','"m:9d01"'],['dir','"in"'],['bytes','22'],['replayed','true']]},
   {d: 480, m:'message.received', sev:'info',   p:[['chat_id','"chat:77aa01"'],['msg_id','"m:9d02"'],['dir','"in"'],['bytes','44'],['replayed','true']]},
-  {d:2200, m:'chat.wiped',       sev:'warn',   p:[['chat_id','"chat:4d08be"'],['by','"self"'],['msgs','12'],['burn_after','0']]},
+  {d:2200, m:'chat.wiped',       sev:'warn',   p:[['chat_id','"chat:4d08be"'],['by','"local"']]},
   {d: 750, m:'message.received', sev:'info',   p:[['chat_id','"chat:77aa01"'],['msg_id','"m:9d0a"'],['dir','"out"'],['bytes','64'],['acked','true']]},
-  {d:1100, m:'file.offered',     sev:'warn',   p:[['chat_id','"chat:77aa01"'],['file_id','"f:2b1c"'],['name','"floorplan.pdf"'],['bytes','92415'],['sha256','"71ab9f2c…88d1"']]},
+  {d:1100, m:'file_state',       sev:'warn',   p:[['file_id','"file:2b1c"'],['msg_id','"msg:e01d7c"'],['chat_id','"chat:77aa01"'],['dir','"in"'],['state','"offered"'],['bytes_done','0'],['bytes_total','92415']]},
   {d: 520, m:'message.received', sev:'info',   p:[['chat_id','"chat:77aa01"'],['msg_id','"m:9d10"'],['dir','"in"'],['bytes','19']]},
   {d: 420, m:'message.received', sev:'info',   p:[['chat_id','"chat:77aa01"'],['msg_id','"m:9d11"'],['dir','"in"'],['bytes','33']]},
-  {d:2600, m:'peer.denied',      sev:'danger', p:[['peer','"fern-old"'],['reason','"fingerprint_mismatch"'],['retryable','false']]}
+  {d:2600, m:'contact.denied',   sev:'danger', p:[['contact_id','"contact:b02e51"'],['peer_id','"peer:fern-old"']]}
 ];
 
 var rowsEl = el('evRows');
@@ -2336,7 +2423,7 @@ function renderStatic(){
   }
   btn.addEventListener("click", function(){ setPov(pov === "t" ? "r" : "t"); });
   document.addEventListener("keydown", function(e){
-    if (e.key === "v" && !e.metaKey && !e.ctrlKey && !e.altKey){
+    if (e.key.toLowerCase() === "v" && !e.metaKey && !e.ctrlKey && !e.altKey){
       var t = e.target;
       if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable)) return;
       setPov(pov === "t" ? "r" : "t");
@@ -2502,7 +2589,7 @@ function renderStatic(){
     link:    ['──▶', 'handshake',  'cinder:// link'],
     noise:   ['══▶', 'sealed',     'noise_xx · 3 flights'],
     rekey:   ['──▶', 'sealed',     'rekey · self-loop'],
-    sas:     ['──▶', 'verified',   '/sas match'],
+    sas:     ['──▶', 'verified',   '/verify match'],
     keychg:  ['──▶', 'unverified', 'key change · sends blocked'],
     sasback: ['──▶', 'verified',   'sas match'],
     wipe:    ['──▶', 'wiped',      'chat.wipe'],
@@ -2573,7 +2660,7 @@ function renderStatic(){
   const PATH = [
     ['invite',    '──▶', 'handshake', 'cinder:// link'],
     ['handshake', '══▶', 'sealed',    'noise_xx · 3 flights'],
-    ['sealed',    '──▶', 'verified',  '/sas match']
+    ['sealed',    '──▶', 'verified',  '/verify match']
   ];
   let cur = 0, prev = -1, timer = null, visible = false;
   const paint = () => {
@@ -2634,20 +2721,22 @@ function renderStatic(){
   }
 })();
 
-/* ---------- mega footer v2 ---------- */
+/* ---------- mega footer v3 ---------- */
+
 (() => {
   "use strict";
   const footer = document.querySelector(".fm2");
   const mq = window.matchMedia("(prefers-reduced-motion: reduce)");
 
-  /* ---- uptime counter (fake boot offset, labelled demo) ---- */
-  const upEl = document.getElementById("upt");
+  /* ---- uptime counters (fake boot offset, labelled demo) ---- */
+  const upEls = ["upt", "upt2"].map(id => document.getElementById(id)).filter(Boolean);
   const upBase = 4*3600 + 17*60 + 33;
   const t0 = Date.now();
   const p2 = n => String(n).padStart(2, "0");
   function tickUptime(){
     const s = upBase + Math.floor((Date.now() - t0) / 1000);
-    upEl.textContent = p2(Math.floor(s/3600)) + ":" + p2(Math.floor(s/60)%60) + ":" + p2(s%60);
+    const txt = p2(Math.floor(s/3600)) + ":" + p2(Math.floor(s/60)%60) + ":" + p2(s%60);
+    upEls.forEach(el => { el.textContent = txt; });
   }
 
   /* ---- starfield: two pre layers, rows rotated left ---- */
@@ -2686,6 +2775,47 @@ function renderStatic(){
     if(dirty) nearEl.textContent = near.join("\n");
   }
 
+  /* ---- signal sweep: clone the wordmark into .fm2-echo, then drive
+     --sx (-0.35 → 1.35) over ~2.3s every ~8s. The gradient + bayer
+     mask on .fm2-echo does the rest; base glyphs never reflow. ---- */
+  const mark = footer.querySelector(".fm2-mark");
+  const word = footer.querySelector(".fm2-word");
+  const echo = document.getElementById("echo");
+  if(echo && word) echo.appendChild(word.cloneNode(true));
+  let sxRaf = 0, sweepTimer = 0;
+  const SWEEP_MS = 2300, SX_MIN = -0.35, SX_SPAN = 1.70;
+  function runSweep(){
+    const t0 = performance.now();
+    function step(t){
+      const k = Math.min(1, (t - t0) / SWEEP_MS);
+      mark.style.setProperty("--sx", (SX_MIN + k * SX_SPAN).toFixed(4));
+      if(k < 1 && live) sxRaf = requestAnimationFrame(step);
+    }
+    sxRaf = requestAnimationFrame(step);
+  }
+  function scheduleSweep(d){
+    sweepTimer = setTimeout(() => { runSweep(); scheduleSweep(); },
+      d !== undefined ? d : 5600 + Math.random() * 1400);
+  }
+
+  /* ---- meteors: coin-flip direction, random top, ~15s cadence ---- */
+  const metL = document.getElementById("metL");
+  const metR = document.getElementById("metR");
+  let metTimer = 0;
+  function spawnMeteor(){
+    const el = Math.random() < 0.6 ? metL : metR;
+    el.style.top = (4 + Math.random() * 42) + "%";
+    el.classList.remove("go");
+    void el.offsetWidth;            /* restart the css animation */
+    el.classList.add("go");
+  }
+  [metL, metR].forEach(el => el &&
+    el.addEventListener("animationend", () => el.classList.remove("go")));
+  function scheduleMeteor(d){
+    metTimer = setTimeout(() => { spawnMeteor(); scheduleMeteor(); },
+      d !== undefined ? d : 13000 + Math.random() * 5000);
+  }
+
   /* ---- gate: intersecting && !hidden && motion-ok → .fm-live + timers ---- */
   let inView = false, live = false, timers = [];
   function start(){
@@ -2694,6 +2824,8 @@ function renderStatic(){
     footer.classList.add("fm-live");
     timers.push(setInterval(drift, 140), setInterval(tickUptime, 1000));
     tickUptime();
+    scheduleSweep(1400);      /* first sweep early so it's discoverable */
+    scheduleMeteor(5200);
   }
   function stop(){
     if(!live) return;
@@ -2701,6 +2833,10 @@ function renderStatic(){
     footer.classList.remove("fm-live");
     timers.forEach(clearInterval);
     timers = [];
+    clearTimeout(sweepTimer); clearTimeout(metTimer);
+    cancelAnimationFrame(sxRaf);
+    mark.style.setProperty("--sx", SX_MIN);
+    metL.classList.remove("go"); metR.classList.remove("go");
   }
   function gate(){
     (inView && !document.hidden && !mq.matches) ? start() : stop();
@@ -2723,6 +2859,7 @@ function renderStatic(){
   });
 })();
 
+
 /* ---------- spec ledger v2 ---------- */
 (function(){
   "use strict";
@@ -2742,9 +2879,14 @@ function renderStatic(){
       var opening=!row.classList.contains("open");
       if(opening){
         rows.forEach(function(r){if(r!==row)setRow(r,false);});
-        if(allBtn){allBtn.setAttribute("aria-pressed","false");allBtn.textContent="[+] all";}
       }
       setRow(row,opening);
+      if(allBtn){
+        var allOpen=Array.prototype.every.call(rows,function(r){return r.classList.contains("open")});
+        allBtn.setAttribute("aria-pressed",allOpen?"true":"false");
+        allBtn.setAttribute("aria-label",(allOpen?"collapse":"expand")+" all ledger entries");
+        allBtn.textContent=(allOpen?"[-]":"[+]")+" all";
+      }
     });
   });
 
@@ -2774,4 +2916,283 @@ function renderStatic(){
       tag.classList.toggle("bad",max>54);
     }
   });
+})();
+
+
+/* ---------- dvf — block-fill dividers ---------- */
+
+/* ---- PORT ---------------------------------------------------------------
+ * Mount: drop `<div class="dvf [dvf--label|dvf--tick]" data-label="nn"
+ *        data-tick="fig·nn" role="separator"></div>` inside .wrap between a
+ *        .sec-head and the next section (replaces .dither-div / bare space).
+ * Lift:  this whole IIFE + the marked .dvf css block. No exports; it finds
+ *        and drives every .dvf node present at DOMContentLoaded (call the
+ *        internal build path again for late-inserted nodes if ever needed).
+ * Notes: cells are real text spans (selectable/printable); each cell is
+ *        pinned to the measured advance width of its settle glyph so the
+ *        rule stays edge-to-edge even if a glyph falls back to another font.
+ *        prefers-reduced-motion renders the finished rule immediately and
+ *        disables the observer, loops and the ember seed.
+ * ------------------------------------------------------------------------ */
+(function(){
+'use strict';
+
+var MQ = window.matchMedia('(prefers-reduced-motion: reduce)');
+var D_FILL   = 600;    /* total sweep, ms                                */
+var SEED_MS  = 12000;  /* ember flash cadence                            */
+var LOOP_GAP = 1500;   /* pause between looped demo fills                */
+var MAXC     = 420;    /* cell-count safety cap                          */
+var GLYPH  = { blocks:'▁▂▃▄▅▆▇█', thin:'·░─' };
+var RAMPMS = { blocks:190, thin:130 };  /* per-cell glyph ramp window     */
+
+var items = [];
+
+function rm(){ return MQ.matches; }
+function slice(nl){ return Array.prototype.slice.call(nl); }
+function kindOf(el){
+  return el.classList.contains('dvf--label') ? 'label'
+       : el.classList.contains('dvf--tick')  ? 'tick' : 'ramp';
+}
+function el(tag, cls, txt, hidden){
+  var s = document.createElement('span');
+  s.className = cls;
+  if (hidden) s.setAttribute('aria-hidden','true');
+  if (txt != null) s.textContent = txt;
+  return s;
+}
+/* measure the advance width of one settle glyph in the live font */
+function probe(host, ch){
+  var s = el('span','dvf-probe', new Array(21).join(ch), true);
+  host.appendChild(s);
+  var w = s.offsetWidth / 20;
+  host.removeChild(s);
+  return w > 0 ? w : 8;
+}
+function makeRule(n){
+  var r = el('span','dvf-rule', null, true);
+  var h = '';
+  for (var i=0;i<n;i++) h += '<span class="dvf-c"> </span>';
+  r.innerHTML = h;
+  return r;
+}
+
+function build(it){
+  var e = it.el, k = it.kind;
+  e.innerHTML = '';                              /* drops .dvf-fb fallback */
+  var gset  = (k === 'tick') ? 'thin' : 'blocks';
+  it.seq    = GLYPH[gset].split('');             /* transient … final      */
+  it.settle = it.seq[it.seq.length-1];
+  var cw = probe(e, it.settle), W = e.clientWidth;
+  it.cells = []; it.steps = []; it.x = [];
+
+  if (k === 'label'){
+    var tag = el('span','dvf-x dvf-tag', null, true);
+    var i1 = el('i', null, '['), b = el('b', null, e.getAttribute('data-label') || '00'), i2 = el('i', null, ']');
+    tag.appendChild(i1); tag.appendChild(document.createTextNode(' '));
+    tag.appendChild(b);  tag.appendChild(document.createTextNode(' '));
+    tag.appendChild(i2);
+    e.appendChild(tag);
+    var n = Math.max(3, Math.min(MAXC,
+              Math.floor((W - tag.offsetWidth) / (cw * 2))));
+    var r1 = makeRule(n), r2 = makeRule(n);
+    e.insertBefore(r1, tag); e.appendChild(r2);
+    it.cells = slice(r1.children).concat(slice(r2.children));
+    it.steps = slice(r1.children).concat([tag], slice(r2.children));
+    it.x = [tag];
+  } else if (k === 'tick'){
+    var b1  = el('span','dvf-x dvf-br','[', true);
+    var fig = el('span','dvf-x dvf-fig', e.getAttribute('data-tick') || 'fig·00', true);
+    var b2  = el('span','dvf-x dvf-br',']', true);
+    e.appendChild(b1); e.appendChild(fig); e.appendChild(b2);
+    var fixed = b1.offsetWidth + fig.offsetWidth + b2.offsetWidth;
+    var nt = Math.max(6, Math.min(MAXC, Math.floor((W - fixed) / cw)));
+    var rt = makeRule(nt);
+    e.insertBefore(rt, fig);
+    it.cells = slice(rt.children);
+    it.steps = [b1].concat(it.cells, [fig, b2]);
+    it.x = [b1, fig, b2];
+  } else {
+    var nr = Math.max(4, Math.min(MAXC, Math.floor(W / cw)));
+    var rr = makeRule(nr);
+    e.appendChild(rr);
+    it.cells = slice(rr.children);
+    it.steps = it.cells.slice();
+  }
+  it.sig = k + ':' + it.cells.length;
+  it.cw = cw; it._w = W;
+  it.cells.forEach(function(c){ c.style.width = cw + 'px'; c._k = -1; });
+  var w = e.closest('.slot') && e.closest('.slot').querySelector('[data-w]');
+  if (w) w.textContent = Math.round(W) + 'px · ' + it.cells.length + ' cells';
+}
+
+function arm(it){                                 /* blank, ready to fill  */
+  it.gen++; it.busy = false;                      /* abort in-flight rAF   */
+  it.armed = true; it.done = false;
+  it.cells.forEach(function(c){
+    c.textContent = ' '; c._k = -1;
+    c.classList.remove('is-fresh','is-hot');
+  });
+  it.x.forEach(function(x){
+    x._on = false;
+    x.style.opacity = '0';
+    x.style.transform = 'scaleY(.4)';
+  });
+  it.el.classList.remove('is-done');
+}
+function settle(it){                              /* finished rule         */
+  it.armed = false; it.done = true; it.busy = false; it.gen++;
+  it.cells.forEach(function(c){ c.textContent = it.settle; c._k = it.seq.length-1; });
+  it.x.forEach(function(x){ x.style.opacity = '1'; x.style.transform = 'scaleY(1)'; });
+  it.el.classList.add('is-done');
+}
+
+function fill(it, cb){
+  if (it.busy || it.done) return;
+  it.busy = true; it.armed = false;
+  var g = ++it.gen;
+  var steps = it.steps, n = steps.length, seq = it.seq, L = seq.length;
+  var ramp = RAMPMS[it.kind === 'tick' ? 'thin' : 'blocks'];
+  var stepms = ramp / (L - 1);
+  var S = n > 1 ? (D_FILL - ramp) / (n - 1) : 0;
+  var t0 = performance.now();
+  function fr(now){
+    if (g !== it.gen) return;                     /* aborted by rebuild    */
+    var t = now - t0, all = true;
+    for (var i = 0; i < n; i++){
+      var st = steps[i], p = t - i * S;
+      if (p < 0){ all = false; continue; }
+      if (st.classList.contains('dvf-x')){
+        if (!st._on){
+          st._on = true;
+          st.style.opacity = '1';
+          st.style.transform = 'scaleY(1)';
+        }
+        continue;
+      }
+      var k = Math.min(L - 1, Math.floor(p / stepms));
+      if (k !== st._k){
+        st._k = k;
+        st.textContent = seq[k];
+        if (k === L - 1){
+          st.classList.add('is-fresh');
+          (function(c){ setTimeout(function(){ c.classList.remove('is-fresh'); }, 340); })(st);
+        }
+      }
+      if (k < L - 1) all = false;
+    }
+    if (!all){ requestAnimationFrame(fr); return; }
+    it.busy = false; it.done = true;
+    it.el.classList.add('is-done');
+    if (cb) cb();
+  }
+  requestAnimationFrame(fr);
+}
+
+var io = new IntersectionObserver(function(es){
+  es.forEach(function(en){
+    var it = en.target._dvf; if (!it) return;
+    it.vis = en.isIntersecting;
+    if (rm() || it.loop || it.stat) return;
+    if (en.isIntersecting){ if (!it.done && !it.busy) fill(it); }
+    else if (it.done || it.busy){ arm(it); }      /* left view → re-arm    */
+  });
+}, { threshold: .6 });
+
+function loop(it){                                /* matrix "filling" col  */
+  if (it._looping) return;
+  it._looping = true;
+  (function go(){
+    fill(it, function(){
+      setTimeout(function(){
+        if (rm()){ settle(it); it._looping = false; return; }
+        arm(it);
+        setTimeout(go, 80);
+      }, LOOP_GAP);
+    });
+  })();
+}
+
+function rebuild(it){
+  var g = ++it.gen; it.busy = false;
+  build(it);
+  if (g !== it.gen) return;
+  if (rm() || it.stat){ settle(it); }
+  else if (it.done){ settle(it); }
+  else {
+    arm(it);
+    if (it.loop){ it._looping = false; loop(it); }
+    else if (it.vis) fill(it);
+  }
+}
+
+var ro = ('ResizeObserver' in window) ? new ResizeObserver(function(es){
+  es.forEach(function(en){
+    var it = en.target._dvf; if (!it) return;
+    /* rebuild only when the width moved by ~one cell or more */
+    var W = en.target.clientWidth;
+    if (it._w != null && Math.abs(W - it._w) < (it.cw || 8) * .9) return;
+    rebuild(it);
+  });
+}) : null;
+
+function seed(){
+  if (rm()) return;
+  var pool = items.filter(function(it){
+    return it.vis && it.done && !it.busy && it.cells.length;
+  });
+  if (!pool.length) return;
+  var it = pool[Math.floor(Math.random() * pool.length)];
+  var c  = it.cells[Math.floor(Math.random() * it.cells.length)];
+  if (c._k !== it.seq.length - 1) return;
+  c.classList.add('is-hot');
+  setTimeout(function(){ c.classList.remove('is-hot'); }, 560);
+}
+
+function init(){
+  slice(document.querySelectorAll('.dvf')).forEach(function(e){
+    var it = {
+      el: e, kind: kindOf(e), gen: 0,
+      loop: e.hasAttribute('data-dvf-loop'),
+      stat: e.hasAttribute('data-dvf-static'),
+      armed: false, done: false, busy: false, vis: false
+    };
+    e._dvf = it;
+    build(it);
+    items.push(it);
+    if (ro) ro.observe(e);
+    if (rm() || it.stat){
+      settle(it);
+    } else {
+      arm(it);
+      io.observe(e);
+      if (it.loop) loop(it);
+    }
+  });
+  if (document.fonts && document.fonts.ready){
+    document.fonts.ready.then(function(){ items.forEach(rebuild); });
+  }
+}
+
+MQ.addEventListener ? MQ.addEventListener('change', onMQ)
+                    : MQ.addListener(onMQ);
+function onMQ(){
+  items.forEach(function(it){
+    it.gen++; it.busy = false;
+    if (rm()){ it._looping = false; settle(it); }
+    else if (it.stat){ settle(it); }
+    else { io.observe(it.el); arm(it); if (it.loop) loop(it); else if (it.vis) fill(it); }
+  });
+  meter();
+}
+
+function meter(){
+  var m = document.getElementById('motionState');
+  if (m) m.textContent = rm() ? 'reduced — static rules' : 'full — sweep enabled';
+}
+
+setInterval(seed, SEED_MS);
+meter();
+if (document.readyState === 'loading'){
+  document.addEventListener('DOMContentLoaded', init);
+} else { init(); }
 })();

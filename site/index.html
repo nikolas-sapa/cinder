@@ -638,30 +638,20 @@
         </span>
         <span class="tgl" aria-hidden="true"></span>
       </button>
-      <div class="body" id="b1" role="region" aria-label="agent-first json-rpc — both surfaces" hidden>
+      <div class="body" id="b1" role="region" aria-label="agent-first json-rpc — both surfaces" aria-hidden="true" hidden>
+        <div class="bodyin"><div class="pad">
         <div class="pair pair--seam">
           <div class="side">
             <div class="phead">human · tui<span class="pf">input bar</span></div>
-<pre><span class="p">&gt; meet at the old port, 0400</span>
-<span class="p">~ sent: eidolon          … → ✓ → ✓✓</span></pre>
+<pre><span class="ln" data-sync="snd" tabindex="0"><span class="p">&gt; meet at the old port, 0400</span></span><span class="ln" data-sync="ack dup" tabindex="0"><span class="p">~ sent: eidolon          … → ✓ → ✓✓</span></span></pre>
           </div>
           <div class="pbridge" aria-hidden="true"><span class="pbadge">⇄</span></div>
           <div class="side agent">
             <div class="phead">agent · json-rpc<span class="pf">ndjson</span></div>
-<pre><span class="g">→</span> {"id":10,"method":"<span class="m">msg.send</span>",
-   "params":{"to":"contact:9f3b12",
-   "body":"<span class="s">meet at the old port, 0400</span>",
-   "client_msg_id":"<span class="s">agent-0001</span>"}}
-<span class="g">←</span> {"id":10,"result":{
-   "msg_id":"<span class="s">msg:e01d7c</span>",
-   "state":"queued","deduped":false}}
-<span class="g">→</span> {"id":11,…retry same client_msg_id}
-<span class="g">←</span> {"id":11,"result":{
-   "msg_id":"<span class="s">msg:e01d7c</span>",
-   "state":"queued","<span class="s">deduped":true</span>}}</pre>
+<pre><span class="ln" data-sync="snd" tabindex="0"><span class="g">→</span> {"id":10,"method":"<span class="m">msg.send</span>",</span><span class="ln" data-sync="snd">   "params":{"to":"contact:9f3b12",</span><span class="ln" data-sync="snd">   "body":"<span class="s">meet at the old port, 0400</span>",</span><span class="ln" data-sync="snd">   "client_msg_id":"<span class="s">agent-0001</span>"}}</span><span class="ln" data-sync="ack" tabindex="0"><span class="g">←</span> {"id":10,"result":{</span><span class="ln" data-sync="ack">   "msg_id":"<span class="s">msg:e01d7c</span>",</span><span class="ln" data-sync="ack">   "state":"queued","deduped":false}}</span><span class="ln" data-sync="dup" tabindex="0"><span class="g">→</span> {"id":11,…retry same client_msg_id}</span><span class="ln" data-sync="dup"><span class="g">←</span> {"id":11,"result":{</span><span class="ln" data-sync="dup">   "msg_id":"<span class="s">msg:e01d7c</span>",</span><span class="ln" data-sync="dup">   "state":"queued","<span class="s">deduped":true</span>}}</span></pre>
           </div>
         </div>
-          <div class="pcap" aria-hidden="true"><span class="k">same call</span><span class="d"></span><span class="v">msg.send</span></div>
+          <div class="pcap"><span class="k">same call</span><span class="d"></span><button class="v" type="button" data-flash="snd ack" aria-label="flash the msg.send wire lines">msg.send</button></div>
         <ul class="spec">
           <li><span class="k">stdio</span><span class="d"></span><span class="v2">cinder rpc · newline-delimited json</span></li>
           <li><span class="k">daemon</span><span class="d"></span><span class="v2">unix socket · peer-cred auth</span></li>
@@ -674,6 +664,7 @@
           serves the same calls to concurrent clients over a peer-cred unix
           socket. Retry a <code>client_msg_id</code>, get the same
           <code>msg_id</code> back with <code>deduped:true</code>.</p>
+        </div></div>
       </div>
     </li>
 
@@ -688,28 +679,20 @@
         </span>
         <span class="tgl" aria-hidden="true"></span>
       </button>
-      <div class="body" id="b2" role="region" aria-label="real noise — both surfaces" hidden>
+      <div class="body" id="b2" role="region" aria-label="real noise — both surfaces" aria-hidden="true" hidden>
+        <div class="bodyin"><div class="pad">
         <div class="pair pair--seam">
           <div class="side">
             <div class="phead">human · tui<span class="pf">status line</span></div>
-<pre><span class="p">&gt; /status</span>
-~ link up · peer <span class="s">oyv4kqz3n5m2…</span>
-~ <span class="s">Noise_XX_25519_ChaChaPoly_BLAKE2s</span>
-~ mutual auth · fs · no tls</pre>
+<pre><span class="ln" data-sync="hs" tabindex="0"><span class="p">&gt; /status</span></span><span class="ln" data-sync="lk" tabindex="0">~ link up · peer <span class="s">oyv4kqz3n5m2…</span></span><span class="ln" data-sync="pat" tabindex="0">~ <span class="s">Noise_XX_25519_ChaChaPoly_BLAKE2s</span></span><span class="ln" data-sync="tp" tabindex="0">~ mutual auth · fs · no tls</span></pre>
           </div>
           <div class="pbridge" aria-hidden="true"><span class="pbadge">⇄</span></div>
           <div class="side agent">
             <div class="phead">wire · noise transcript<span class="pf">xx</span></div>
-<pre><span class="c">── handshake · frames ≤ 4096 B ──</span>
-<span class="g">→</span> <span class="m">Msg1</span>   e
-<span class="g">←</span> <span class="m">Msg2</span>   e, ee, s, es   <span class="c">· s sealed</span>
-<span class="g">→</span> <span class="m">Msg3</span>   s, se          <span class="c">· s sealed</span>
-<span class="c">── transport ─────────────────────</span>
-~ all frames opaque · ≤ 8210 B
-~ rekey every 1024 msgs</pre>
+<pre><span class="ln" data-sync="hs" tabindex="0"><span class="c">── handshake · frames ≤ 4096 B ──</span></span><span class="ln" data-sync="hs"><span class="g">→</span> <span class="m">Msg1</span>   e</span><span class="ln" data-sync="hs pat"><span class="g">←</span> <span class="m">Msg2</span>   e, ee, s, es   <span class="c">· s sealed</span></span><span class="ln" data-sync="hs pat"><span class="g">→</span> <span class="m">Msg3</span>   s, se          <span class="c">· s sealed</span></span><span class="ln" data-sync="lk tp" tabindex="0"><span class="c">── transport ─────────────────────</span></span><span class="ln" data-sync="lk tp">~ all frames opaque · ≤ 8210 B</span><span class="ln" data-sync="tp" tabindex="0">~ rekey every 1024 msgs</span></pre>
           </div>
         </div>
-          <div class="pcap" aria-hidden="true"><span class="k">same wire</span><span class="d"></span><span class="v">xx: e,ee,s,es</span></div>
+          <div class="pcap"><span class="k">same wire</span><span class="d"></span><button class="v" type="button" data-flash="hs" aria-label="flash the Noise XX transcript lines">xx: e,ee,s,es</button></div>
         <ul class="spec">
           <li><span class="k">pattern</span><span class="d"></span><span class="v2">Noise_XX_25519_ChaChaPoly_BLAKE2s</span></li>
           <li><span class="k">impl</span><span class="d"></span><span class="v2">snow</span></li>
@@ -720,6 +703,7 @@
           snow: mutual authentication, forward secrecy, and static keys that
           are encrypted on the wire — the Msg2/Msg3 transcript above is the
           whole ceremony. No TLS anywhere.</p>
+        </div></div>
       </div>
     </li>
 
@@ -734,27 +718,20 @@
         </span>
         <span class="tgl" aria-hidden="true"></span>
       </button>
-      <div class="body" id="b3" role="region" aria-label="blind relay — both surfaces" hidden>
+      <div class="body" id="b3" role="region" aria-label="blind relay — both surfaces" aria-hidden="true" hidden>
+        <div class="bodyin"><div class="pad">
         <div class="pair pair--seam">
           <div class="side">
             <div class="phead">human · tui<span class="pf">status line</span></div>
-<pre>~ relay connected · :7700
-~ route: by <span class="s">peer-id</span> only
-~ relay holds ciphertext +
-  token hashes — nothing else</pre>
+<pre><span class="ln">~ relay connected · :7700</span><span class="ln" data-sync="rt" tabindex="0">~ route: by <span class="s">peer-id</span> only</span><span class="ln" data-sync="bl" tabindex="0">~ relay holds ciphertext +</span><span class="ln" data-sync="bl">  token hashes — nothing else</span></pre>
           </div>
           <div class="pbridge" aria-hidden="true"><span class="pbadge">⇄</span></div>
           <div class="side agent">
             <div class="phead">relay · all it sees<span class="pf">opaque</span></div>
-<pre><span class="m">Msg</span>{to:<span class="s">peer:oyv4kq…</span>,
-    body:&lt;<span class="s">opaque ≤8210B</span>&gt;}
-<span class="m">MailboxOpen</span>{id:&lt;<span class="s">256-bit</span>&gt;,
-    h_deposit:<span class="s">SHA-256(token)</span>}
-<span class="c"># raw tokens never transit</span>
-<span class="c"># from: claimed, unverified</span></pre>
+<pre><span class="ln" data-sync="rt" tabindex="0"><span class="m">Msg</span>{to:<span class="s">peer:oyv4kq…</span>,</span><span class="ln" data-sync="rt">    body:&lt;<span class="s">opaque ≤8210B</span>&gt;}</span><span class="ln" data-sync="bl" tabindex="0"><span class="m">MailboxOpen</span>{id:&lt;<span class="s">256-bit</span>&gt;,</span><span class="ln" data-sync="bl">    h_deposit:<span class="s">SHA-256(token)</span>}</span><span class="ln" data-sync="bl"><span class="c"># raw tokens never transit</span></span><span class="ln" data-sync="bl"><span class="c"># from: claimed, unverified</span></span></pre>
           </div>
         </div>
-          <div class="pcap" aria-hidden="true"><span class="k">blind</span><span class="d"></span><span class="v">Msg{opaque}</span></div>
+          <div class="pcap"><span class="k">blind</span><span class="d"></span><button class="v" type="button" data-flash="rt" aria-label="flash the opaque relay frame lines">Msg{opaque}</button></div>
         <ul class="spec">
           <li><span class="k">routes</span><span class="d"></span><span class="v2">opaque frames · by peer-id</span></li>
           <li><span class="k">holds</span><span class="d"></span><span class="v2">token hashes only · no keys</span></li>
@@ -765,6 +742,7 @@
           stores SHA-256 token hashes — it can't read, can't forge, can't MITM
           a pinned contact. Blindness is asserted by an integration test, not
           promised in a policy.</p>
+        </div></div>
       </div>
     </li>
 
@@ -779,27 +757,20 @@
         </span>
         <span class="tgl" aria-hidden="true"></span>
       </button>
-      <div class="body" id="b4" role="region" aria-label="accountless identity — both surfaces" hidden>
+      <div class="body" id="b4" role="region" aria-label="accountless identity — both surfaces" aria-hidden="true" hidden>
+        <div class="bodyin"><div class="pad">
         <div class="pair pair--seam">
           <div class="side">
             <div class="phead">human · tui<span class="pf">first run</span></div>
-<pre>~ no signup · no email · no phone
-~ you are <span class="s">peer:oyv4kqz3n5m2…</span>
-~ x25519 key · os keyring
-~ fallback: age-encrypted file</pre>
+<pre><span class="ln" data-sync="hi" tabindex="0">~ no signup · no email · no phone</span><span class="ln" data-sync="pid" tabindex="0">~ you are <span class="s">peer:oyv4kqz3n5m2…</span></span><span class="ln">~ x25519 key · os keyring</span><span class="ln">~ fallback: age-encrypted file</span></pre>
           </div>
           <div class="pbridge" aria-hidden="true"><span class="pbadge">⇄</span></div>
           <div class="side agent">
             <div class="phead">agent · json-rpc<span class="pf">hello</span></div>
-<pre><span class="g">→</span> {"id":1,"method":"<span class="m">session.hello</span>",
-   "params":{"protocol_version":[1],
-   "client":{"name":"my-agent"}}}
-<span class="g">←</span> {"id":1,"result":{"account":{
-   "peer_id":"<span class="s">peer:oyv4kqz3n5m2…</span>"},
-   "auth_method":"peer_uid"}}</pre>
+<pre><span class="ln" data-sync="hi" tabindex="0"><span class="g">→</span> {"id":1,"method":"<span class="m">session.hello</span>",</span><span class="ln" data-sync="hi">   "params":{"protocol_version":[1],</span><span class="ln" data-sync="hi">   "client":{"name":"my-agent"}}}</span><span class="ln" data-sync="pid" tabindex="0"><span class="g">←</span> {"id":1,"result":{"account":{</span><span class="ln" data-sync="pid">   "peer_id":"<span class="s">peer:oyv4kqz3n5m2…</span>"},</span><span class="ln" data-sync="pid">   "auth_method":"peer_uid"}}</span></pre>
           </div>
         </div>
-          <div class="pcap" aria-hidden="true"><span class="k">same id</span><span class="d"></span><span class="v">session.hello</span></div>
+          <div class="pcap"><span class="k">same id</span><span class="d"></span><button class="v" type="button" data-flash="hi" aria-label="flash the session.hello wire lines">session.hello</button></div>
         <ul class="spec">
           <li><span class="k">keypair</span><span class="d"></span><span class="v2">x25519</span></li>
           <li><span class="k">peer-id</span><span class="d"></span><span class="v2">sha-256(pubkey)</span></li>
@@ -810,6 +781,7 @@
           <code>SHA-256(pubkey)</code>. No email, no phone, no signup — there is
           no registration path at all. Keys live in the OS keyring with an
           age-encrypted fallback.</p>
+        </div></div>
       </div>
     </li>
 
@@ -824,33 +796,20 @@
         </span>
         <span class="tgl" aria-hidden="true"></span>
       </button>
-      <div class="body" id="b5" role="region" aria-label="sas verification — both surfaces" hidden>
+      <div class="body" id="b5" role="region" aria-label="sas verification — both surfaces" aria-hidden="true" hidden>
+        <div class="bodyin"><div class="pad">
         <div class="pair pair--seam">
           <div class="side">
             <div class="phead">human · tui<span class="pf">/finger</span></div>
-<pre><span class="p">&gt; /finger</span>
-  eidolon · peer:<span class="s">oyv4kq…</span>
-  trust ○ unverified
-  sas   <span class="s">44-19-07-82-56</span>
-<span class="p">&gt; /verify 44-19-07-82-56</span>
-~ trust <span class="v">● verified</span>
-~ key change ⇒ <span class="v">✕</span> · sends blocked</pre>
+<pre><span class="ln" data-sync="fin" tabindex="0"><span class="p">&gt; /finger</span></span><span class="ln" data-sync="fin">  eidolon · peer:<span class="s">oyv4kq…</span></span><span class="ln" data-sync="fin">  trust ○ unverified</span><span class="ln" data-sync="fin">  sas   <span class="s">44-19-07-82-56</span></span><span class="ln" data-sync="ver" tabindex="0"><span class="p">&gt; /verify 44-19-07-82-56</span></span><span class="ln" data-sync="ok" tabindex="0">~ trust <span class="v">● verified</span></span><span class="ln" data-sync="ok">~ key change ⇒ <span class="v">✕</span> · sends blocked</span></pre>
           </div>
           <div class="pbridge" aria-hidden="true"><span class="pbadge">⇄</span></div>
           <div class="side agent">
             <div class="phead">agent · json-rpc<span class="pf">verify</span></div>
-<pre><span class="g">←</span> event <span class="m">security.identity_changed</span>
-   {"contact_id":"contact:9f3b12",
-    "trust":"<span class="s">key_changed</span>"}
-<span class="g">→</span> {"id":36,"method":"<span class="m">ident.verify</span>",
-   "params":{"contact_id":
-     "contact:9f3b12",
-     "sas":"<span class="s">44-19-07-82-56</span>"}}
-<span class="g">←</span> {"id":36,"result":{
-   "trust":"<span class="v">verified</span>"}}</pre>
+<pre><span class="ln" data-sync="fin" tabindex="0"><span class="g">←</span> event <span class="m">security.identity_changed</span></span><span class="ln" data-sync="fin">   {"contact_id":"contact:9f3b12",</span><span class="ln" data-sync="fin">    "trust":"<span class="s">key_changed</span>"}</span><span class="ln" data-sync="ver" tabindex="0"><span class="g">→</span> {"id":36,"method":"<span class="m">ident.verify</span>",</span><span class="ln" data-sync="ver">   "params":{"contact_id":</span><span class="ln" data-sync="ver">     "contact:9f3b12",</span><span class="ln" data-sync="ver">     "sas":"<span class="s">44-19-07-82-56</span>"}}</span><span class="ln" data-sync="ok" tabindex="0"><span class="g">←</span> {"id":36,"result":{</span><span class="ln" data-sync="ok">   "trust":"<span class="v">verified</span>"}}</span></pre>
           </div>
         </div>
-          <div class="pcap" aria-hidden="true"><span class="k">same sas</span><span class="d"></span><span class="v">ident.verify</span></div>
+          <div class="pcap"><span class="k">same sas</span><span class="d"></span><button class="v" type="button" data-flash="ver" aria-label="flash the ident.verify wire lines">ident.verify</button></div>
         <ul class="spec">
           <li><span class="k">render</span><span class="d"></span><span class="v2">7 emoji · digit fallback (160-bit)</span></li>
           <li><span class="k">binding</span><span class="d"></span><span class="v2">handshake hash + both statics, sorted</span></li>
@@ -862,6 +821,7 @@
           (digits carry 160 bits, the strong check). On any key change, sends
           block loudly until <code>ident.verify</code> clears it. Never a
           silent rebind.</p>
+        </div></div>
       </div>
     </li>
 
@@ -876,28 +836,20 @@
         </span>
         <span class="tgl" aria-hidden="true"></span>
       </button>
-      <div class="body" id="b6" role="region" aria-label="one-time links — both surfaces" hidden>
+      <div class="body" id="b6" role="region" aria-label="one-time links — both surfaces" aria-hidden="true" hidden>
+        <div class="bodyin"><div class="pad">
         <div class="pair pair--seam">
           <div class="side">
             <div class="phead">human · shell<span class="pf">mint</span></div>
-<pre><span class="p">$ cinder id</span>
-~ link <span class="s">cinder://oyv4kq…@relay…</span>
-~   ?rendezvous=<span class="s">tok_m41x</span>
-~ single-use · burns on consume</pre>
+<pre><span class="ln" data-sync="mk" tabindex="0"><span class="p">$ cinder id</span></span><span class="ln" data-sync="lnk" tabindex="0">~ link <span class="s">cinder://oyv4kq…@relay…</span></span><span class="ln" data-sync="lnk">~   ?rendezvous=<span class="s">tok_m41x</span></span><span class="ln" data-sync="burn" tabindex="0">~ single-use · burns on consume</span></pre>
           </div>
           <div class="pbridge" aria-hidden="true"><span class="pbadge">⇄</span></div>
           <div class="side agent">
             <div class="phead">agent · json-rpc<span class="pf">invite</span></div>
-<pre><span class="g">→</span> {"id":34,"method":"<span class="m">invite.create</span>",
-   "params":{"label":"ops-agent",
-             "ttl_sec":86400}}
-<span class="g">←</span> {"id":34,"result":{"link":
-   "<span class="s">cinder://oyv4kq…@relay…
-    ?rendezvous=tok_m41x</span>"}}
-<span class="c"># replay ⇒ -32018 conflict</span></pre>
+<pre><span class="ln" data-sync="mk" tabindex="0"><span class="g">→</span> {"id":34,"method":"<span class="m">invite.create</span>",</span><span class="ln" data-sync="mk">   "params":{"label":"ops-agent",</span><span class="ln" data-sync="mk">             "ttl_sec":86400}}</span><span class="ln" data-sync="lnk" tabindex="0"><span class="g">←</span> {"id":34,"result":{"link":</span><span class="ln" data-sync="lnk">   "<span class="s">cinder://oyv4kq…@relay…</span></span><span class="ln" data-sync="lnk">    <span class="s">?rendezvous=tok_m41x</span>"}}</span><span class="ln" data-sync="burn" tabindex="0"><span class="c"># replay ⇒ -32018 conflict</span></span></pre>
           </div>
         </div>
-          <div class="pcap" aria-hidden="true"><span class="k">one slot</span><span class="d"></span><span class="v">invite.create</span></div>
+          <div class="pcap"><span class="k">one slot</span><span class="d"></span><button class="v" type="button" data-flash="mk lnk" aria-label="flash the invite.create wire lines">invite.create</button></div>
         <ul class="spec">
           <li><span class="k">format</span><span class="d"></span><span class="v2">cinder://&lt;pubkey&gt;@&lt;relay&gt;</span></li>
           <li><span class="k">token</span><span class="d"></span><span class="v2">?rendezvous=&lt;token&gt;</span></li>
@@ -909,6 +861,7 @@
           claims a <b>single rendezvous slot</b> — the ticket burns on consume.
           An intercepted link can't be replayed, and a copied pubkey alone
           can't reach you.</p>
+        </div></div>
       </div>
     </li>
 
@@ -923,37 +876,32 @@
         </span>
         <span class="tgl" aria-hidden="true"></span>
       </button>
-      <div class="body" id="b7" role="region" aria-label="offline mailboxes — both surfaces" hidden>
+      <div class="body" id="b7" role="region" aria-label="offline mailboxes — both surfaces" aria-hidden="true" hidden>
+        <div class="bodyin"><div class="pad">
         <div class="pair pair--seam">
           <div class="side">
             <div class="phead">human · tui<span class="pf">send glyphs</span></div>
-<pre><span class="p">&gt; see you at 0400</span>
-~ peer offline            … → <span class="s">✓</span>
-~ ✓ = parked in peer's mailbox
-~ peer fetched · ack       → <span class="v">✓✓</span></pre>
+<pre><span class="ln" data-sync="q" tabindex="0"><span class="p">&gt; see you at 0400</span></span><span class="ln" data-sync="park" tabindex="0">~ peer offline            … → <span class="s">✓</span></span><span class="ln" data-sync="mbx" tabindex="0">~ ✓ = parked in peer's mailbox</span><span class="ln" data-sync="dlv" tabindex="0">~ peer fetched · ack       → <span class="v">✓✓</span></span></pre>
           </div>
           <div class="pbridge" aria-hidden="true"><span class="pbadge">⇄</span></div>
           <div class="side agent">
             <div class="phead">agent · json-rpc<span class="pf">events</span></div>
-<pre><span class="g">→</span> {"id":10,"method":"<span class="m">msg.send</span>",
-   "params":{"to":"contact:9f3b12",…}}
-<span class="g">←</span> {"id":10,"result":{"state":"queued"}}
-<span class="g">←</span> event <span class="m">msg_state</span> {"msg_id":
-   "<span class="s">msg:e01d7c</span>","state":"<span class="v">delivered</span>"}
-<span class="c"># mailbox: deposit+fetch need caps</span></pre>
+<pre><span class="ln" data-sync="q" tabindex="0"><span class="g">→</span> {"id":10,"method":"<span class="m">msg.send</span>",</span><span class="ln" data-sync="q">   "params":{"to":"contact:9f3b12",…}}</span><span class="ln" data-sync="park" tabindex="0"><span class="g">←</span> {"id":10,"result":{"state":"queued"}}</span><span class="ln" data-sync="dlv" tabindex="0"><span class="g">←</span> event <span class="m">msg_state</span> {"msg_id":</span><span class="ln" data-sync="dlv">   "<span class="s">msg:e01d7c</span>","state":"<span class="v">delivered</span>"}</span><span class="ln" data-sync="mbx" tabindex="0"><span class="c"># mailbox: deposit+fetch need caps</span></span></pre>
           </div>
         </div>
-          <div class="pcap" aria-hidden="true"><span class="k">same event</span><span class="d"></span><span class="v">msg_state</span></div>
+          <div class="pcap"><span class="k">same event</span><span class="d"></span><button class="v" type="button" data-flash="dlv" aria-label="flash the msg_state event lines">msg_state</button></div>
         <ul class="spec">
-          <li><span class="k">queue</span><span class="d"></span><span class="v2">bounded · ≤500 msgs · ≤4 MiB · ≤30 d</span></li>
-          <li><span class="k">id</span><span class="d"></span><span class="v2">random 256-bit · not from peer-id</span></li>
-          <li><span class="k">access</span><span class="d"></span><span class="v2">capability tokens: deposit + fetch</span></li>
-          <li><span class="k">fetch</span><span class="d"></span><span class="v2">non-destructive until mailboxack</span></li>
+          <li><span class="k">offline</span><span class="d"></span><span class="v2">relay mailbox · per-peer caps</span></li>
+          <li><span class="k">fetch</span><span class="d"></span><span class="v2">mailbox.open · mailbox.fetch</span></li>
+          <li><span class="k">states</span><span class="d"></span><span class="v2">queued → delivered · msg_state events</span></li>
+          <li><span class="k">caps</span><span class="d"></span><span class="v2">4096 mbx · 30-day ttl</span></li>
         </ul>
-        <p class="desc">Offline peers get <b>bounded mailboxes</b> on the relay,
-          keyed by random 256-bit ids nobody can guess from a peer-id. Deposit
-          and fetch each need a capability token — open mailboxes would be a
-          spam vector — and fetch stays non-destructive until ack.</p>
+        <p class="desc">Offline peers don't drop messages: the relay parks
+          ciphertext in a <b>per-peer mailbox</b> the recipient drains on
+          reconnect. Send glyphs track it — <code>✓</code> parked,
+          <code>✓✓</code> fetched and acked — mirroring the
+          <code>msg_state</code> event the agent sees.</p>
+        </div></div>
       </div>
     </li>
 

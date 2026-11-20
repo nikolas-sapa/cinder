@@ -3135,33 +3135,53 @@ function renderStatic(){
 })();
 
 
-/* ---------- spec ledger v2 ---------- */
+/* ---------- spec ledger v3 — sync-highlight panes ---------- */
+/* ================================================================
+   spec-panes v3 — IIFE, ES5 to match prod main.js
+   ---- PORT ----
+   Replaces the "spec ledger v2" IIFE in main.js.
+   API surface identical: .head button toggles .open on li.row,
+   aria-expanded/aria-controls preserved, exclusive-open (opening a
+   row closes siblings + resets #allBtn), #allBtn expand/collapse all.
+   Deltas vs prod:
+     - setRow() writes aria-hidden on .body instead of body.hidden;
+       init clears the markup `hidden` attr once (CSS grid-rows owns
+       the collapse so it can transition).
+     - sync pairing block: pointerover/pointerleave + focusin/focusout
+       per .pair. pointer classes .lit/.on/.src; focus classes
+       .litf/.onf/.srcf (kept separate so pointer+focus don't clear
+       each other's state).
+     - .pcap .v[data-flash] chips flash .ln[data-sync~="key"] in the
+       row's .side.agent for ~1.5s (.on+.zap).
+   ================================================================ */
 (function(){
   "use strict";
-  var rows=[].slice.call(document.querySelectorAll(".sl .row"));
-  var allBtn=document.getElementById("allBtn");
+  var root=document.querySelector(".ledger").parentElement;
+  if(!root)return;
+  var rows=[].slice.call(root.querySelectorAll(".row"));
+  var allBtn=root.querySelector("#allBtn");
 
   function setRow(row,open){
     var head=row.querySelector(".head");
     var body=row.querySelector(".body");
     row.classList.toggle("open",open);
     head.setAttribute("aria-expanded",open?"true":"false");
-    body.hidden=!open;
+    body.setAttribute("aria-hidden",open?"false":"true");
   }
 
   rows.forEach(function(row){
+    /* markup ships `hidden` as a no-JS fallback; CSS collapse owns it now */
+    row.querySelector(".body").hidden=false;
     row.querySelector(".head").addEventListener("click",function(){
       var opening=!row.classList.contains("open");
       if(opening){
         rows.forEach(function(r){if(r!==row)setRow(r,false);});
+        if(allBtn){
+          allBtn.setAttribute("aria-pressed","false");
+          allBtn.textContent="[+] all";
+        }
       }
       setRow(row,opening);
-      if(allBtn){
-        var allOpen=Array.prototype.every.call(rows,function(r){return r.classList.contains("open")});
-        allBtn.setAttribute("aria-pressed",allOpen?"true":"false");
-        allBtn.setAttribute("aria-label",(allOpen?"collapse":"expand")+" all ledger entries");
-        allBtn.textContent=(allOpen?"[-]":"[+]")+" all";
-      }
     });
   });
 
@@ -3173,6 +3193,107 @@ function renderStatic(){
     allBtn.textContent=(open?"[-]":"[+]")+" all";
     rows.forEach(function(r){setRow(r,open);});
   });
+
+  /* ---- sync pairing ----
+     data-sync="k1 k2" pairs every .ln sharing a key across the two
+     .side panes of the same .pair. Hover/focus of a paired line:
+     - sibling pane gets .lit/.litf (reveal: all its paired lines
+       show a faint ▶)
+     - matching .ln in the sibling get .on/.onf (ember ▶ + band)
+     - source line gets .src/.srcf */
+  function clearLn(pair,names){
+    names.forEach(function(n){
+      [].slice.call(pair.querySelectorAll(".ln."+n))
+        .forEach(function(el){el.classList.remove(n);});
+    });
+  }
+  function markTargets(pair,ln,cls){
+    var sides=[].slice.call(pair.querySelectorAll(".side"));
+    var side=ln.closest(".side");
+    if(!side||sides.length<2)return;
+    var other=sides[0]===side?sides[1]:sides[0];
+    (ln.getAttribute("data-sync")||"").split(/\s+/)
+      .forEach(function(k){
+        if(!k)return;
+        [].slice.call(other.querySelectorAll('.ln[data-sync~="'+k+'"]'))
+          .forEach(function(el){el.classList.add(cls);});
+      });
+  }
+
+  [].slice.call(root.querySelectorAll(".pair")).forEach(function(pair){
+    var sides=[].slice.call(pair.querySelectorAll(".side"));
+    if(sides.length<2)return;
+    var a=sides[0],b=sides[1];
+    function otherOf(side){return side===a?b:a;}
+    function litOff(){a.classList.remove("lit");b.classList.remove("lit");}
+    function litfOff(){a.classList.remove("litf");b.classList.remove("litf");}
+
+    pair.addEventListener("pointerover",function(e){
+      var t=e.target;
+      var side=t&&t.closest?t.closest(".side"):null;
+      litOff();
+      if(!side||!pair.contains(side))return;
+      otherOf(side).classList.add("lit");
+      clearLn(pair,["on","src"]);
+      var ln=t.closest?t.closest(".ln[data-sync]"):null;
+      if(ln&&side.contains(ln)){
+        ln.classList.add("src");
+        markTargets(pair,ln,"on");
+      }
+    });
+    pair.addEventListener("pointerleave",function(){
+      litOff();
+      clearLn(pair,["on","src"]);
+    });
+
+    pair.addEventListener("focusin",function(e){
+      var t=e.target;
+      var side=t&&t.closest?t.closest(".side"):null;
+      litfOff();
+      if(!side)return;
+      otherOf(side).classList.add("litf");
+      clearLn(pair,["onf","srcf"]);
+      var ln=t.closest?t.closest(".ln[data-sync]"):null;
+      if(ln){
+        ln.classList.add("srcf");
+        markTargets(pair,ln,"onf");
+      }
+    });
+    pair.addEventListener("focusout",function(){
+      setTimeout(function(){
+        if(!pair.contains(document.activeElement)){
+          litfOff();
+          clearLn(pair,["onf","srcf"]);
+        }
+      },0);
+    });
+  });
+
+  /* ---- pcap chips: flash paired agent-pane lines ---- */
+  [].slice.call(root.querySelectorAll(".pcap .v[data-flash]"))
+    .forEach(function(chip){
+      chip.addEventListener("click",function(){
+        var body=chip.closest(".body");
+        var agent=body?body.querySelector(".side.agent"):null;
+        if(!agent)return;
+        var hits=[];
+        (chip.getAttribute("data-flash")||"").split(/\s+/)
+          .forEach(function(k){
+            if(!k)return;
+            hits=hits.concat([].slice.call(
+              agent.querySelectorAll('.ln[data-sync~="'+k+'"]')));
+          });
+        hits.forEach(function(el){
+          el.classList.remove("zap");
+          void el.offsetWidth;   /* restart the animation on re-click */
+          el.classList.add("on","zap");
+        });
+        clearTimeout(agent._zt);
+        agent._zt=setTimeout(function(){
+          hits.forEach(function(el){el.classList.remove("on","zap");});
+        },1500);
+      });
+    });
 })();
 
 /* ---------- spec arch v2 — schematic col badges ---------- */

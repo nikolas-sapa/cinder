@@ -160,8 +160,9 @@
 
   /* differing cell-block marker (compare mode) */
   .idt2 .dmark{display:none;position:absolute;width:6.25%;height:6.25%;
-    border:1px dashed var(--danger);background:rgba(255,93,93,.09);
-    box-shadow:0 0 10px rgba(255,93,93,.25),inset 0 0 8px rgba(255,93,93,.18);
+    border:1px dashed var(--danger);background:rgba(255,93,93,.13);
+    box-shadow:0 0 0 1px rgba(255,93,93,.4),0 0 14px rgba(255,93,93,.3),
+      inset 0 0 8px rgba(255,93,93,.2);
     pointer-events:none;z-index:3}
   .idt2 .fp-card.cmp .dmark{display:block}
 
@@ -222,6 +223,7 @@
     box-shadow:0 24px 60px rgba(0,0,0,.5),0 0 0 1px rgba(255,255,255,.02) inset;
     padding:26px 30px 28px;overflow-x:auto}
   .idt2 .tk:focus-visible{outline:2px solid var(--ember);outline-offset:3px}
+  .idt2 .tk:hover{border-color:rgba(255,255,255,.14)}
   .idt2 .tk.torn{cursor:default;overflow:hidden}
   .idt2 .tk pre{margin:0;letter-spacing:0;white-space:pre;color:var(--muted);
     font:400 13px/1.5 var(--mono);user-select:text;
@@ -354,7 +356,6 @@
   /* ============ motion — only when allowed ============ */
   @media (prefers-reduced-motion:no-preference){
     .idt2 .tk{transition:border-color .3s ease}
-    .idt2 .tk:hover{border-color:rgba(255,255,255,.14)}
     .idt2 .seg,.idt2 .tk-reset{transition:color .2s,border-color .2s}
     .idt2 .cur{animation:idt2-blink 1.1s steps(1) infinite}
     @keyframes idt2-blink{50%{opacity:0}}
@@ -409,7 +410,7 @@
     <figure class="fp-card" id="fpCard">
       <span class="screw tl">+</span><span class="screw tr">+</span>
       <span class="screw bl">+</span><span class="screw br">+</span>
-      <div class="plate">
+      <figcaption class="plate">
         <span class="pl-tag"><span class="br">[</span> fig·04 <span class="br">]</span></span>
         <span class="pl-sep">·</span>
         <span class="pl-title">peer-fingerprint evidence</span>
@@ -417,7 +418,7 @@
         <span class="pl-meta">mode:<b id="fpMode">solo</b><span class="pl-sep"> · </span>seed <b>9c1f…aa07</b></span>
         <button class="seg" id="cmpBtn" type="button" aria-pressed="false"
           aria-label="toggle compare view" title="toggle compare view (c)"><span class="br">[</span> <span class="opt on">solo</span> <span class="sep">|</span> <span class="opt">compare</span> <span class="br">]</span><kbd class="kk">c</kbd></button>
-      </div>
+      </figcaption>
 
       <div class="fp-body">
         <!-- solo: one glyph, one fingerprint -->
@@ -771,8 +772,8 @@ function Matrix(cvEl, seed, diff){
 
 /* ---- three instances: solo, compare-you, compare-claimed ---- */
 var SEED = '9c1f7bd24e88a1c3f50d6b4e9a2d7710c86be412f9aa07';
-var DC = 8 + hash53(SEED+':dc', 3) % 8;      // diff cell, right half only
-var DR = hash53(SEED+':dr', 5) % GRID;      // (mirror keeps it a single block)
+var DC = 9 + hash53(SEED+':dc', 3) % 5;     // diff cell: right half, interior
+var DR = 3 + hash53(SEED+':dr', 5) % 10;    // (mirror keeps it a single block)
 
 var mats = [];
 function addM(id, diff){ var c = el(id); if (c) mats.push(Matrix(c, SEED, diff)); }

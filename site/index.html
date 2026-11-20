@@ -892,7 +892,7 @@
           <div class="pcap"><span class="k">same event</span><span class="d"></span><button class="v" type="button" data-flash="dlv" aria-label="flash the msg_state event lines">msg_state</button></div>
         <ul class="spec">
           <li><span class="k">offline</span><span class="d"></span><span class="v2">relay mailbox · per-peer caps</span></li>
-          <li><span class="k">fetch</span><span class="d"></span><span class="v2">mailbox.open · mailbox.fetch</span></li>
+          <li><span class="k">fetch</span><span class="d"></span><span class="v2">MailboxOpen · MailboxFetch frames</span></li>
           <li><span class="k">states</span><span class="d"></span><span class="v2">queued → delivered · msg_state events</span></li>
           <li><span class="k">caps</span><span class="d"></span><span class="v2">4096 mbx · 30-day ttl</span></li>
         </ul>
@@ -1028,11 +1028,11 @@
 <pre class="fsm" id="fsm" data-cols="128" aria-label="Interactive ASCII schematic of the cinder session state machine. Entry at INVITE, transitions to HANDSHAKE, SEALED, VERIFIED. SEALED loops on rekey, drops to UNVERIFIED on key change, which returns to VERIFIED on sas match. VERIFIED drops to WIPED on chat.wipe. Every state falls to DENIED on contact.deny. State buttons inspect outgoing edges; a dot marker traces each lit edge.">
                                                                                 <span class="lp" data-edge="rekey">┌─ rekey ──┐</span>
                                                                                 <span class="lp" data-edge="rekey">▲</span>          <span class="lp" data-edge="rekey">▼</span>
-    <span class="bx stc" data-state="invite">┌──────────────┐</span><span class="lbl" data-edge="link"> cinder:// link </span><span class="bx stc" data-state="handshake">┌────────────────┐</span><span class="lbl" data-edge="noise"> noise_xx · 3 flights </span><span class="bx stc" data-state="sealed">┌────────────────┐</span><span class="lbl" data-edge="sas">   /sas match   </span><span class="bx stc" data-state="verified">┌────────────────┐</span>
+    <span class="bx stc" data-state="invite">┌──────────────┐</span><span class="lbl" data-edge="link"> cinder:// link </span><span class="bx stc" data-state="handshake">┌────────────────┐</span><span class="lbl" data-edge="noise"> noise_xx · 3 flights </span><span class="bx stc" data-state="sealed">┌────────────────┐</span><span class="lbl" data-edge="sas"> /verify match  </span><span class="bx stc" data-state="verified">┌────────────────┐</span>
 <span class="ent">●</span><span class="arw">──▶</span><button class="st" type="button" data-state="invite" aria-pressed="false" aria-label="INVITE — inspect outgoing edges"><span class="bx">│ </span><span class="led" data-i="0">○</span><span class="bx"> INVITE     │</span></button><span class="arw" data-edge="link">───────────────▶</span><button class="st" type="button" data-state="handshake" aria-pressed="false" aria-label="HANDSHAKE — inspect outgoing edges"><span class="bx">│ </span><span class="led" data-i="1">○</span><span class="bx"> HANDSHAKE    │</span></button><span class="arw" data-edge="noise">═════════════════════▶</span><button class="st" type="button" data-state="sealed" aria-pressed="false" aria-label="SEALED — inspect outgoing edges"><span class="bx">│ </span><span class="led" data-i="2">○</span><span class="bx"> SEALED       │</span></button><span class="arw" data-edge="sas">───────────────▶</span><button class="st" type="button" data-state="verified" aria-pressed="false" aria-label="VERIFIED — inspect outgoing edges"><span class="bx">│ </span><span class="led on" data-i="3">●</span><span class="bx"> VERIFIED     │</span></button>
     <span class="bx stc" data-state="invite">└───────┬──────┘</span>                <span class="bx stc" data-state="handshake">└───────┬────────┘</span>                      <span class="bx stc" data-state="sealed">└─┬─────────┬────┘</span>                <span class="bx stc" data-state="verified">└─────────┬─────┬┘</span>
             <span class="arw" data-edge="deny">│</span>                               <span class="arw" data-edge="deny">│</span>                                 <span class="arw" data-edge="deny">│</span>         <span class="arw" data-edge="keychg">│</span> <span class="wrn" data-edge="keychg">key change</span>               <span class="arw" data-edge="sasback">▲</span>    <span class="arw" data-edge="wipe">│</span>     <span class="arw" data-edge="deny">│</span>
-            <span class="arw" data-edge="deny">│</span>                               <span class="arw" data-edge="deny">│</span>                                 <span class="arw" data-edge="deny">│</span>         <span class="arw" data-edge="keychg">│</span>           <span class="arw" data-edge="sasback">┌─ </span><span class="lbl" data-edge="sasback">sas match</span><span class="arw" data-edge="sasback"> ──┘</span>    <span class="arw" data-edge="wipe">│</span>     <span class="arw" data-edge="deny">│</span>
+            <span class="arw" data-edge="deny">│</span>                               <span class="arw" data-edge="deny">│</span>                                 <span class="arw" data-edge="deny">│</span>         <span class="arw" data-edge="keychg">│</span>           <span class="arw" data-edge="sasback">┌─ </span><span class="lbl" data-edge="sasback">/verify  </span><span class="arw" data-edge="sasback"> ──┘</span>    <span class="arw" data-edge="wipe">│</span>     <span class="arw" data-edge="deny">│</span>
             <span class="arw" data-edge="deny">│</span>                               <span class="arw" data-edge="deny">│</span>                                 <span class="arw" data-edge="deny">│</span>         <span class="arw" data-edge="keychg">│</span>           <span class="arw" data-edge="sasback">│</span>                   <span class="arw" data-edge="wipe">│</span>     <span class="arw" data-edge="deny">│</span>
             <span class="arw" data-edge="deny">│</span>                               <span class="arw" data-edge="deny">│</span>                                 <span class="arw" data-edge="deny">│</span>         <span class="arw" data-edge="keychg">▼</span>           <span class="arw" data-edge="sasback">│</span>         <span class="lbl" data-edge="wipe">chat.wipe</span> <span class="arw" data-edge="wipe">▼</span>     <span class="arw" data-edge="deny">│</span>
             <span class="arw" data-edge="deny">│</span>                               <span class="arw" data-edge="deny">│</span>                                 <span class="arw" data-edge="deny">│</span> <span class="wrn stc" data-state="unverified">┏━━━━━━━━━━━━━━━━┓</span>  <span class="arw" data-edge="sasback">│</span>             <span class="bx stc" data-state="wiped">┌──────────┐</span><span class="arw" data-edge="deny">│</span>
@@ -1096,7 +1096,7 @@
        <button class="st wrn" type="button" data-state="unverified" aria-pressed="false" aria-label="UNVERIFIED — sends blocked, inspect outgoing edges">┃ ! UNVERIFIED ┃</button>
        <span class="wrn stc" data-state="unverified">┃ sends blocked┃</span>
        <span class="wrn stc" data-state="unverified">┗━━━━━━━━┳━━━━━┛</span>
-                <span class="arw" data-edge="sasback">│</span> <span class="lbl" data-edge="sasback">sas match</span>
+                <span class="arw" data-edge="sasback">│</span> <span class="lbl" data-edge="sasback">/verify  </span>
                 <span class="arw" data-edge="sasback">▼</span>
     <span class="bx stc" data-state="verified">┌─────────────┐</span>
     <button class="st" type="button" data-state="verified" aria-pressed="false" aria-label="VERIFIED — inspect outgoing edges"><span class="bx">│ </span><span class="led on" data-i="3">●</span><span class="bx"> VERIFIED  │</span></button>
@@ -1149,7 +1149,7 @@
         <li data-edge="sas"><span class="e">SEALED <span class="x">──▶</span> VERIFIED</span><span class="lbl">/verify match</span></li>
         <li data-edge="rekey"><span class="e">SEALED <span class="x">◀─┐</span> SEALED</span><span class="lbl">rekey (loop)</span></li>
         <li data-edge="keychg"><span class="e wrn">SEALED <span class="x">──▶</span> UNVERIFIED</span><span class="lbl">key change · sends blocked</span></li>
-        <li data-edge="sasback"><span class="e">UNVERIFIED <span class="x">──▶</span> VERIFIED</span><span class="lbl">sas match</span></li>
+        <li data-edge="sasback"><span class="e">UNVERIFIED <span class="x">──▶</span> VERIFIED</span><span class="lbl">/verify  </span></li>
         <li data-edge="wipe"><span class="e">VERIFIED <span class="x">──▶</span> WIPED</span><span class="lbl">chat.wipe</span></li>
         <li data-edge="deny"><span class="e den">any <span class="x">──▶</span> DENIED</span><span class="lbl">contact.deny · terminal</span></li>
       </ul>
@@ -1217,7 +1217,7 @@
 <span class="f">┊</span>   <span class="e">-*-</span>   <span class="m">ONE-TIME LINK</span>                                  <span class="d">┊</span>
 <span class="f">┊</span>   <span class="e">/|\</span>                                                  <span class="d">┊</span>
 <span class="f">┊</span>                                                        <span class="d">┊</span>
-<span class="f">┊</span>   <a class="lnk" href="cinder://9c1f%e2%80%a6aa07@relay:8443?rendezvous=8f2a">cinder://9c1f…aa07@relay:8443?rendezvous=8f2a</a><span class="cur">▌</span>       <span class="d">┊</span>
+<span class="f">┊</span>   <span class="lnk">cinder://9c1f…aa07@relay:8443?rendezvous=8f2a</span><span class="cur">▌</span>       <span class="d">┊</span>
 <span class="f">┊</span>                                                        <span class="d">┊</span>
 <span class="f">┊</span>   <span class="m">one-time · expires on use</span>                            <span class="d">┊</span>
 <span class="f">┊</span>   <span class="m">intercepted links can't be replayed</span>                  <span class="d">┊</span>
@@ -1250,7 +1250,7 @@
 <span class="f">┊</span>  <span class="e">-*-</span>   <span class="m">ONE-TIME LINK</span>                           <span class="f">┊</span>
 <span class="f">┊</span>  <span class="e">/|\</span>                                           <span class="f">┊</span>
 <span class="f">┊</span>                                                <span class="f">┊</span>
-<span class="f">┊</span>  <a class="lnk" href="cinder://9c1f%e2%80%a6aa07@relay:8443?rendezvous=8f2a">cinder://9c1f…aa07@relay:8443?rendezvous=8f2a</a> <span class="f">┊</span>
+<span class="f">┊</span>  <span class="lnk">cinder://9c1f…aa07@relay:8443?rendezvous=8f2a</span> <span class="f">┊</span>
 <span class="f">┊</span>                                                <span class="f">┊</span>
 <span class="f">┊</span>  <span class="m">one-time · expires on use</span>                     <span class="f">┊</span>
 <span class="f">┊</span>  <span class="m">intercepted links can't be replayed</span>           <span class="f">┊</span>
@@ -1264,7 +1264,8 @@
 ░    USE     ░
 ░░░░░░░░░░░░░░</span></div>
           </section>
-      <div class="tk-keys mono" id="invite-keys">click the ticket <b>burns the link</b> · intercepted copies can't replay</div>
+      <div class="tk-keys mono" id="invite-keys"><span id="tkKeysTxt">click the ticket <b>burns the link</b> · intercepted copies can't replay</span><button class="tk-reset mono" id="tkReset" type="button" hidden>[ reset ]</button></div>
+      <p class="sr" id="tkLive" aria-live="polite"></p>
     </div>
   </div>
 </section>

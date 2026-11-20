@@ -442,8 +442,9 @@ if (transcript && input) {
 
   document.querySelectorAll(".peer[data-peer]").forEach((el) => {
     const pick = () => {
-      document.querySelectorAll(".peer").forEach((x) => x.classList.remove("active"));
+      document.querySelectorAll(".peer").forEach((x) => { x.classList.remove("active"); x.setAttribute("aria-selected", "false"); });
       el.classList.add("active");
+      el.setAttribute("aria-selected", "true");
       loadPeer(el.dataset.peer);
     };
     el.addEventListener("click", pick);
@@ -508,7 +509,9 @@ if (transcript && input) {
   const GLYPHS = '···········::::***++x~~';
   const SIZE = 14;
   const ctx = canvas.getContext('2d');
-  const reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
+  let reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
+  const _prmM = matchMedia('(prefers-reduced-motion: reduce)');
+  (_prmM.addEventListener || _prmM.addListener).call(_prmM, 'change', e => { reduced = e.matches; });
   let W = 0, H = 0, raf = 0, running = false, t = 0;
   const parts = [];
   const mouse = { x: -9999, y: -9999, active: false };
@@ -607,6 +610,7 @@ function paintBurns(){
     });
   });
 }
+paintBurns();
 
 /* ---- dither-flood buttons: left sweep + click-point ignite ---- */
 function attachFlood(btn){
@@ -1891,6 +1895,7 @@ if (cmpBtn){
   cmpBtn.addEventListener('click', function(){ setCmp(el('fpCmp').hidden); });
   document.addEventListener('keydown', function(e){
     if (e.key !== 'c' && e.key !== 'C') return;
+    if (e.metaKey || e.ctrlKey || e.altKey) return;
     var t = e.target;
     if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
     setCmp(el('fpCmp').hidden);
@@ -1927,7 +1932,7 @@ if (reset){
 }
 
 /* ---- ASCII column audit --------------------------------------------
-   verified widths (this checker re-runs them on every load):
+   verified widths:
      .tk-main  58 cols × 16 rows  (prod desktop pre, cols 0–57, keeps ┊ perf)
      .tk-stub  15 cols × 16 rows  (prod desktop pre, cols 58–72)
      .tk-mtop  50 cols × 13 rows  (prod mobile pre, through the ├┄┤ row)
@@ -2759,8 +2764,8 @@ function renderStatic(){
     board.addEventListener('mouseenter', () => { hovered = true;  gateAll(); });
     board.addEventListener('mouseleave', () => { hovered = false; gateAll(); });
     document.addEventListener('visibilitychange', gateAll);
-    prm.addEventListener('change', gateAll);
-    wide.addEventListener('change', gateAll);
+    (prm.addEventListener || prm.addListener).call(prm, 'change', gateAll);
+    (wide.addEventListener || wide.addListener).call(wide, 'change', gateAll);
     paintMbx(); setPeer(true); gateAll();
   })();
 
@@ -2792,9 +2797,9 @@ function renderStatic(){
       link:['──▶','handshake','cinder:// link'],
       noise:['══▶','sealed','noise_xx · 3 flights'],
       rekey:['──▶','sealed','rekey · self-loop'],
-      sas:['──▶','verified','/sas match'],
+      sas:['──▶','verified','/verify match'],
       keychg:['──▶','unverified','key change · sends blocked'],
-      sasback:['──▶','verified','sas match'],
+      sasback:['──▶','verified','/verify match'],
       wipe:['──▶','wiped','chat.wipe'],
       deny:['──▶','denied','contact.deny · terminal']
     };
@@ -2928,7 +2933,7 @@ function renderStatic(){
         const t = e.target.closest('[data-state]');
         t ? select(t.dataset.state) : reset();
       });
-    document.addEventListener('keydown', e => { if (e.key === 'Escape') reset(); });
+    document.addEventListener('keydown', e => { if (e.key === 'Escape' && !/^(INPUT|TEXTAREA)$/.test(e.target.tagName)) reset(); });
 
     for (const li of $('.spec li[data-edge]')) {
       li.addEventListener('mouseenter', () => {
@@ -2942,7 +2947,7 @@ function renderStatic(){
     const PATH = [
       ['invite','──▶','handshake','cinder:// link'],
       ['handshake','══▶','sealed','noise_xx · 3 flights'],
-      ['sealed','──▶','verified','/sas match']
+      ['sealed','──▶','verified','/verify match']
     ];
     let cur = 0, prev = -1, timer = null, visible = false;
     const paint = () => {

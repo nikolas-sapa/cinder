@@ -2266,3 +2266,15 @@ pre.rail{--fz:11.5px}
       box-shadow:0 0 0 4px var(--card),0 0 0 6px rgba(255,178,36,.55),
       0 0 16px rgba(255,178,36,.35)}.sl .ln{transition:background .15s ease}.sl .ln::before{transition:opacity .15s ease,transform .15s ease}.sl .ln[data-sync]:hover{background:rgba(255,255,255,.03)}.sl .ln.zap{animation:sp3zap 1.4s ease-out}.sl .pcap .v{transition:color .15s,border-color .15s,
       background .15s}}
+
+/* sp3 patch: .body grid-rows collapse (skip-regex dropped these) */
+.sl .body{display:grid;grid-template-rows:0fr;visibility:hidden}
+.sl .row.open .body{grid-template-rows:1fr;visibility:visible}
+@media (prefers-reduced-motion:no-preference){
+  .sl .body{transition:grid-template-rows .4s cubic-bezier(.32,.72,.24,1),visibility 0s linear .4s}
+  .sl .row.open .body{transition:grid-template-rows .4s cubic-bezier(.32,.72,.24,1),visibility 0s}
+}
+
+#fpMode{display:inline-block;min-width:7ch}
+#viewName{display:inline-block;min-width:9ch}
+#peerName{display:inline-block;min-width:7ch}

@@ -104,7 +104,7 @@ h1{font-family:'Space Grotesk',sans-serif;font-weight:700;font-size:88px;line-he
 .hero-sub .sub{font-size:16.5px;line-height:27px;color:var(--muted);max-width:640px}
 .hero-meta{font-size:11.5px;line-height:19px;color:var(--faint);text-align:right;
   letter-spacing:.08em;white-space:nowrap;padding-top:6px}
-.ctl4-strip{display:flex;align-items:stretch;flex-wrap:wrap;max-width:900px;
+.ctl4-strip{display:flex;align-items:stretch;flex-wrap:nowrap;max-width:900px;
     font-family:var(--mono);background:var(--card);
     border:1px solid var(--line);border-radius:10px;
     overflow:hidden;position:relative;
@@ -161,12 +161,11 @@ h1{font-family:'Space Grotesk',sans-serif;font-weight:700;font-size:88px;line-he
     transition:opacity .22s ease,transform .22s cubic-bezier(.2,.7,.2,1)}
 .ctl4-strip:focus-within .ctl4-ghost{opacity:1;transform:translate(0,-50%)}
 .ctl4-key{flex:0 0 auto;align-self:stretch;display:flex;align-items:center;
-    justify-content:center;min-width:148px;min-height:44px;padding:10px 14px;
-    cursor:pointer;border:none;border-left:1px solid var(--line);
+    justify-content:center;min-width:0;min-height:44px;
+    padding:6px 14px;cursor:pointer;border:none;
+    border-left:1px solid var(--line);
     font-family:var(--mono);font-size:11.5px;
-    background:rgba(0,0,0,.28);
-    box-shadow:inset 0 2px 8px rgba(0,0,0,.5),
-      inset 0 -1px 0 rgba(255,255,255,.03);
+    background:transparent;
     -webkit-tap-highlight-color:transparent;touch-action:manipulation}
 .ctl4-key-cap{position:relative;display:inline-flex;align-items:center;
     justify-content:center;min-width:15ch;min-height:36px;padding:0 12px;
@@ -225,6 +224,7 @@ h1{font-family:'Space Grotesk',sans-serif;font-weight:700;font-size:88px;line-he
 .ctl4-strip--stack .ctl4-key{width:100%;min-height:54px;border-left:none;
     border-top:1px solid var(--line)}
 @media (max-width:640px){
+    .ctl4-strip{flex-wrap:wrap}
     .ctl4-strip .ctl4-well{flex:1 1 100%}
     .ctl4-strip .ctl4-key{width:100%;min-height:54px;border-left:none;
       border-top:1px solid var(--line)}

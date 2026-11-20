@@ -1,24 +1,35 @@
-const copyBtn = document.getElementById("copy-btn");
-const installCmd = document.getElementById("install-cmd");
+/* ---- install strip: copy chip + click-to-select ---- */
+document.querySelectorAll('.install').forEach(installEl=>{
+  const copyBtn=installEl.querySelector('.copychip');
+  const installCmd=installEl.querySelector('.install-cmd')||installEl.querySelector('code');
+  if(!copyBtn||!installCmd)return;
 
-copyBtn.addEventListener("click", async () => {
-  const text = installCmd.textContent.trim();
-  try {
-    await navigator.clipboard.writeText(text);
-  } catch {
-    const ta = document.createElement("textarea");
-    ta.value = text;
-    document.body.appendChild(ta);
-    ta.select();
-    document.execCommand("copy");
-    ta.remove();
-  }
-  copyBtn.classList.add("copied");
-  copyBtn.querySelector(".cc-l").textContent = "[ ✓ copied ]";
-  setTimeout(() => {
-    copyBtn.classList.remove("copied");
-    copyBtn.querySelector(".cc-l").textContent = "[ copy ]";
-  }, 1500);
+  copyBtn.addEventListener('click',async()=>{
+    const text=installCmd.textContent.trim();
+    try{
+      await navigator.clipboard.writeText(text);
+    }catch{
+      const ta=document.createElement('textarea');
+      ta.value=text;document.body.appendChild(ta);ta.select();
+      document.execCommand('copy');ta.remove();
+    }
+    copyBtn.classList.add('copied');
+    installEl.classList.add('done');
+    copyBtn.querySelector('.cc-l').textContent='[ ✓ copied ]';
+    setTimeout(()=>{
+      copyBtn.classList.remove('copied');
+      installEl.classList.remove('done');
+      copyBtn.querySelector('.cc-l').textContent='[ ⧉ copy ]';
+    },1500);
+  });
+
+  installEl.addEventListener('click',e=>{
+    if(e.target.closest('.copychip'))return;
+    const r=document.createRange();
+    r.selectNodeContents(installCmd);
+    const sel=getSelection();
+    sel.removeAllRanges();sel.addRange(r);
+  });
 });
 
 /* ---- nav: scrolled state ---- */
@@ -458,16 +469,26 @@ function paintBurns(){
   });
 }
 
-/* ---- dither-flood buttons ---- */
+/* ---- dither-flood buttons: left sweep + click-point ignite ---- */
 function attachFlood(btn){
   const cv=btn.querySelector('canvas');
   if(!cv)return;
   const fill=btn.dataset.fill||'#FFB224',halo=btn.dataset.halo||'#5A4114';
-  let s=0,tgt=0,raf=null;
+  let s=0,tgt=0;            /* hover sweep */
+  let rs=0,rtgt=0;          /* ignite ripple 0..1 */
+  let ix=0,iy=0,maxD=1;     /* ignite origin (cell coords) + radius */
+  let raf=null;
   function draw(){
     paint(cv,3,(x,y,c)=>{
       const E=s*(c+18)-9;
-      return Math.min(1,Math.max(0,(E-x)/10));
+      let v=(E-x)/10;
+      if(rs>0){
+        const fr=rs*maxD;
+        const dx=x-ix,dy=(y-iy)*1.5;
+        const vR=(fr-Math.sqrt(dx*dx+dy*dy))/9;
+        if(vR>v)v=vR;
+      }
+      return Math.min(1,Math.max(0,v));
     },(v,t,x,y)=>{
       if(v>t)return fill;
       if(v*.45>t)return h2d(x,y,5)<.14?'#FFB224':halo;
@@ -478,24 +499,60 @@ function attachFlood(btn){
   function step(){
     s+=(tgt-s)*.18;
     if(Math.abs(tgt-s)<.004)s=tgt;
+    rs+=(rtgt-rs)*.24;
+    if(Math.abs(rtgt-rs)<.004)rs=rtgt;
     draw();
-    if(s!==tgt)raf=requestAnimationFrame(step);else raf=null;
+    if(s!==tgt||rs!==rtgt)raf=requestAnimationFrame(step);else raf=null;
   }
-  function go(v){
-    tgt=v;
-    if(PRM.matches){s=v;draw();return;}
-    if(!raf)raf=requestAnimationFrame(step);
-  }
+  function kick(){if(!raf)raf=requestAnimationFrame(step);}
+  function go(v){tgt=v;if(PRM.matches){s=v;draw();return;}kick();}
+  function rgo(v){rtgt=v;if(PRM.matches){rs=v;draw();return;}kick();}
   const hot=()=>btn.matches(':hover')||document.activeElement===btn;
+  function igniteAt(px,py){
+    const r=btn.getBoundingClientRect();
+    ix=px/3;iy=py/3;
+    const w=r.width/3,h=r.height/3;
+    const dxm=Math.max(ix,w-ix),dym=Math.max(iy,h-iy)*1.5;
+    maxD=Math.sqrt(dxm*dxm+dym*dym)+8;
+    rgo(1);
+  }
+  function igniteCenter(){
+    const r=btn.getBoundingClientRect();
+    igniteAt(r.width/2,r.height/2);
+  }
   btn.addEventListener('mouseenter',()=>go(1));
-  btn.addEventListener('mouseleave',()=>go(0));
+  btn.addEventListener('mouseleave',()=>{go(0);rgo(0);});
   btn.addEventListener('focus',()=>go(1));
-  btn.addEventListener('blur',()=>go(0));
-  btn.addEventListener('pointerdown',()=>go(.85));
-  btn.addEventListener('pointerup',()=>go(hot()?1:0));
+  btn.addEventListener('blur',()=>{go(0);rgo(0);});
+  btn.addEventListener('pointerdown',e=>{
+    const r=btn.getBoundingClientRect();
+    go(.85);
+    igniteAt(e.clientX-r.left,e.clientY-r.top);
+  });
+  btn.addEventListener('pointerup',()=>{go(hot()?1:0);rgo(0);});
+  btn.addEventListener('pointercancel',()=>{rgo(0);});
+  btn.addEventListener('keydown',e=>{
+    if(e.repeat)return;
+    if(e.key===' '||e.key==='Enter'){
+      if(e.key===' ')e.preventDefault();
+      go(.85);igniteCenter();
+    }
+  });
+  btn.addEventListener('keyup',e=>{
+    if(e.key===' '||e.key==='Enter'){
+      go(hot()?1:0);rgo(0);
+      if(e.key===' ')btn.click();
+    }
+  });
   draw();
 }
 document.querySelectorAll('.btn-primary[data-fill]').forEach(attachFlood);
+
+/* ---- Space parity on link-styled controls (a.scroll fix) ---- */
+document.querySelectorAll('.btn-ghost,.vtag').forEach(el=>{
+  el.addEventListener('keydown',e=>{if(e.key===' ')e.preventDefault();});
+  el.addEventListener('keyup',e=>{if(e.key===' ')el.click();});
+});
 
 /* ---- page-edge dissolve: floor erodes upward into noise ---- */
 function paintDissolve(){
@@ -2251,7 +2308,8 @@ function renderStatic(){
 }
 })();
 
-/* ---------- ascii topology board v2 — pov toggle + jitter ---------- */
+/* ---------- ascii topology board v3 ---------- */
+
 (function(){
   "use strict";
   var board = document.getElementById("board");
@@ -2265,12 +2323,14 @@ function renderStatic(){
 
   /* ---------- pov toggle ---------- */
   var vt = btn.querySelector(".vt"), vr = btn.querySelector(".vr");
+  var viewName = document.getElementById("viewName");
   function setPov(v){
     pov = v;
     board.dataset.pov = v;
     pres.forEach(function(p){ p.hidden = p.dataset.v !== v; });
     vt.classList.toggle("on", v === "t");
     vr.classList.toggle("on", v === "r");
+    if (viewName) viewName.textContent = v === "t" ? "transport" : "relay";
     btn.setAttribute("aria-pressed", v === "r" ? "true" : "false");
     gateAll();
   }
@@ -2405,6 +2465,7 @@ function renderStatic(){
   wide.addEventListener("change", gateAll);
   gateAll();
 })();
+
 
 /* ---------- session fsm v2 — edge inspection + register ---------- */
 (() => {
@@ -2678,16 +2739,39 @@ function renderStatic(){
 
   rows.forEach(function(row){
     row.querySelector(".head").addEventListener("click",function(){
-      setRow(row,!row.classList.contains("open"));
+      var opening=!row.classList.contains("open");
+      if(opening){
+        rows.forEach(function(r){if(r!==row)setRow(r,false);});
+        if(allBtn){allBtn.setAttribute("aria-pressed","false");allBtn.textContent="[+] all";}
+      }
+      setRow(row,opening);
     });
   });
 
-  allBtn.addEventListener("click",function(){
+  if(allBtn)allBtn.addEventListener("click",function(){
     var open=allBtn.getAttribute("aria-pressed")!=="true";
     allBtn.setAttribute("aria-pressed",open?"true":"false");
     allBtn.setAttribute("aria-label",
       (open?"collapse":"expand")+" all ledger entries");
     allBtn.textContent=(open?"[-]":"[+]")+" all";
     rows.forEach(function(r){setRow(r,open);});
+  });
+})();
+
+/* ---------- spec arch v2 — schematic col badges ---------- */
+
+(function(){
+  "use strict";
+  document.querySelectorAll("pre.schematic").forEach(function(pre){
+    var lines=pre.textContent.replace(/\s+$/,"").split("\n"),max=0;
+    lines.forEach(function(l){
+      var n=Array.from(l).length;
+      if(n>max)max=n;
+    });
+    var tag=pre.closest(".arch").querySelector(".cols");
+    if(tag){
+      tag.textContent=max+" cols · ";
+      tag.classList.toggle("bad",max>54);
+    }
   });
 })();

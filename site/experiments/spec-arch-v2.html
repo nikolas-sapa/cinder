@@ -1,0 +1,335 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>cinder — spec arch v2</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600&family=Inter:wght@400;500&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --ground:#0B0C0E; --panel:#15171B; --card:#101216; --ink:#EDEDE8;
+    --muted:#9BA0A6; --dim:#5A616B; --faint:#3D4249; --line:#23262D;
+    --ember:#FFB224; --ember-dim:#5A4114; --danger:#FF6B5E;
+    --disp:'Space Grotesk',system-ui,sans-serif;
+    --body:'Inter',system-ui,sans-serif;
+    --mono:'JetBrains Mono',ui-monospace,monospace;
+  }
+  *{box-sizing:border-box;margin:0}
+  body{background:var(--ground);color:var(--ink);font-family:var(--body);
+    font-size:14px;line-height:1.6;-webkit-font-smoothing:antialiased}
+  .page{min-height:100vh;display:flex;flex-direction:column}
+  header{padding:26px 32px;display:flex;justify-content:space-between;
+    align-items:baseline;border-bottom:1px solid var(--line);
+    font-family:var(--mono);font-size:13px}
+  .tag{color:var(--ember);font-weight:500}
+  .hint{color:var(--muted);font-size:11px;letter-spacing:.08em}
+  .wrap{max-width:920px;margin:0 auto;padding:0 24px;width:100%}
+  main{flex:1;padding-bottom:96px}
+
+  /* ============ section head (page chrome, not ported) ============ */
+  .sl{padding:56px 0 8px}
+  .sl-strip{display:flex;align-items:center;gap:14px;
+    font-family:var(--mono);font-size:10px;letter-spacing:.2em;
+    color:var(--dim);text-transform:uppercase;margin-bottom:20px}
+  .sl-strip .tag2{color:var(--ember)}
+  .sl-strip .rule{flex:1;border-top:1px dashed var(--line)}
+  .sl-strip .meta{color:var(--faint);letter-spacing:.12em}
+  .sl h2{font-family:var(--disp);font-weight:600;
+    font-size:clamp(28px,4.6vw,42px);line-height:1.08;
+    letter-spacing:-.02em;margin-bottom:14px}
+  .sl h2 em{font-style:normal;color:var(--ember)}
+  .lede{color:var(--muted);max-width:64ch;font-size:14.5px;line-height:1.65;
+    margin-bottom:24px}
+  .lede b{color:var(--ink);font-weight:500}
+  .lede code{font-family:var(--mono);font-size:12.5px;color:var(--ink);
+    background:var(--card);border:1px solid var(--line);
+    border-radius:4px;padding:1px 6px}
+
+  /* ============ .sl-scope : everything below ports ============ */
+  .sl-scope .arch-grid{display:grid;grid-template-columns:1fr 1fr;
+    gap:14px;margin-bottom:12px;align-items:start}
+  .sl-scope .arch{border:1px solid var(--line);border-radius:8px;
+    background:var(--card);overflow:hidden}
+  .sl-scope .arch figcaption{padding:9px 14px;border-bottom:1px solid var(--line);
+    background:var(--panel);font-family:var(--mono);font-size:9.5px;
+    letter-spacing:.18em;color:var(--dim);text-transform:uppercase;
+    display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap}
+  .sl-scope .arch figcaption .rt{color:var(--faint);letter-spacing:.06em;
+    text-transform:none;white-space:nowrap}
+  .sl-scope .arch .cols{color:var(--faint)}
+  .sl-scope .arch .cols.bad{color:var(--danger)}
+  .sl-scope .arch pre{margin:0;padding:16px 18px;overflow-x:auto;
+    font-family:var(--mono);font-size:clamp(9px,2.4vw,12px);
+    line-height:1.7;color:var(--dim)}
+  .sl-scope .arch pre .u{color:var(--ink)}
+  .sl-scope .arch pre .a{color:var(--ember)}
+  .sl-scope .arch pre .w{color:var(--faint)}
+  .sl-scope .note{margin:2px 2px 34px;font-family:var(--mono);font-size:10.5px;
+    letter-spacing:.05em;color:var(--dim)}
+  .sl-scope .note b{color:var(--muted);font-weight:500}
+
+  /* variant tag row */
+  .sl-scope .vtag{display:flex;align-items:center;gap:12px;margin:36px 0 14px;
+    font-family:var(--mono);font-size:10px;letter-spacing:.18em;
+    text-transform:uppercase;color:var(--dim)}
+  .sl-scope .vtag .n{color:var(--ember)}
+  .sl-scope .vtag .rule{flex:1;border-top:1px dashed var(--line)}
+  .sl-scope .vtag .h{color:var(--faint);letter-spacing:.1em}
+
+  /* shared pane chrome — identical to ledger .side */
+  .sl-scope .side{display:flex;flex-direction:column;min-width:0;
+    border:1px solid var(--line);border-radius:8px;
+    background:var(--card);overflow:hidden}
+  .sl-scope .phead{display:flex;align-items:center;gap:8px;padding:9px 13px;
+    border-bottom:1px solid var(--line);background:var(--panel);
+    font-family:var(--mono);font-size:9.5px;letter-spacing:.16em;
+    text-transform:uppercase;color:var(--dim);white-space:nowrap}
+  .sl-scope .phead::before{content:"";width:7px;height:7px;border-radius:1px;
+    background:var(--faint);flex:none}
+  .sl-scope .side.agent .phead::before{background:var(--ember)}
+  .sl-scope .phead .pf{margin-left:auto;color:var(--faint);letter-spacing:.04em;
+    text-transform:none}
+  .sl-scope .side pre{margin:0;padding:14px;overflow-x:auto;white-space:pre;
+    font-family:var(--mono);font-size:12.5px;line-height:1.75;
+    color:var(--muted);flex:1}
+  .sl-scope .side pre .p{color:var(--ink)}
+  .sl-scope .side pre .m{color:var(--ember)}
+  .sl-scope .side pre .g{color:var(--ember)}
+  .sl-scope .side pre .c{color:var(--faint)}
+  .sl-scope .side pre .s{color:var(--ink)}
+  .sl-scope .side pre .v{color:var(--ink);font-weight:500}
+
+  /* pair base — replaces .pair's 3-column grid */
+  .sl-scope .pair{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);
+    align-items:stretch;position:relative}
+
+  /* ── variant A · seam badge: panes flush, ⇄ notched on shared edge ── */
+  .sl-scope .pair--seam{grid-template-columns:minmax(0,1fr) 0 minmax(0,1fr)}
+  .sl-scope .pair--seam>.side:first-child{border-radius:8px 0 0 8px;
+    border-right:0}
+  .sl-scope .pair--seam>.side.agent{border-radius:0 8px 8px 0}
+  .sl-scope .pbridge{position:relative;z-index:2}
+  .sl-scope .pbadge{position:absolute;top:50%;left:50%;
+    transform:translate(-50%,-50%);display:flex;align-items:center;
+    justify-content:center;width:30px;height:30px;border-radius:50%;
+    background:var(--panel);border:1px solid rgba(255,178,36,.45);
+    color:var(--ember);font-family:var(--mono);font-size:14px;line-height:1;
+    box-shadow:0 0 0 4px var(--card)}
+
+  /* ── variant B · dither spine: 30px bayer strip, badge floats ── */
+  .sl-scope .pair--dither{grid-template-columns:minmax(0,1fr) 30px minmax(0,1fr)}
+  .sl-scope .pseam{position:relative;z-index:1;
+    background-image:repeating-conic-gradient(
+      rgba(155,160,166,.26) 0% 25%,transparent 0% 50%);
+    background-size:4px 4px;background-position:center;
+    -webkit-mask-image:linear-gradient(to bottom,
+      transparent,#000 18%,#000 82%,transparent);
+    mask-image:linear-gradient(to bottom,
+      transparent,#000 18%,#000 82%,transparent)}
+  .sl-scope .pseam .pbadge{box-shadow:0 0 0 5px var(--ground)}
+
+  /* ── variant C · flat seam: dashed shared edge, label lives in caption ── */
+  .sl-scope .pair--flat>.side:first-child{border-radius:8px 0 0 8px;
+    border-right:0}
+  .sl-scope .pair--flat>.side.agent{border-radius:0 8px 8px 0;
+    border-left:1px dashed var(--faint)}
+
+  /* caption row — replaces the vertical "same call" text */
+  .sl-scope .pcap{display:flex;align-items:center;gap:10px;
+    margin:10px 2px 0;font-family:var(--mono);font-size:9.5px;
+    letter-spacing:.15em;text-transform:uppercase;color:var(--dim)}
+  .sl-scope .pcap .k{color:var(--ember)}
+  .sl-scope .pcap .d{flex:1;height:1px;min-width:16px;
+    border-bottom:1px dotted var(--faint)}
+  .sl-scope .pcap .v{color:var(--faint);white-space:nowrap}
+
+  /* ============ mobile ≤700px : panes stack, bridge flips to row ============ */
+  @media (max-width:700px){
+    .sl-scope .arch-grid{grid-template-columns:1fr}
+    .sl-scope .pair,
+    .sl-scope .pair--seam,
+    .sl-scope .pair--dither,
+    .sl-scope .pair--flat{grid-template-columns:minmax(0,1fr)}
+    .sl-scope .pair--seam>.side:first-child,
+    .sl-scope .pair--flat>.side:first-child{border-radius:8px 8px 0 0;
+      border-right:1px solid var(--line);border-bottom:0}
+    .sl-scope .pair--seam>.side.agent{border-radius:0 0 8px 8px}
+    .sl-scope .pair--flat>.side.agent{border-radius:0 0 8px 8px;
+      border-left:1px solid var(--line);
+      border-top:1px dashed var(--faint)}
+    .sl-scope .pbridge{height:0;width:auto}
+    .sl-scope .pseam{height:18px;width:auto;
+      -webkit-mask-image:linear-gradient(to right,
+        transparent,#000 15%,#000 85%,transparent);
+      mask-image:linear-gradient(to right,
+        transparent,#000 15%,#000 85%,transparent)}
+    .sl-scope .pcap .v{white-space:normal}
+    .sl-scope .side pre{font-size:11px}
+  }
+  @media (prefers-reduced-motion:no-preference){
+    .sl-scope .pbadge{transition:box-shadow .2s,border-color .2s}
+    .sl-scope .pair:hover .pbadge{border-color:var(--ember);
+      box-shadow:0 0 0 4px var(--card),0 0 14px rgba(255,178,36,.25)}
+    .sl-scope .pair--dither:hover .pbadge{
+      box-shadow:0 0 0 5px var(--ground),0 0 14px rgba(255,178,36,.25)}
+  }
+</style>
+</head>
+<body>
+<div class="page">
+<header>
+  <span class="tag">cinder</span>
+  <span class="hint">experiments / spec-arch v2</span>
+</header>
+<main class="wrap">
+
+<section class="sl sl-scope" aria-labelledby="h1">
+  <div class="sl-strip">
+    <span class="tag2">a · signal path</span>
+    <span class="rule" aria-hidden="true"></span>
+    <span class="meta">schematic v2 · ≤54 cols</span>
+  </div>
+
+  <h2 id="h1">one bus, <em>equal clients</em></h2>
+  <p class="lede">Boxes replace the bare header row — every edge now carries
+    <b>its transport</b>. Both surfaces attach to the daemon over the peer-cred
+    unix socket; <code>stdio·ndjson</code> is only the agent-facing edge into
+    <code>cinder rpc</code>. Events push back on the same channels.</p>
+
+  <div class="arch-grid">
+    <figure class="arch">
+      <figcaption>
+        <span>signal path · calls</span>
+        <span class="rt"><span class="cols"></span>verified</span>
+      </figcaption>
+<pre class="schematic" aria-hidden="true"><span class="w">          ┌───────────┐                ┌─────────────┐</span>
+<span class="u">human </span><span class="w">───▶│</span><span class="u">cinder tui </span><span class="w">│─</span><span class="a">unix·peer-cred</span><span class="w">▶│</span><span class="u">cinder daemon</span><span class="w">│</span>
+<span class="w">          └───────────┘                │             │</span>
+<span class="w"> </span><span class="a">stdio·ndjson</span><span class="w">                          │</span><span class="u"> json-rpc 2.0</span><span class="w">│</span>
+<span class="w">          ┌───────────┐                │</span><span class="u">     bus     </span><span class="w">│</span>
+<span class="u">agent </span><span class="w">───▶│</span><span class="u">cinder rpc </span><span class="w">│─</span><span class="a">unix·peer-cred</span><span class="w">▶│             │</span>
+<span class="w">          └───────────┘                └─────────────┘</span></pre>
+    </figure>
+
+    <figure class="arch">
+      <figcaption>
+        <span>event flow · push, no poll</span>
+        <span class="rt"><span class="cols"></span>verified</span>
+      </figcaption>
+<pre class="schematic" aria-hidden="true"><span class="w">┌─────────────┐                  ┌───────────┐</span>
+<span class="w">│             │</span><span class="a"> msg_state </span><span class="w">──────▶│           │</span>
+<span class="w">│</span><span class="u">cinder daemon</span><span class="w">│</span><span class="a"> ident.changed </span><span class="w">──▶│</span><span class="u"> tui + rpc </span><span class="w">│</span>
+<span class="w">│             │</span><span class="a"> net.status </span><span class="w">─────▶│           │</span>
+<span class="w">└─────────────┘</span><span class="a">  14 event kinds  </span><span class="w">└───────────┘</span></pre>
+    </figure>
+  </div>
+  <p class="note"><b>vs v1:</b> header row gone · surfaces and daemon boxed ·
+    edges labeled with transport · event flow added as second figure.</p>
+
+  <div class="sl-strip" style="margin-top:60px">
+    <span class="tag2">b · the bridge</span>
+    <span class="rule" aria-hidden="true"></span>
+    <span class="meta">.par column retired · 3 candidates</span>
+  </div>
+
+  <h2>same call, <em>no gap</em></h2>
+  <p class="lede">v1 put a 34px connector column between the panes with
+    vertical <b>same call</b> text. Three replacements below — all keep panes
+    equal-width and fold into a horizontal divider under 700px.</p>
+
+  <div class="vtag"><span class="n">a</span><span>seam badge</span><span class="rule" aria-hidden="true"></span><span class="h">panes flush · ⇄ notched on shared edge</span></div>
+  <div class="pair pair--seam">
+    <div class="side">
+      <div class="phead">human · tui<span class="pf">input bar</span></div>
+<pre><span class="p">&gt; meet at the old port, 0400</span>
+<span class="p">~ sent: eidolon          … → ✓ → ✓✓</span></pre>
+    </div>
+    <div class="pbridge" aria-hidden="true"><span class="pbadge">⇄</span></div>
+    <div class="side agent">
+      <div class="phead">agent · json-rpc<span class="pf">ndjson</span></div>
+<pre><span class="g">→</span> {"id":10,"method":"<span class="m">msg.send</span>",
+   "params":{"to":"contact:9f3b12",
+   "body":"<span class="s">meet at the old port, 0400</span>",
+   "client_msg_id":"<span class="s">agent-0001</span>"}}
+<span class="g">←</span> {"id":10,"result":{
+   "msg_id":"<span class="s">msg:e01d7c</span>",
+   "state":"queued","deduped":false}}
+<span class="g">→</span> {"id":11,…retry same client_msg_id}
+<span class="g">←</span> {"id":11,"result":{
+   "msg_id":"<span class="s">msg:e01d7c</span>",
+   "state":"queued","<span class="s">deduped":true</span>}}</pre>
+    </div>
+  </div>
+  <p class="pcap"><span class="k">same call</span><span class="d" aria-hidden="true"></span><span class="v">msg.send · one method · two surfaces</span></p>
+
+  <div class="vtag"><span class="n">b</span><span>dither spine</span><span class="rule" aria-hidden="true"></span><span class="h">30px bayer strip · badge floats</span></div>
+  <div class="pair pair--dither">
+    <div class="side">
+      <div class="phead">human · tui<span class="pf">input bar</span></div>
+<pre><span class="p">&gt; meet at the old port, 0400</span>
+<span class="p">~ sent: eidolon          … → ✓ → ✓✓</span></pre>
+    </div>
+    <div class="pseam" aria-hidden="true"><span class="pbadge">⇄</span></div>
+    <div class="side agent">
+      <div class="phead">agent · json-rpc<span class="pf">ndjson</span></div>
+<pre><span class="g">→</span> {"id":10,"method":"<span class="m">msg.send</span>",
+   "params":{"to":"contact:9f3b12",
+   "body":"<span class="s">meet at the old port, 0400</span>",
+   "client_msg_id":"<span class="s">agent-0001</span>"}}
+<span class="g">←</span> {"id":10,"result":{
+   "msg_id":"<span class="s">msg:e01d7c</span>",
+   "state":"queued","deduped":false}}
+<span class="g">→</span> {"id":11,…retry same client_msg_id}
+<span class="g">←</span> {"id":11,"result":{
+   "msg_id":"<span class="s">msg:e01d7c</span>",
+   "state":"queued","<span class="s">deduped":true</span>}}</pre>
+    </div>
+  </div>
+  <p class="pcap"><span class="k">same call</span><span class="d" aria-hidden="true"></span><span class="v">msg.send · one method · two surfaces</span></p>
+
+  <div class="vtag"><span class="n">c</span><span>flat seam</span><span class="rule" aria-hidden="true"></span><span class="h">dashed shared edge · label moves to caption</span></div>
+  <div class="pair pair--flat">
+    <div class="side">
+      <div class="phead">human · tui<span class="pf">send glyphs</span></div>
+<pre><span class="p">&gt; see you at 0400</span>
+~ peer offline            … → <span class="s">✓</span>
+~ ✓ = parked in peer's mailbox
+~ peer fetched · ack       → <span class="v">✓✓</span></pre>
+    </div>
+    <div class="side agent">
+      <div class="phead">agent · json-rpc<span class="pf">events</span></div>
+<pre><span class="g">→</span> {"id":10,"method":"<span class="m">msg.send</span>",
+   "params":{"to":"contact:9f3b12",…}}
+<span class="g">←</span> {"id":10,"result":{"state":"queued"}}
+<span class="g">←</span> event <span class="m">msg_state</span> {"msg_id":
+   "<span class="s">msg:e01d7c</span>","state":"<span class="v">delivered</span>"}
+<span class="c"># mailbox: deposit+fetch need caps</span></pre>
+    </div>
+  </div>
+  <p class="pcap"><span class="k">same event</span><span class="d" aria-hidden="true"></span><span class="v">msg_state · push on both surfaces</span></p>
+
+</section>
+</main>
+</div>
+
+<script>
+(function(){
+  "use strict";
+  document.querySelectorAll("pre.schematic").forEach(function(pre){
+    var lines=pre.textContent.replace(/\s+$/,"").split("\n"),max=0;
+    lines.forEach(function(l){
+      var n=Array.from(l).length;
+      if(n>max)max=n;
+    });
+    var tag=pre.closest(".arch").querySelector(".cols");
+    if(tag){
+      tag.textContent=max+" cols · ";
+      tag.classList.toggle("bad",max>54);
+    }
+  });
+})();
+</script>
+</body>
+</html>

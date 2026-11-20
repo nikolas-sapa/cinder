@@ -1,0 +1,491 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>cinder — hero cta v3</title>
+<!--
+  hero-cta-v3 — upgraded hero controls for index.html
+  PORT NOTES (see also bottom of page):
+    * install strip  -> .install / .install-body / .copychip  (style.css ~L104-124)
+    * primary CTA    -> .btn-primary + .btn-g glyph, click-ignite flood (main.js attachFlood ~L462)
+    * ghost          -> .btn-ghost + .gh-a arrow
+    * version tag    -> new .vtag
+    * JS drops into main.js unchanged: reuses existing B8, h2d, PRM, and
+      paint(cv,cell,vfn,cfn) — vfn(x,y,cols,rows) / cfn(v,t,x,y) signatures kept.
+-->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --ground:#0B0C0E; --panel:#15171B; --card:#101216; --ink:#EDEDE8;
+    --muted:#9BA0A6; --dim:#5A616B; --faint:#3D4249; --line:#23262D;
+    --ember:#FFB224; --ember-dim:#5A4114; --danger:#FF6B5E;
+    --disp:'Space Grotesk',system-ui,sans-serif;
+    --body:'Inter',system-ui,sans-serif;
+    --mono:'JetBrains Mono',ui-monospace,monospace;
+  }
+  *{box-sizing:border-box;margin:0}
+  html{scroll-behavior:smooth}
+  body{background:var(--ground);color:var(--ink);font-family:var(--body);
+    font-size:14px;line-height:1.6;-webkit-font-smoothing:antialiased}
+  canvas{display:block}
+  a{color:inherit;text-decoration:none}
+  code{font-family:var(--mono);color:var(--ink);font-size:.9em}
+  .mono{font-family:var(--mono)}
+  .dim{color:var(--dim)} .amber{color:var(--ember)}
+
+  /* ---- demo chrome (not for port) ---- */
+  .page{min-height:100vh;display:flex;flex-direction:column}
+  header{padding:26px 32px;display:flex;justify-content:space-between;
+    align-items:baseline;border-bottom:1px solid var(--line);
+    font-family:var(--mono);font-size:13px}
+  .tag{color:var(--ember);font-weight:500}
+  .hint{color:var(--muted);font-size:11px;letter-spacing:.08em}
+  .wrap{max-width:960px;margin:0 auto;padding:0 28px;width:100%}
+  main{flex:1;padding-bottom:96px}
+  .intro{padding:64px 0 48px}
+  .kicker{font-family:var(--mono);font-size:10px;letter-spacing:.22em;
+    color:var(--ember);margin-bottom:18px}
+  h1{font-family:var(--disp);font-weight:600;font-size:clamp(28px,4.5vw,40px);
+    letter-spacing:-.01em;line-height:1.15;margin-bottom:14px}
+  .lede{color:var(--muted);max-width:62ch;font-size:14px}
+  .lede b{color:var(--ink);font-weight:500}
+  section{padding:40px 0 8px}
+  .lab{display:flex;justify-content:space-between;align-items:baseline;
+    gap:16px;margin-bottom:14px;font-family:var(--mono);font-size:10px;
+    letter-spacing:.18em;flex-wrap:wrap}
+  .lab .l{color:var(--muted)} .lab .l b{color:var(--ember);font-weight:500}
+  .lab .r{color:var(--faint)}
+  .stage{border:1px solid var(--line);background:var(--ground);position:relative}
+  .pad{padding:clamp(28px,5vw,52px) clamp(20px,5vw,56px)}
+  .stage-meta{border-top:1px solid var(--line);padding:10px 16px;
+    font-family:var(--mono);font-size:10px;letter-spacing:.05em;
+    color:var(--faint);display:flex;justify-content:space-between;gap:16px;flex-wrap:wrap}
+  .stage-meta b{color:var(--muted);font-weight:400}
+  .row{display:flex;gap:26px;align-items:center;flex-wrap:wrap}
+  .item{display:flex;flex-direction:column;align-items:center;gap:14px}
+  .cap{font-family:var(--mono);font-size:9px;letter-spacing:.16em;color:var(--faint);
+    text-align:center;max-width:34ch}
+  .ctx-eyebrow{font-size:12px;letter-spacing:.12em;color:var(--muted);margin-bottom:30px}
+  .notes{padding:18px 20px;font-family:var(--mono);font-size:11px;line-height:1.9;
+    color:var(--muted);overflow-x:auto;white-space:pre}
+  .notes b{color:var(--ink);font-weight:500}
+  .notes i{color:var(--ember);font-style:normal}
+  [data-reveal]{opacity:0;transform:translateY(14px);
+    transition:opacity .7s cubic-bezier(.2,.7,.2,1),transform .7s cubic-bezier(.2,.7,.2,1)}
+  [data-reveal].in{opacity:1;transform:none}
+  .st-led{display:inline-block;width:6px;height:6px;background:var(--ember);
+    margin-right:9px;border-radius:1px;animation:pblink 1.7s steps(1) infinite}
+  @keyframes pblink{0%,60%{opacity:1}61%,100%{opacity:.25}}
+
+  /* ============ PORT -> style.css ============ */
+
+  /* ---- install strip: single terminal artifact, chip = corner segment ---- */
+  .install{display:flex;align-items:stretch;max-width:900px;margin-bottom:26px;
+    background:var(--card);border:1px solid var(--line);border-radius:10px;
+    overflow:hidden;position:relative;
+    box-shadow:inset 0 1px 0 rgba(255,255,255,.03),0 3px 0 #060708,0 8px 18px rgba(0,0,0,.4);
+    transition:transform .18s cubic-bezier(.2,.7,.2,1),border-color .18s,box-shadow .18s}
+  .install:hover,.install:focus-within{transform:translateY(-1px);border-color:var(--ember-dim);
+    box-shadow:inset 0 1px 0 rgba(255,255,255,.03),0 4px 0 #060708,0 14px 30px rgba(0,0,0,.5)}
+  .install.done{border-color:var(--ember);
+    box-shadow:inset 0 1px 0 rgba(255,255,255,.03),0 0 0 1px rgba(255,178,36,.3),
+      0 4px 0 #060708,0 10px 24px rgba(0,0,0,.5)}
+  .install-body{display:flex;align-items:center;gap:14px;flex:1;min-width:0;
+    padding:18px 20px;cursor:text}
+  .install .prompt{color:var(--ember);flex-shrink:0;
+    animation:ppulse 2.6s ease-in-out infinite}
+  @keyframes ppulse{0%,100%{color:var(--ember);text-shadow:0 0 10px rgba(255,178,36,.45)}
+    50%{color:var(--ember-dim);text-shadow:none}}
+  .install code{flex:1;min-width:0;font-size:13.5px;color:var(--ink);
+    overflow-x:auto;white-space:nowrap;user-select:text;cursor:text;
+    -webkit-mask-image:linear-gradient(90deg,#000 93%,transparent);
+            mask-image:linear-gradient(90deg,#000 93%,transparent)}
+  .install code .caret{display:inline-block;width:.55em;height:1.05em;
+    background:var(--ember);margin-left:1.2ch;vertical-align:text-bottom;
+    animation:caretblink 1.1s steps(1) infinite}
+  @keyframes caretblink{0%,100%{opacity:1}50%{opacity:0}}
+  .copychip{display:inline-flex;align-items:center;justify-content:center;
+    align-self:stretch;min-height:44px;min-width:13ch;padding:0 20px;cursor:pointer;
+    font-family:var(--mono);font-size:11.5px;letter-spacing:.1em;color:var(--muted);
+    background:rgba(255,255,255,.015);border:none;border-left:1px solid var(--line);
+    transition:color .15s,border-color .15s,background .15s,box-shadow .08s}
+  .copychip:hover{color:var(--ember);border-left-color:var(--ember-dim);
+    background:rgba(255,178,36,.06)}
+  .copychip:active{background:rgba(255,178,36,.12);
+    box-shadow:inset 0 2px 8px rgba(0,0,0,.45)}
+  .copychip.copied{color:var(--ember);border-left-color:var(--ember);
+    background:rgba(255,178,36,.09);animation:cpop .24s cubic-bezier(.2,.9,.3,1.3)}
+  .copychip:focus-visible{outline:none;box-shadow:inset 0 0 0 2px var(--ember)}
+  @keyframes cpop{0%{transform:scale(.94)}60%{transform:scale(1.06)}100%{transform:scale(1)}}
+
+  /* ---- ctas ---- */
+  .ctas{display:flex;align-items:center;gap:18px;flex-wrap:wrap}
+  .btn{display:inline-flex;align-items:center;justify-content:center;gap:10px;
+    min-height:46px;padding:0 24px;font-family:var(--mono);
+    font-size:13px;font-weight:500;letter-spacing:.04em;border-radius:7px;
+    border:1px solid var(--line);cursor:pointer;user-select:none;
+    -webkit-tap-highlight-color:transparent;touch-action:manipulation;
+    transition:transform .12s,border-color .18s,color .18s,background .18s,box-shadow .12s}
+  .btn:focus-visible{outline:2px solid var(--ember);outline-offset:2px}
+
+  /* primary: dither-flood canvas + click-point ignite + firing [>] glyph */
+  .btn-primary{position:relative;overflow:hidden;background:var(--panel);
+    color:var(--ink);border-color:var(--ember-dim);
+    box-shadow:0 3px 0 #060708,0 8px 18px rgba(0,0,0,.45)}
+  .btn-primary:hover{color:var(--ground);border-color:var(--ember);transition-delay:.1s}
+  .btn-primary:active{transform:translateY(2px);transition-delay:0s;
+    box-shadow:0 1px 0 #060708,0 3px 8px rgba(0,0,0,.4)}
+  .btn-primary canvas{position:absolute;inset:0;width:100%;height:100%;
+    pointer-events:none;image-rendering:pixelated}
+  .btn-label{position:relative;z-index:1}
+  .btn-g{position:relative;z-index:1;color:var(--ember);font-size:11px;
+    letter-spacing:0;transition:transform .18s cubic-bezier(.2,.9,.3,1.4),color .18s}
+  .btn-primary:hover .btn-g{color:var(--ground);transform:translateX(3px)}
+  .btn-primary:active .btn-g{animation:gfire .34s cubic-bezier(.2,.9,.3,1.4)}
+  @keyframes gfire{0%{transform:translateX(3px) scale(1)}
+    35%{transform:translateX(9px) scale(1.12)}100%{transform:translateX(3px) scale(1)}}
+
+  /* ghost: fill-left + underline sweep + nudging ASCII arrow */
+  .btn-ghost{position:relative;overflow:hidden;background:transparent;color:var(--muted)}
+  .btn-ghost::before{content:"";position:absolute;inset:0;
+    background:rgba(255,178,36,.05);transform:scaleX(0);transform-origin:left;
+    transition:transform .2s cubic-bezier(.2,.7,.2,1)}
+  .btn-ghost::after{content:"";position:absolute;left:0;right:0;bottom:0;
+    height:2px;background:var(--ember);transform:scaleX(0);
+    transform-origin:left;transition:transform .22s cubic-bezier(.2,.7,.2,1)}
+  .btn-ghost:hover{color:var(--ink);border-color:var(--ember-dim)}
+  .btn-ghost:hover::before,.btn-ghost:hover::after{transform:scaleX(1)}
+  .btn-ghost:active{transform:translateY(2px);background:rgba(0,0,0,.25)}
+  .gh-a{position:relative;z-index:1;color:var(--faint);font-size:12px;
+    transition:transform .2s cubic-bezier(.2,.9,.3,1.4),color .18s}
+  .btn-ghost:hover .gh-a{transform:translateX(5px);color:var(--ember)}
+
+  /* version tag: bracket-grow micro-chip */
+  .vtag{display:inline-flex;align-items:center;gap:2px;min-height:44px;
+    padding:0 8px;font-size:11px;letter-spacing:.1em;color:var(--dim);
+    border-radius:6px;transition:color .18s}
+  .vtag i{font-style:normal;color:var(--faint);
+    transition:transform .2s cubic-bezier(.2,.9,.3,1.4),color .18s}
+  .vtag:hover{color:var(--ink)}
+  .vtag:hover i{color:var(--ember)}
+  .vtag:hover i:first-child{transform:translateX(-3px)}
+  .vtag:hover i:last-child{transform:translateX(3px)}
+  .vtag:active i:first-child{transform:translateX(-1px)}
+  .vtag:active i:last-child{transform:translateX(1px)}
+  .vtag:focus-visible{outline:2px solid var(--ember);outline-offset:2px}
+
+  .chips{display:flex;gap:22px;font-size:11.5px;color:var(--faint);margin-left:14px}
+  .hero-status{margin-top:20px;font-size:11px;letter-spacing:.1em;color:var(--faint)}
+  /* ============ /PORT ============ */
+
+  @media (max-width:720px){
+    .install{flex-wrap:wrap}
+    .install-body{flex:1 1 100%;padding:16px 18px}
+    .copychip{width:100%;border-left:none;border-top:1px solid var(--line);
+      min-height:44px}
+    .chips{margin-left:0;margin-top:14px;width:100%}
+  }
+
+  @media (prefers-reduced-motion:reduce){
+    *,*::before,*::after{animation:none!important;transition:none!important}
+    [data-reveal]{opacity:1;transform:none}
+    .btn-primary canvas{display:none}
+    .btn-primary:hover,.btn-primary:focus-visible{background:var(--ember);
+      color:var(--ground);transition-delay:0s}
+    .btn-primary:hover .btn-g{color:var(--ground)}
+    html{scroll-behavior:auto}
+  }
+</style>
+</head>
+<body>
+<div class="page">
+
+<header>
+  <span class="tag">cinder / hero-cta-v3</span>
+  <span class="hint">hover · focus · press — flood ignites from the pointer</span>
+</header>
+
+<main>
+<div class="wrap">
+
+  <div class="intro">
+    <div class="kicker">EXPERIMENT</div>
+    <h1>Hero CTA controls, v3</h1>
+    <p class="lede">The install strip is now one <b>terminal artifact</b>: pulsing <b>$</b>,
+    blinking block caret, selectable command, copy chip fused into the right edge as a
+    corner segment. The primary button keeps the <b>dither-flood</b> but adds a
+    <b>click-point ignite</b> (radial wavefront + ember spark ring) and a firing
+    <b>[▶]</b> glyph. Ghost gains a nudging <b>→</b>; a bracket-grow
+    <b>version tag</b> closes the set.</p>
+  </div>
+
+  <!-- ================= 01 · HERO CONTEXT ================= -->
+  <section>
+    <div class="lab">
+      <span class="l"><b>01</b> · hero context — the real composition</span>
+      <span class="r">tab through it · press and hold the primary</span>
+    </div>
+    <div class="stage pad" data-reveal>
+
+      <p class="ctx-eyebrow mono"><i class="st-led"></i>e2e-encrypted · terminal-native · agent-first</p>
+
+      <div class="install mono">
+        <div class="install-body">
+          <span class="prompt" aria-hidden="true">$</span>
+          <code id="install-cmd" class="install-cmd">cargo install --locked --git https://github.com/nikolas-sapa/cinder cinder cinder-relay<i class="caret" aria-hidden="true"></i></code>
+        </div>
+        <button class="copychip mono" id="copy-btn" type="button" aria-label="Copy install command"><span class="cc-l">[ ⧉ copy ]</span></button>
+      </div>
+
+      <div class="ctas">
+        <a class="btn btn-primary" href="#quickstart" role="button" data-fill="#FFB224" data-halo="#5A4114"><canvas aria-hidden="true"></canvas><span class="btn-g" aria-hidden="true">[▶]</span><span class="btn-label">get started</span></a>
+        <a class="btn btn-ghost" href="https://github.com/nikolas-sapa/cinder/tree/main/docs" rel="noopener"><span class="gh-t">read the docs</span><span class="gh-a" aria-hidden="true">→</span></a>
+        <a class="vtag mono" href="https://github.com/nikolas-sapa/cinder/releases" rel="noopener"><i aria-hidden="true">[</i><span>v0.9.1-pre</span><i aria-hidden="true">]</i></a>
+        <p class="chips mono">
+          <span>Noise_XX_25519_ChaChaPoly_BLAKE2s</span>
+          <span>blind relay</span>
+          <span>no accounts</span>
+        </p>
+      </div>
+
+      <p class="hero-status mono"><span class="amber">▮</span> relay rly-02 ·
+      mailbox 3 pending · peers 2 verified · <span class="dim">scripted demo</span></p>
+
+    </div>
+    <div class="stage-meta">
+      <span><b>.install</b> — one bordered artifact · chip is a flush corner segment, not a nested button</span>
+      <span><b>.btn-primary</b> — left sweep on hover + radial ignite from pointerdown · <b>.btn-ghost</b> — → nudge · <b>.vtag</b> — brackets grow</span>
+    </div>
+  </section>
+
+  <!-- ================= 02 · ANATOMY ================= -->
+  <section>
+    <div class="lab">
+      <span class="l"><b>02</b> · control anatomy — states to check</span>
+      <span class="r">rest / hover / focus-visible / press / copied</span>
+    </div>
+    <div class="stage pad" data-reveal>
+      <div class="row" style="align-items:flex-start">
+
+        <div class="item" style="flex:1 1 100%">
+          <div class="install mono" style="width:100%;margin-bottom:0">
+            <div class="install-body">
+              <span class="prompt" aria-hidden="true">$</span>
+              <code class="install-cmd">cargo install --locked cinder-messenger<i class="caret" aria-hidden="true"></i></code>
+            </div>
+            <button class="copychip mono" type="button" aria-label="Copy install command"><span class="cc-l">[ ⧉ copy ]</span></button>
+          </div>
+          <div class="cap">strip lifts on hover · click body = select command · chip presses inward · strip border flashes ember on copy</div>
+        </div>
+
+        <div class="item">
+          <a class="btn btn-primary" href="#x" role="button" data-fill="#FFB224" data-halo="#5A4114"><canvas aria-hidden="true"></canvas><span class="btn-g" aria-hidden="true">[▶]</span><span class="btn-label">get started</span></a>
+          <div class="cap">pointerdown: recoil to .85 + radial ignite from press point · Space/Enter ignite from center</div>
+        </div>
+
+        <div class="item">
+          <a class="btn btn-ghost" href="#x"><span class="gh-t">read the docs</span><span class="gh-a" aria-hidden="true">→</span></a>
+          <div class="cap">fill-left + underline sweep kept · → nudges 5px and turns ember</div>
+        </div>
+
+        <div class="item">
+          <a class="vtag mono" href="#x"><i aria-hidden="true">[</i><span>v0.9.1-pre</span><i aria-hidden="true">]</i></a>
+          <div class="cap">brackets grow outward on hover — the set's smallest instrument</div>
+        </div>
+
+      </div>
+    </div>
+    <div class="stage-meta">
+      <span>all hits ≥ 44px · :focus-visible = 2px ember outline (chip: inset, clip-safe)</span>
+      <span>prefers-reduced-motion: canvas off, solid ember fallback, animations stripped</span>
+    </div>
+  </section>
+
+  <!-- ================= 03 · PORT MAP ================= -->
+  <section>
+    <div class="lab">
+      <span class="l"><b>03</b> · port map — what lands where</span>
+      <span class="r">index.html · style.css · main.js</span>
+    </div>
+    <div class="stage">
+      <div class="notes"><b>index.html</b>  .install gains <i>.install-body</i> wrapper · <i>&lt;i class="caret"&gt;</i> inside #install-cmd ·
+             chip label → <i>[ ⧉ copy ]</i> · .btn-primary gains <i>&lt;span class="btn-g"&gt;[▶]&lt;/span&gt;</i> + role="button" ·
+             .btn-ghost label wrapped in .gh-t + trailing <i>&lt;span class="gh-a"&gt;→&lt;/span&gt;</i> · add .vtag link
+<b>style.css</b>   replace .install/.copychip block (~L104-124) · .btn-primary:hover transition-delay ·
+             add .btn-g/.gh-a/.vtag/.caret + ppulse/caretblink/gfire keyframes · PRM + mobile blocks
+<b>main.js</b>     copy handler adds/removes <i>.done</i> on .install + label swap · click-on-strip select-all ·
+             replace <i>attachFlood</i> — same paint(cv,cell,vfn,cfn)/B8/h2d/PRM deps, adds rs/ix/iy ignite state</div>
+    </div>
+  </section>
+
+</div>
+</main>
+</div>
+
+<script>
+/* ================================================================
+   cinder — hero-cta-v3
+   Self-contained. paint(cv,cell,vfn,cfn), B8, h2d, PRM are identical
+   to main.js L414-442 — everything below drops in unchanged.
+   ================================================================ */
+
+/* ---- shared ordered-dither painter (Bayer 8x8) ---- */
+const B8=[0,32,8,40,2,34,10,42,48,16,56,24,50,18,58,26,
+          12,44,4,36,14,46,6,38,60,28,52,20,62,30,54,22,
+          3,35,11,43,1,33,9,41,51,19,59,27,49,17,57,25,
+          15,47,7,39,13,45,5,37,63,31,55,23,61,29,53,21];
+const PRM = matchMedia('(prefers-reduced-motion: reduce)');
+function h2d(x,y,s){
+  let n=(x*374761393+y*668265263+(s|0)*2246822519)>>>0;
+  n=Math.imul(n^(n>>>13),1274126177)>>>0;
+  return ((n^(n>>>16))>>>0)/4294967296;
+}
+function paint(cv,cell,vfn,cfn){
+  const dpr=Math.min(devicePixelRatio||1,2);
+  const w=cv.clientWidth,h=cv.clientHeight;
+  if(!w||!h)return;
+  const W=Math.round(w*dpr),H=Math.round(h*dpr);
+  if(cv.width!==W||cv.height!==H){cv.width=W;cv.height=H;}
+  const g=cv.getContext('2d');
+  g.clearRect(0,0,W,H);
+  const s=cell*dpr,cols=Math.ceil(w/cell),rows=Math.ceil(h/cell);
+  for(let y=0;y<rows;y++)for(let x=0;x<cols;x++){
+    const v=vfn(x,y,cols,rows);
+    if(v<=0)continue;
+    const t=(B8[(y&7)*8+(x&7)]+.5)/64;
+    const c=cfn(v,t,x,y);
+    if(!c)continue;
+    g.fillStyle=c;
+    g.fillRect(Math.round(x*s),Math.round(y*s),Math.ceil(s),Math.ceil(s));
+  }
+}
+
+/* ---- install strip: copy chip + click-to-select ---- */
+document.querySelectorAll('.install').forEach(installEl=>{
+  const copyBtn=installEl.querySelector('.copychip');
+  const installCmd=installEl.querySelector('.install-cmd')||installEl.querySelector('code');
+  if(!copyBtn||!installCmd)return;
+
+  copyBtn.addEventListener('click',async()=>{
+    const text=installCmd.textContent.trim();
+    try{
+      await navigator.clipboard.writeText(text);
+    }catch{
+      const ta=document.createElement('textarea');
+      ta.value=text;document.body.appendChild(ta);ta.select();
+      document.execCommand('copy');ta.remove();
+    }
+    copyBtn.classList.add('copied');
+    installEl.classList.add('done');
+    copyBtn.querySelector('.cc-l').textContent='[ ✓ copied ]';
+    setTimeout(()=>{
+      copyBtn.classList.remove('copied');
+      installEl.classList.remove('done');
+      copyBtn.querySelector('.cc-l').textContent='[ ⧉ copy ]';
+    },1500);
+  });
+
+  installEl.addEventListener('click',e=>{
+    if(e.target.closest('.copychip'))return;
+    const r=document.createRange();
+    r.selectNodeContents(installCmd);
+    const sel=getSelection();
+    sel.removeAllRanges();sel.addRange(r);
+  });
+});
+
+/* ---- dither-flood buttons: left sweep + click-point ignite ---- */
+function attachFlood(btn){
+  const cv=btn.querySelector('canvas');
+  if(!cv)return;
+  const fill=btn.dataset.fill||'#FFB224',halo=btn.dataset.halo||'#5A4114';
+  let s=0,tgt=0;            /* hover sweep */
+  let rs=0,rtgt=0;          /* ignite ripple 0..1 */
+  let ix=0,iy=0,maxD=1;     /* ignite origin (cell coords) + radius */
+  let raf=null;
+  function draw(){
+    paint(cv,3,(x,y,c)=>{
+      const E=s*(c+18)-9;
+      let v=(E-x)/10;
+      if(rs>0){
+        const fr=rs*maxD;
+        const dx=x-ix,dy=(y-iy)*1.5;
+        const vR=(fr-Math.sqrt(dx*dx+dy*dy))/9;
+        if(vR>v)v=vR;
+      }
+      return Math.min(1,Math.max(0,v));
+    },(v,t,x,y)=>{
+      if(v>t)return fill;
+      if(v*.45>t)return h2d(x,y,5)<.14?'#FFB224':halo;
+      if(h2d(x,y)<.045)return '#26292F';
+      return null;
+    });
+  }
+  function step(){
+    s+=(tgt-s)*.18;
+    if(Math.abs(tgt-s)<.004)s=tgt;
+    rs+=(rtgt-rs)*.24;
+    if(Math.abs(rtgt-rs)<.004)rs=rtgt;
+    draw();
+    if(s!==tgt||rs!==rtgt)raf=requestAnimationFrame(step);else raf=null;
+  }
+  function kick(){if(!raf)raf=requestAnimationFrame(step);}
+  function go(v){tgt=v;if(PRM.matches){s=v;draw();return;}kick();}
+  function rgo(v){rtgt=v;if(PRM.matches){rs=v;draw();return;}kick();}
+  const hot=()=>btn.matches(':hover')||document.activeElement===btn;
+  function igniteAt(px,py){
+    const r=btn.getBoundingClientRect();
+    ix=px/3;iy=py/3;
+    const w=r.width/3,h=r.height/3;
+    const dxm=Math.max(ix,w-ix),dym=Math.max(iy,h-iy)*1.5;
+    maxD=Math.sqrt(dxm*dxm+dym*dym)+8;
+    rgo(1);
+  }
+  function igniteCenter(){
+    const r=btn.getBoundingClientRect();
+    igniteAt(r.width/2,r.height/2);
+  }
+  btn.addEventListener('mouseenter',()=>go(1));
+  btn.addEventListener('mouseleave',()=>{go(0);rgo(0);});
+  btn.addEventListener('focus',()=>go(1));
+  btn.addEventListener('blur',()=>{go(0);rgo(0);});
+  btn.addEventListener('pointerdown',e=>{
+    const r=btn.getBoundingClientRect();
+    go(.85);
+    igniteAt(e.clientX-r.left,e.clientY-r.top);
+  });
+  btn.addEventListener('pointerup',()=>{go(hot()?1:0);rgo(0);});
+  btn.addEventListener('pointercancel',()=>{rgo(0);});
+  btn.addEventListener('keydown',e=>{
+    if(e.repeat)return;
+    if(e.key===' '||e.key==='Enter'){
+      if(e.key===' ')e.preventDefault();
+      go(.85);igniteCenter();
+    }
+  });
+  btn.addEventListener('keyup',e=>{
+    if(e.key===' '||e.key==='Enter'){
+      go(hot()?1:0);rgo(0);
+      if(e.key===' ')btn.click();
+    }
+  });
+  draw();
+}
+document.querySelectorAll('.btn-primary[data-fill]').forEach(attachFlood);
+
+/* ---- Space parity on link-styled controls (a.scroll fix) ---- */
+document.querySelectorAll('.btn-ghost,.vtag').forEach(el=>{
+  el.addEventListener('keydown',e=>{if(e.key===' ')e.preventDefault();});
+  el.addEventListener('keyup',e=>{if(e.key===' ')el.click();});
+});
+
+/* ---- reveal (demo only) ---- */
+document.querySelectorAll('[data-reveal]').forEach(el=>{
+  requestAnimationFrame(()=>el.classList.add('in'));
+});
+</script>
+</body>
+</html>

@@ -3597,3 +3597,18 @@ if (document.readyState === 'loading'){
   document.addEventListener('DOMContentLoaded', init);
 } else { init(); }
 })();
+
+
+/* ---- nav scrollspy ---- */
+(function(){
+  const links=[...document.querySelectorAll('.nav-links a[href^="#"]')];
+  if(!links.length||!('IntersectionObserver' in window))return;
+  const map=new Map(links.map(a=>[a.getAttribute('href').slice(1),a]));
+  const io=new IntersectionObserver(es=>{
+    es.forEach(e=>{if(e.isIntersecting){
+      links.forEach(a=>a.classList.remove('on'));
+      const a=map.get(e.target.id);a&&a.classList.add('on');
+    }});
+  },{rootMargin:'-30% 0px -55% 0px'});
+  map.forEach((a,id)=>{const s=document.getElementById(id);s&&io.observe(s);});
+})();

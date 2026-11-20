@@ -1593,59 +1593,29 @@ if (reduced) warmup(STATIC_T, 30);
 start();
 })();
 
-/* ---- invite ticket: click burns the one-time link ---- */
+/* ---------- ident-ticket v2: fp matrix + tear ---------- */
 (function(){
-  "use strict";
-  var ticket = document.getElementById("ticket");
-  var keys = document.getElementById("invite-keys");
-  if (!ticket || !keys) return;
-  function burn(){
-    if (ticket.classList.contains("burned")) return;
-    ticket.classList.add("burned");
-    keys.innerHTML = "link consumed · <b>replay rejected</b>";
-  }
-  ticket.addEventListener("click", function(e){
-    e.preventDefault();
-    burn();
-  });
-  ticket.addEventListener("keydown", function(e){
-    if (e.key === "Enter" || e.key === " ") {
-      e.preventDefault();
-      burn();
-    }
-  });
-})();
 
-/* ---------- fingerprint matrix ---------- */
 (function(){
 'use strict';
+
+/* ================================================================
+   ident-ticket-v2 — one IIFE:
+     1. Matrix() fingerprint factory (prod #cv-fp code, parameterized
+        by seed + optional single-cell diff for the MITM compare)
+     2. hex fingerprint text (selectable, one forged group on claimed)
+     3. compare toggle
+     4. ticket tear + aria-live announce + reset
+     5. ASCII column-width assertions
+   ================================================================ */
 var RM = matchMedia('(prefers-reduced-motion: reduce)');
 var reduced = RM.matches;
-var STATIC_T = 4.61;
+var STATIC_T = 4.61;          // frozen frame: scanline mid-field, flare dying
 
-var PEER = '9c1f7bd24e88a1c3f50d6b4e9a2d7710c86be412f9aa07';
-
-var LEVELS, PAL = [
-  [ 11, 12, 14],[ 20, 21, 25],[ 33, 35, 41],[ 50, 47, 38],[ 74, 55, 22],
-  [106, 71, 20],[146, 96, 24],[196,127, 27],[232,152, 30],[255,178, 36],
-  [255,190, 52],[255,214,110],[255,240,196]
-];
-LEVELS = PAL.length - 1;
-
-var TH8 = new Float32Array([
-   0,32, 8,40, 2,34,10,42, 48,16,56,24,50,18,58,26,
-  12,44, 4,36,14,46, 6,38, 60,28,52,20,62,30,54,22,
-   3,35,11,43, 1,33, 9,41, 51,19,59,27,49,17,57,25,
-  15,47, 7,39,13,45, 5,37, 63,31,55,23,61,29,53,21]);
-for (var i=0; i<64; i++) TH8[i] = (TH8[i]+0.5)/64;
-
-function ign(x, y){
-  var f = (0.06711056*x + 0.00583715*y) % 1;
-  return (52.9829189*f) % 1;
-}
 function el(id){ return document.getElementById(id); }
 function clamp01(v){ return v<0 ? 0 : (v>1 ? 1 : v); }
 
+/* cyrb53 — small deterministic string hash (prod verbatim) */
 function hash53(str, seed){
   var h1 = 0xdeadbeef ^ (seed||0), h2 = 0x41c6ce57 ^ (seed||0);
   for (var i=0; i<str.length; i++){
@@ -1658,147 +1628,188 @@ function hash53(str, seed){
   return (h2>>>0) * 4294967296 + (h1>>>0);
 }
 
+/* shared ordered-dither recipe (prod verbatim) */
+var PAL = [
+  [ 11, 11, 13],[ 20, 21, 25],[ 33, 35, 41],[ 50, 47, 38],[ 74, 55, 22],
+  [106, 71, 20],[146, 96, 24],[196,127, 27],[232,152, 30],[255,178, 36],
+  [255,190, 52],[255,214,110],[255,240,196]
+];
+var LEVELS = PAL.length - 1;
+var TH8 = new Float32Array([
+   0,32, 8,40, 2,34,10,42, 48,16,56,24,50,18,58,26,
+  12,44, 4,36,14,46, 6,38, 60,28,52,20,62,30,54,22,
+   3,35,11,43, 1,33, 9,41, 51,19,59,27,49,17,57,25,
+  15,47, 7,39,13,45, 5,37, 63,31,55,23,61,29,53,21]);
+for (var i=0; i<64; i++) TH8[i] = (TH8[i]+0.5)/64;
+function ign(x, y){
+  var f = (0.06711056*x + 0.00583715*y) % 1;
+  return (52.9829189*f) % 1;
+}
+
+/* ================= fingerprint matrix factory =================
+   prod's #cv-fp singleton becomes Matrix(cvEl, seed, diff):
+   16×16 cells, mirrored L→R; Gaussian feature field + per-cell detail
+   seeded by `seed`; diff={x,y} overrides ONE full-grid cell on the
+   right half so the claimed glyph differs in a single cell-block. */
 var GRID = 16, HALF = 8;
-var DPR = Math.min(window.devicePixelRatio || 1, 2);
-var PITCH = 9 * DPR;
-var cv = el('cv-fp');
-if (!cv) return;
-var cx2d = cv.getContext('2d', {alpha:false});
-var BUF = GRID * PITCH + 1, IMG = null, V = null;
-var CELL = new Float32Array(HALF * GRID);
-var ENERGY = new Float32Array(GRID * GRID);
 
-var FEAT = [];
-(function seedField(){
-  var s = PEER + ':feat';
-  for (var f=0; f<7; f++){
-    FEAT.push({
-      x: 0.5 + (hash53(s+':x'+f, f) % 1000)/1000 * (HALF-1),
-      y:      (hash53(s+':y'+f, f) % 1000)/1000 * (GRID-1),
-      r: 1.6 + (hash53(s+':r'+f, f) % 1000)/1000 * 3.4,
-      a: 0.45 + (hash53(s+':a'+f, f) % 1000)/1000 * 0.55
-    });
-  }
-})();
+function Matrix(cvEl, seed, diff){
+  var cx2d = cvEl.getContext('2d', {alpha:false});
+  var DPR = Math.min(window.devicePixelRatio || 1, 2);
+  var PITCH = 9 * DPR;
+  var BUF = GRID * PITCH + 1, IMG = null, V = null;
+  var CELL = new Float32Array(HALF * GRID);
+  var ENERGY = new Float32Array(GRID * GRID);
+  var FEAT = [], nextIgn = 0;
 
-function cellField(hx, y){
-  var base = 0;
-  for (var f=0; f<FEAT.length; f++){
-    var g = FEAT[f], dx = hx-g.x, dy = y-g.y;
-    var b = g.a * Math.exp(-(dx*dx+dy*dy)/(g.r*g.r));
-    if (b > base) base = b;
-  }
-  var det = (hash53(PEER+':c:'+hx+':'+y, 7) % 10000)/10000;
-  return clamp01(base*(0.50 + 0.62*det) + 0.16*det*det*det*det - 0.02);
-}
-
-function buildCells(){
-  for (var y=0; y<GRID; y++)
-    for (var hx=0; hx<HALF; hx++)
-      CELL[y*HALF+hx] = cellField(hx, y);
-}
-
-function cellAt(cx, cy){
-  var hx = cx < HALF ? cx : GRID-1-cx;
-  return CELL[cy*HALF+hx];
-}
-
-function fit(){
-  DPR = Math.min(window.devicePixelRatio || 1, 2);
-  PITCH = 9 * DPR;
-  BUF = GRID * PITCH + 1;
-  cv.width = BUF; cv.height = BUF;
-  IMG = cx2d.createImageData(BUF, BUF);
-  V = new Float32Array(BUF * BUF);
-}
-
-function quantize(){
-  var d = IMG.data, p = 0, o = 0;
-  for (var y=0; y<BUF; y++){
-    var brow = (y&7)<<3;
-    for (var x=0; x<BUF; x++){
-      var v = V[p];
-      var th = TH8[brow|(x&7)]*0.62 + ign(x,y)*0.38;
-      var f = v*LEVELS, l = f|0;
-      if (f-l > th) l++;
-      if (l<0) l = 0; else if (l>LEVELS) l = LEVELS;
-      var c = PAL[l];
-      d[o]=c[0]; d[o+1]=c[1]; d[o+2]=c[2]; d[o+3]=255;
-      p++; o+=4;
+  (function seedField(){
+    var s = seed + ':feat';
+    for (var f=0; f<7; f++){
+      FEAT.push({
+        x: 0.5 + (hash53(s+':x'+f, f) % 1000)/1000 * (HALF-1),
+        y:      (hash53(s+':y'+f, f) % 1000)/1000 * (GRID-1),
+        r: 1.6 + (hash53(s+':r'+f, f) % 1000)/1000 * 3.4,
+        a: 0.45 + (hash53(s+':a'+f, f) % 1000)/1000 * 0.55
+      });
     }
-  }
-  cx2d.putImageData(IMG, 0, 0);
-}
+  })();
 
-var nextIgn = 0;
-function ignite(t, dt){
-  if (t >= nextIgn){
-    var idx = (Math.random()*GRID*GRID)|0;
-    ENERGY[idx] = 1;
-    nextIgn = t + 0.7 + Math.random()*1.9;
+  function cellField(hx, y){
+    var base = 0;
+    for (var f=0; f<FEAT.length; f++){
+      var g = FEAT[f], dx = hx-g.x, dy = y-g.y;
+      var b = g.a * Math.exp(-(dx*dx+dy*dy)/(g.r*g.r));
+      if (b > base) base = b;
+    }
+    var det = (hash53(seed+':c:'+hx+':'+y, 7) % 10000)/10000;
+    return clamp01(base*(0.50 + 0.62*det) + 0.16*det*det*det*det - 0.02);
   }
-  var decay = Math.exp(-dt*2.4);
-  for (var i=0; i<ENERGY.length; i++)
-    if (ENERGY[i] > 0.002) ENERGY[i] *= decay; else ENERGY[i] = 0;
-}
+  for (var y0=0; y0<GRID; y0++)
+    for (var hx0=0; hx0<HALF; hx0++)
+      CELL[y0*HALF+hx0] = cellField(hx0, y0);
 
-function draw(t, dt){
-  ignite(t, dt);
-  var margin = 8*DPR, span = BUF + margin*2;
-  var sy = ((t*0.145) % 1) * span - margin;
-  var sHW = 5*DPR;
-  for (var y=0; y<BUF; y++){
-    var cy = (y/PITCH)|0; if (cy > GRID-1) cy = GRID-1;
-    var gY = (y % PITCH) < DPR;
-    var scan = 1 - Math.abs(y-sy)/sHW;
-    if (scan < 0) scan = 0;
-    var brow = (y&7)<<3;
-    for (var x=0; x<BUF; x++){
-      var o = y*BUF + x, v;
-      var cx = (x/PITCH)|0; if (cx > GRID-1) cx = GRID-1;
-      if (gY || (x % PITCH) < DPR){
-        v = 0.055 + 0.05*scan;
-      } else {
-        var ci = cy*GRID + cx;
-        var cv0 = cellAt(cx, cy);
-        var e = ENERGY[ci];
-        var dens = cv0*(0.25 + 0.72*cv0) + 0.38*e;
-        if (dens > 1) dens = 1;
-        var th = TH8[brow|(x&7)]*0.70 + ign(x+31, y+57)*0.30;
-        if (th < dens){
-          v = 0.30 + 0.62*cv0 + 0.55*e;
-        } else {
-          v = 0.012 + 0.010*ign(x*3+y, y*7+x);
-        }
-        v += 0.13*scan*(0.35 + 0.65*cv0);
+  /* forge one cell-block: keep it clearly different from the real cell */
+  if (diff){
+    var orig = CELL[diff.y*HALF + (GRID-1-diff.x)];   // mirrored half-cell src
+    diff.v = 0.30 + (hash53(seed+':fv', 11) % 560)/1000;
+    if (Math.abs(diff.v - orig) < 0.30)
+      diff.v = diff.v > orig ? Math.max(0.12, orig-0.34)
+                             : Math.min(0.95, orig+0.34);
+  }
+
+  function cellAt(cx, cy){
+    if (diff && cx===diff.x && cy===diff.y) return diff.v;
+    var hx = cx < HALF ? cx : GRID-1-cx;
+    return CELL[cy*HALF+hx];
+  }
+
+  function fit(){
+    DPR = Math.min(window.devicePixelRatio || 1, 2);
+    PITCH = 9 * DPR;
+    BUF = GRID * PITCH + 1;
+    cvEl.width = BUF; cvEl.height = BUF;
+    IMG = cx2d.createImageData(BUF, BUF);
+    V = new Float32Array(BUF * BUF);
+  }
+
+  function quantize(){
+    var d = IMG.data, p = 0, o = 0;
+    for (var y=0; y<BUF; y++){
+      var brow = (y&7)<<3;
+      for (var x=0; x<BUF; x++){
+        var v = V[p];
+        var th = TH8[brow|(x&7)]*0.62 + ign(x,y)*0.38;
+        var f = v*LEVELS, l = f|0;
+        if (f-l > th) l++;
+        if (l<0) l = 0; else if (l>LEVELS) l = LEVELS;
+        var c = PAL[l];
+        d[o]=c[0]; d[o+1]=c[1]; d[o+2]=c[2]; d[o+3]=255;
+        p++; o+=4;
       }
-      V[o] = v > 1 ? 1 : v;
     }
+    cx2d.putImageData(IMG, 0, 0);
   }
-  quantize();
+
+  function ignite(t, dt){
+    if (t >= nextIgn){
+      ENERGY[(Math.random()*GRID*GRID)|0] = 1;
+      nextIgn = t + 0.7 + Math.random()*1.9;
+    }
+    var decay = Math.exp(-dt*2.4);
+    for (var i=0; i<ENERGY.length; i++)
+      if (ENERGY[i] > 0.002) ENERGY[i] *= decay; else ENERGY[i] = 0;
+  }
+
+  function draw(t, dt){
+    ignite(t, dt);
+    var margin = 8*DPR, span = BUF + margin*2;
+    var sy = ((t*0.145) % 1) * span - margin;
+    var sHW = 5*DPR;
+    for (var y=0; y<BUF; y++){
+      var cy = (y/PITCH)|0; if (cy > GRID-1) cy = GRID-1;
+      var gY = (y % PITCH) < DPR;
+      var scan = 1 - Math.abs(y-sy)/sHW;
+      if (scan < 0) scan = 0;
+      var brow = (y&7)<<3;
+      for (var x=0; x<BUF; x++){
+        var o = y*BUF + x, v;
+        var cx = (x/PITCH)|0; if (cx > GRID-1) cx = GRID-1;
+        if (gY || (x % PITCH) < DPR){
+          v = 0.055 + 0.05*scan;
+        } else {
+          var ci = cy*GRID + cx;
+          var cv0 = cellAt(cx, cy);
+          var e = ENERGY[ci];
+          var dens = cv0*(0.25 + 0.72*cv0) + 0.38*e;
+          if (dens > 1) dens = 1;
+          var th = TH8[brow|(x&7)]*0.70 + ign(x+31, y+57)*0.30;
+          if (th < dens){
+            v = 0.30 + 0.62*cv0 + 0.55*e;
+          } else {
+            v = 0.012 + 0.010*ign(x*3+y, y*7+x);
+          }
+          v += 0.13*scan*(0.35 + 0.65*cv0);
+        }
+        V[o] = v > 1 ? 1 : v;
+      }
+    }
+    quantize();
+  }
+
+  function warmup(tEnd, n){
+    for (var i=0; i<ENERGY.length; i++) ENERGY[i] = 0;
+    nextIgn = 0;
+    for (i=n; i>0; i--) draw(tEnd - i/60, 1/60);
+    draw(tEnd, 1/60);
+  }
+
+  fit();
+  return { draw:draw, warmup:warmup, fit:fit };
 }
 
-var panel = el('fpPanel');
+/* ---- three instances: solo, compare-you, compare-claimed ---- */
+var SEED = '9c1f7bd24e88a1c3f50d6b4e9a2d7710c86be412f9aa07';
+var DC = 9 + hash53(SEED+':dc', 3) % 5;     // diff cell: right half, interior
+var DR = 3 + hash53(SEED+':dr', 5) % 10;    // (mirror keeps it a single block)
+
+var mats = [];
+function addM(id, diff){ var c = el(id); if (c) mats.push(Matrix(c, SEED, diff)); }
+addM('cv-fp',   null);
+addM('cv-fp-l', null);
+addM('cv-fp-r', {x:DC, y:DR});
+
+var fpCard = el('fpCard');
 var raf = 0, running = false, inView = false, last = 0;
-
-function warmup(tEnd, n){
-  var i;
-  for (i=0; i<ENERGY.length; i++) ENERGY[i] = 0;
-  nextIgn = 0;
-  for (i=n; i>0; i--) draw(tEnd - i/60, 1/60);
-  draw(tEnd, 1/60);
-}
 
 function loop(now){
   raf = 0;
   var t = now/1000, dt = t - last;
   if (dt > 0.05) dt = 0.05;
   if (dt < 0) dt = 0;
-  draw(t, dt);
+  for (var i=0; i<mats.length; i++) mats[i].draw(t, dt);
   last = t;
   if (running) raf = requestAnimationFrame(loop);
 }
-
 function start(){
   if (!running && !reduced && !document.hidden && inView){
     running = true;
@@ -1810,33 +1821,123 @@ function stop(){
   running = false;
   if (raf){ cancelAnimationFrame(raf); raf = 0; }
 }
-
 function fitAll(){
-  fit();
-  if (reduced) warmup(STATIC_T, 90);
+  for (var i=0; i<mats.length; i++){
+    mats[i].fit();
+    if (reduced) mats[i].warmup(STATIC_T, 90);
+  }
 }
-
 document.addEventListener('visibilitychange', function(){
   document.hidden ? stop() : start();
 });
 new IntersectionObserver(function(e){
   inView = e[0].isIntersecting;
   inView ? start() : stop();
-}).observe(panel);
-
+}).observe(fpCard);
 if (RM.addEventListener) RM.addEventListener('change', function(e){
   reduced = e.matches;
-  if (reduced){ stop(); warmup(STATIC_T, 90); } else { start(); }
+  if (reduced){ stop(); for (var i=0;i<mats.length;i++) mats[i].warmup(STATIC_T,90); }
+  else start();
 });
-
 var rt; window.addEventListener('resize', function(){
   clearTimeout(rt); rt = setTimeout(fitAll, 150);
 });
-
-buildCells();
-fitAll();
-if (reduced) warmup(STATIC_T, 90);
+if (reduced) for (var j=0; j<mats.length; j++) mats[j].warmup(STATIC_T, 90);
 start();
+
+/* ================= fingerprint hex (selectable) ================= */
+function chunks(s, n){ var a=[],i; for(i=0;i<s.length;i+=n) a.push(s.slice(i,i+n)); return a; }
+var GROUPS = chunks(SEED, 4);                 // 14 groups · 56 hex chars
+var FH = ('0000000' + (hash53(SEED+':fg',13)>>>0).toString(16)).slice(-8);
+var FORGE = FH.slice(0,4);
+if (FORGE === GROUPS[4]) FORGE = 'dead';
+var CGROUPS = GROUPS.slice(); CGROUPS[4] = FORGE;   // claimed: group 05 forged
+
+function hexLine(groups, markCls){
+  return groups.map(function(g,i){
+    return i===4 ? '<b class="'+markCls+'">'+g+'</b>' : g;
+  }).join(' ');
+}
+var hx;
+if (hx = el('hexSolo')) hx.innerHTML = hexLine(GROUPS, 'ref');
+if (hx = el('hexA'))    hx.innerHTML = hexLine(GROUPS, 'ref');
+if (hx = el('hexB'))    hx.innerHTML = hexLine(CGROUPS, 'bad');
+
+/* diff-cell markers + verdict */
+function hex2(n){ return ('0'+n.toString(16)).slice(-2).toUpperCase(); }
+['dmA','dmB'].forEach(function(id){
+  var d = el(id); if (!d) return;
+  d.style.left = (DC*6.25)+'%';
+  d.style.top  = (DR*6.25)+'%';
+});
+var vd;
+if (vd = el('vdText'))
+  vd.textContent = '≠ MISMATCH — cell ('+hex2(DC)+'·'+hex2(DR)+') + hex group 05 differ — DO NOT TRUST';
+if (vd = el('vdStat')) vd.textContent = '255/256 CELLS EQUAL';
+
+/* ================= compare toggle ================= */
+var cmpBtn = el('cmpBtn'), modeEl = el('fpMode');
+var opts = cmpBtn ? cmpBtn.querySelectorAll('.opt') : [];
+function setCmp(on){
+  fpCard.classList.toggle('cmp', on);
+  cmpBtn.setAttribute('aria-pressed', String(on));
+  el('fpSolo').hidden = on;
+  el('fpCmp').hidden = !on;
+  for (var i=0; i<opts.length; i++)
+    opts[i].classList.toggle('on', (i===1) === on);
+  if (modeEl) modeEl.textContent = on ? 'compare' : 'solo';
+}
+if (cmpBtn){
+  cmpBtn.addEventListener('click', function(){ setCmp(el('fpCmp').hidden); });
+  document.addEventListener('keydown', function(e){
+    if (e.key !== 'c' && e.key !== 'C') return;
+    var t = e.target;
+    if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
+    setCmp(el('fpCmp').hidden);
+  });
+}
+
+/* ================= ticket tear ================= */
+var tk = el('tk'), keysTxt = el('tkKeysTxt'),
+    live = el('tkLive'), reset = el('tkReset');
+var KEYS_HTML = keysTxt ? keysTxt.innerHTML : '';
+
+function redeem(){
+  if (tk.classList.contains('torn')) return;
+  tk.classList.add('torn');
+  tk.setAttribute('aria-disabled', 'true');
+  keysTxt.innerHTML = 'link consumed · <b>replay rejected</b> — stub detached';
+  live.textContent = 'ticket redeemed — link consumed · replay rejected';
+  if (reset) reset.hidden = false;
+}
+if (tk){
+  tk.addEventListener('click', function(e){ e.preventDefault(); redeem(); });
+  tk.addEventListener('keydown', function(e){
+    if (e.key === 'Enter' || e.key === ' '){ e.preventDefault(); redeem(); }
+  });
+}
+if (reset){
+  reset.addEventListener('click', function(){
+    tk.classList.remove('torn');
+    tk.removeAttribute('aria-disabled');
+    keysTxt.innerHTML = KEYS_HTML;
+    live.textContent = '';
+    reset.hidden = true;
+  });
+}
+
+/* ---- ASCII column audit --------------------------------------------
+   verified widths (this checker re-runs them on every load):
+     .tk-main  58 cols × 16 rows  (prod desktop pre, cols 0–57, keeps ┊ perf)
+     .tk-stub  15 cols × 16 rows  (prod desktop pre, cols 58–72)
+     .tk-mtop  50 cols × 13 rows  (prod mobile pre, through the ├┄┤ row)
+     .tk-mstub 50 cols ×  5 rows  (blank / SINGLE USE / serial / blank / └┘)
+     .tk-void  14 cols ×  4 rows  (stamp overlay)
+   combined desktop width = 73 cols — identical to prod's single pre.
+   ------------------------------------------------------------------- */
+
+})();
+
 })();
 
 /* ---------- voice call card ---------- */
@@ -2395,330 +2496,504 @@ function renderStatic(){
 }
 })();
 
-/* ---------- ascii topology board v3 ---------- */
-
+/* ---------- diagrams v3: board + fsm ---------- */
 (function(){
+
+(() => {
   "use strict";
-  var board = document.getElementById("board");
-  var btn = document.getElementById("viewBtn");
-  if (!board || !btn) return;
+  const $  = (s, r = document) => [...r.querySelectorAll(s)];
+  const byId = id => document.getElementById(id);
+  const prm  = matchMedia('(prefers-reduced-motion: reduce)');
+  const wide = matchMedia('(min-width: 44rem)');
 
-  var pres = Array.prototype.slice.call(board.querySelectorAll("pre[data-v]"));
-  var prm = matchMedia("(prefers-reduced-motion: reduce)");
-  var wide = matchMedia("(min-width: 44rem)");
-  var inView = false, hovered = false, pov = "t";
+  /* ============ ascii width verification ============
+     textContent of each <pre> == rendered columns (buttons inline;
+     .pk/.tr/.mbx-tick live outside <pre>). board rows must equal
+     data-cols exactly; fsm/rail are ragged → max ≤ data-cols. */
+  
 
-  /* ---------- pov toggle ---------- */
-  var vt = btn.querySelector(".vt"), vr = btn.querySelector(".vr");
-  var viewName = document.getElementById("viewName");
-  function setPov(v){
-    pov = v;
-    board.dataset.pov = v;
-    pres.forEach(function(p){ p.hidden = p.dataset.v !== v; });
-    vt.classList.toggle("on", v === "t");
-    vr.classList.toggle("on", v === "r");
-    if (viewName) viewName.textContent = v === "t" ? "transport" : "relay";
-    btn.setAttribute("aria-pressed", v === "r" ? "true" : "false");
-    gateAll();
-  }
-  btn.addEventListener("click", function(){ setPov(pov === "t" ? "r" : "t"); });
-  document.addEventListener("keydown", function(e){
-    if (e.key.toLowerCase() === "v" && !e.metaKey && !e.ctrlKey && !e.altKey){
-      var t = e.target;
-      if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable)) return;
-      setPov(pov === "t" ? "r" : "t");
+  /* ================= board v3 ================= */
+  (function board(){
+    const board = byId('board'), btn = byId('viewBtn'), pbtn = byId('peerBtn');
+    if (!board || !btn) return;
+    const pres = $$ => [...board.querySelectorAll('pre[data-v]')];
+    const PRES = pres();
+    const viewName = byId('viewName'), peerName = byId('peerName');
+    let pov = 't', peerOn = true, inView = false, hovered = false;
+
+    /* ---- pov + peer toggles ---- */
+    const vt = btn.querySelector('.vt'), vr = btn.querySelector('.vr');
+    function setPov(v){
+      pov = v; board.dataset.pov = v;
+      PRES.forEach(p => p.hidden = p.dataset.v !== v);
+      vt.classList.toggle('on', v==='t'); vr.classList.toggle('on', v==='r');
+      if (viewName) viewName.textContent = v==='t' ? 'transport' : 'relay';
+      btn.setAttribute('aria-pressed', String(v==='r'));
+      gateAll();
     }
-  });
-
-  /* ---------- packets ---------- */
-  // desktop wire rows: fwd row idx7 (top 10.5em), rev row idx8 (top 12em).
-  // fwd legs cols 18..34 / 59..74 ; rev legs (relay->peer relay->you) 74..60 / 34..19
-  var STEP_MS = 60, HOLD_MS = 450, REST_MS = 1500, TRAIL = 2;
-  function Packet(hEl, tEl, legs, phase){
-    this.h = hEl; this.t = tEl; this.legs = legs; this.phase = phase;
-    this.leg = 0; this.pos = 0; this.timer = null; this.started = false;
-  }
-  Packet.prototype.place = function(){
-    var p = this.pos, tr = p + (this.legs.dir > 0 ? -TRAIL : TRAIL);
-    this.h.style.left = p + "ch";
-    if (tr >= this.legs.ranges[this.leg][0] && tr <= this.legs.ranges[this.leg][1]){
-      this.t.style.left = tr + "ch";
-      this.t.classList.add("on");
-    } else this.t.classList.remove("on");
-  };
-  Packet.prototype.tick = function(){
-    var rg = this.legs.ranges[this.leg], dir = this.legs.dir;
-    this.pos += dir;
-    var done = dir > 0 ? this.pos > rg[1] : this.pos < rg[0];
-    if (done){
-      this.h.classList.remove("on"); this.t.classList.remove("on");
-      if (this.leg === 0){
-        this.leg = 1; this.pos = this.legs.ranges[1][dir > 0 ? 0 : 1];
-        this.arm(HOLD_MS);
-      } else {
-        this.leg = 0; this.pos = this.legs.ranges[0][dir > 0 ? 0 : 1];
-        this.started = false;                 // full cycle done
-        this.arm(REST_MS + this.phase);
+    const pon = pbtn.querySelector('.pon'), poff = pbtn.querySelector('.poff');
+    function setPeer(on){
+      peerOn = on; board.dataset.peer = on ? 'on' : 'off';
+      pon.classList.toggle('on', on); poff.classList.toggle('on', !on);
+      if (peerName) peerName.textContent = on ? 'online' : 'offline';
+      pbtn.setAttribute('aria-pressed', String(!on));
+      for (const el of board.querySelectorAll('.j-peer')){
+        el.textContent = on ? '●' : '○';
+        el.className = (on ? 'e' : 'f') + ' j-peer';
       }
-      return;
+      gateAll();
     }
-    this.place();
-    this.arm(STEP_MS);
-  };
-  Packet.prototype.arm = function(ms){
-    var self = this;
-    this.timer = setTimeout(function(){
-      self.h.classList.add("on"); self.place(); self.tick();
-    }, ms);
-  };
-  Packet.prototype.start = function(){
-    if (this.timer) return;
-    if (!this.started){
-      this.leg = 0;
-      this.pos = this.legs.ranges[0][this.legs.dir > 0 ? 0 : 1];
-      this.started = true;
+    btn.addEventListener('click', () => setPov(pov==='t' ? 'r' : 't'));
+    pbtn.addEventListener('click', () => setPeer(!peerOn));
+    document.addEventListener('keydown', e => {
+      const t = e.target;
+      if (t && (t.tagName==='INPUT' || t.tagName==='TEXTAREA' || t.isContentEditable)) return;
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
+      if (e.key === 'v') setPov(pov==='t' ? 'r' : 't');
+      if (e.key === 'o') setPeer(!peerOn);
+    });
+
+    /* ---- mailbox queue ---- */
+    const QUEUE_MAX = 6;               /* display saturates: 3+6 → 9/64 */
+    let queue = 0;
+    const tickEl = byId('mbxTick');
+    function setTxt(sel, txt){ for (const el of board.querySelectorAll(sel)) el.textContent = txt; }
+    function paintMbx(){
+      const n = Math.min(3 + queue, 9);               /* single col, 92-safe */
+      setTxt('.j-mbq', String(n));
+      const df = Math.min(3 + queue, 12), mf = Math.min(3 + queue, 7);
+      for (const pre of PRES){
+        const desk = pre.classList.contains('m-desktop');
+        const f = desk ? df : mf, cap = desk ? 12 : 7;
+        const bf = pre.querySelector('.j-mbf'), be = pre.querySelector('.j-mbe');
+        if (bf) bf.textContent = '▓'.repeat(f);
+        if (be) be.textContent = '░'.repeat(cap - f);
+      }
     }
-    this.h.classList.add("on"); this.place(); this.arm(this.phase && !this.ran ? (this.ran = true, this.phase) : 0);
-  };
-  Packet.prototype.stop = function(){
-    if (this.timer){ clearTimeout(this.timer); this.timer = null; }
-    this.h.classList.remove("on"); this.t.classList.remove("on");
-  };
-
-  var pkFwd = new Packet(
-    document.getElementById("pkH"), document.getElementById("pkT"),
-    { dir: 1, ranges: [[18, 34], [59, 74]] }, 0);
-  var pkRev = new Packet(
-    document.getElementById("rkH"), document.getElementById("rkT"),
-    { dir: -1, ranges: [[60, 74], [19, 34]] }, 700);
-
-  /* ---------- instrument readouts (demo values) ---------- */
-  var S = { rtt: 24, q: 3, rx: 1.0, tx: 0.4, up: 41 };
-  function fmtUp(s){
-    var m = Math.floor(s / 60), ss = s % 60;
-    return (m < 10 ? "0" : "") + m + ":" + (ss < 10 ? "0" : "") + ss;
-  }
-  function clamp(v, lo, hi){ return Math.min(hi, Math.max(lo, v)); }
-  function tickReadouts(){
-    S.rtt = clamp(Math.round(S.rtt + (Math.random() - 0.5) * 5), 17, 39);
-    S.q = clamp(S.q + (Math.random() < 0.3 ? (Math.random() < 0.5 ? -1 : 1) : 0), 2, 6);
-    S.rx = clamp(S.rx + (Math.random() - 0.5) * 0.3, 0.6, 1.5);
-    S.tx = clamp(S.tx + (Math.random() - 0.5) * 0.2, 0.2, 0.7);
-    S.up += 1;
-    set(".j-rtt", String(S.rtt));
-    set(".j-q", String(S.q));
-    set(".j-rx", S.rx.toFixed(1));
-    set(".j-tx", S.tx.toFixed(1));
-    set(".j-upt", fmtUp(S.up));
-  }
-  function set(sel, txt){
-    var els = board.querySelectorAll(sel);
-    for (var i = 0; i < els.length; i++) els[i].textContent = txt;
-  }
-  var ledOn = true;
-  function tickLed(){
-    ledOn = !ledOn;
-    var els = board.querySelectorAll(".j-led");
-    for (var i = 0; i < els.length; i++)
-      els[i].className = ledOn ? "e j-led" : "d j-led";
-  }
-
-  /* ---------- master gate ---------- */
-  var roT = null, ledT = null;
-  function animated(){ return inView && !document.hidden && !prm.matches; }
-  function gateAll(){
-    var run = animated();
-    var pkRun = run && wide.matches && pov === "t" && !hovered;
-    if (run){
-      if (!roT) roT = setInterval(tickReadouts, 1400);
-      if (!ledT) ledT = setInterval(tickLed, 900);
-    } else {
-      if (roT){ clearInterval(roT); roT = null; }
-      if (ledT){ clearInterval(ledT); ledT = null; }
+    let tickT = null;
+    function flashTick(txt, cls){
+      if (!tickEl) return;
+      tickEl.textContent = txt;
+      tickEl.className = 'mbx-tick' + (cls ? ' ' + cls : '');
+      void tickEl.offsetWidth;                         /* restart animation */
+      tickEl.classList.add('on');
+      clearTimeout(tickT);
+      tickT = setTimeout(() => tickEl.classList.remove('on'), 950);
     }
-    pkRun ? (pkFwd.start(), pkRev.start()) : (pkFwd.stop(), pkRev.stop());
-  }
+    function enqueue(){
+      if (queue >= QUEUE_MAX) { flashTick('FULL', 'full'); return; }
+      queue++; paintMbx(); flashTick('+1');
+    }
+    function dequeue(){
+      if (queue <= 0) return;
+      queue--; paintMbx(); flashTick('−1', 'minus');
+    }
 
-  var io = new IntersectionObserver(function(es){
-    inView = es[0].isIntersecting;
-    gateAll();
-  }, { threshold: 0.15 });
-  io.observe(board);
+    /* ---- packet engine: ▮ head + ▓▒░· trail from cell history ----
+       geometry (desktop rows @1.5em, prod-verified):
+         fwd wire row7 y=10.5em : you→relay c18-34 · relay→peer c59-74
+         rev wire row8 y=12em   : peer→relay c74-60 · relay→you c34-19
+         queue pipe col46 r9→14 : relay bottom ┬ → mailbox bar row14  */
+    const ROW = 1.5;
+    const h = (r, a, b) => { const c = []; for (let x = a; x !== b + Math.sign(b - a); x += Math.sign(b - a)) c.push({ x, r }); return c; };
+    const v = (c, a, b) => { const p = []; for (let y = a; y !== b + Math.sign(b - a); y += Math.sign(b - a)) p.push({ x: c, r: y }); return p; };
+    const STEP = 55, REST = 1500;
 
-  board.addEventListener("mouseenter", function(){ hovered = true; gateAll(); });
-  board.addEventListener("mouseleave", function(){ hovered = false; gateAll(); });
-  document.addEventListener("visibilitychange", gateAll);
-  prm.addEventListener("change", gateAll);
-  wide.addEventListener("change", gateAll);
-  gateAll();
+    function Pkt(ids){
+      this.els = ids.map(byId);
+      this.timer = null; this.i = 0; this.cells = [];
+    }
+    Pkt.prototype.show = function(on){
+      this.els.forEach(el => el.classList.toggle('on', on));
+    };
+    Pkt.prototype.place = function(){
+      const c = this.cells[this.i];
+      const hd = this.els[0];
+      hd.style.left = c.x + 'ch';
+      hd.style.top  = (c.r * ROW) + 'em';
+      hd.classList.toggle('hold', !!c.hold);
+      /* trail: previous 4 cells, only while contiguous in same leg   */
+      for (let k = 1; k <= 4; k++){
+        const t = this.els[k], j = this.i - k, p = this.cells[j];
+        const ok = !c.hold && p && p.leg === c.leg && !p.hold;
+        t.classList.toggle('on', !!ok);
+        if (ok){ t.style.left = p.x + 'ch'; t.style.top = (p.r * ROW) + 'em'; }
+      }
+    };
+    Pkt.prototype.step = function(){
+      const c = this.cells[this.i];
+      if (!c) { this.finish(); return; }
+      if (c.fork) for (const el of board.querySelectorAll('.j-fork')) el.classList.add('lit');
+      else        for (const el of board.querySelectorAll('.j-fork')) el.classList.remove('lit');
+      this.place();
+      if (c.hold){
+        if (c.spark) this.spark();
+        this.timer = setTimeout(() => { this.i++; this.step(); }, c.hold);
+        return;
+      }
+      if (c.act) c.act();
+      this.i++;
+      this.timer = setTimeout(() => this.step(), STEP);
+    };
+    Pkt.prototype.spark = function(){
+      /* relay-view fork: shed a faint · down the queue pipe while held */
+      const s = byId('fkS');
+      if (!s || pov !== 'r') return;
+      let r = 9;
+      s.classList.add('on');
+      const drop = () => {
+        if (r > 12 || !s.classList.contains('on')) { s.classList.remove('on'); return; }
+        s.style.left = '46ch'; s.style.top = (r * ROW) + 'em'; r++;
+        setTimeout(drop, 130);
+      };
+      drop();
+      setTimeout(() => s.classList.remove('on'), 700);
+    };
+    Pkt.prototype.run = function(cells, done){
+      this.cells = cells; this.i = 0; this.onDone = done;
+      this.show(true); this.step();
+    };
+    Pkt.prototype.finish = function(){
+      this.show(false); this.running = false;
+      for (const el of board.querySelectorAll('.j-fork')) el.classList.remove('lit');
+      if (this.onDone) this.onDone();
+    };
+    Pkt.prototype.stop = function(){
+      clearTimeout(this.timer); this.show(false); this.running = false;
+      for (const el of board.querySelectorAll('.j-fork')) el.classList.remove('lit');
+    };
+
+    const pkF = new Pkt(['pkH','pkT1','pkT2','pkT3','pkT4']);
+    const pkR = new Pkt(['rkH','rkT1','rkT2','rkT3','rkT4']);
+    const pkD = new Pkt(['dkH','dkT1','dkT2','dkT3','dkT4']);
+
+    /* paths — leg ids keep the trail from smearing across teleports */
+    function leg(cells, id){ cells.forEach(c => c.leg = id); return cells; }
+    function fwdCells(){
+      const hold = { x:34, r:7, hold: (pov==='r' ? 850 : 450), fork:true, spark:true, leg:'h' };
+      const a = leg(h(7, 18, 34), 'a');
+      if (peerOn) return [...a, hold, ...leg(h(7, 59, 74), 'b')];
+      const drop = leg(v(46, 9, 14), 'q');
+      drop[drop.length - 1].act = enqueue;
+      return [...a, hold, ...drop];
+    }
+    function revCells(){
+      const hold = { x:60, r:8, hold: (pov==='r' ? 700 : 380), leg:'h' };
+      return [...leg(h(8, 74, 60), 'a'), hold, ...leg(h(8, 34, 19), 'b')];
+    }
+    function drainCells(){
+      const a = leg(v(46, 14, 9), 'r');
+      a[0].act = dequeue;
+      return [...a, { x:46, r:9, hold: 300, leg:'h' }, ...leg(h(7, 59, 74), 'b')];
+    }
+
+    /* cycle drivers — fwd loops forever while gated on */
+    let fwdT = null, revT = null, drainT = null;
+    function fwdCycle(){
+      if (pkF.running) return;
+      pkF.running = true;
+      pkF.run(fwdCells(), () => { fwdT = setTimeout(fwdCycle, REST); });
+    }
+    function revCycle(){
+      if (pkR.running) return;
+      if (!peerOn){ revT = setTimeout(revCycle, 900); return; }  /* no replies while offline */
+      pkR.running = true;
+      pkR.run(revCells(), () => { revT = setTimeout(revCycle, REST + 700); });
+    }
+    function drainCheck(){
+      if (peerOn && queue > 0 && !pkD.running){
+        pkD.running = true;
+        pkD.run(drainCells(), () => { drainT = setTimeout(drainCheck, 350); });
+      } else drainT = setTimeout(drainCheck, 1200);
+    }
+
+    /* ---- instrument readouts (demo) ---- */
+    const S = { rtt:24, q:3, rx:1.0, tx:0.4, up:41 };
+    const fmtUp = s => { const m = Math.floor(s/60), ss = s%60;
+      return (m<10?'0':'')+m+':'+(ss<10?'0':'')+ss; };
+    const clamp = (v,a,b) => Math.min(b, Math.max(a,v));
+    function tickReadouts(){
+      S.rtt = clamp(Math.round(S.rtt + (Math.random()-.5)*5), 17, 39);
+      S.q   = clamp(S.q + (Math.random()<.3 ? (Math.random()<.5?-1:1) : 0), 2, 6);
+      const floor = peerOn ? .6 : .0, cap = peerOn ? 1.5 : .05;
+      S.rx  = clamp(S.rx + (Math.random()-.5)*.3, floor, cap);
+      S.tx  = clamp(S.tx + (Math.random()-.5)*.2, peerOn?.2:.0, peerOn?.7:.05);
+      S.up += 1;
+      setTxt('.j-rtt', String(S.rtt)); setTxt('.j-q', String(S.q));
+      setTxt('.j-rx', S.rx.toFixed(1)); setTxt('.j-tx', S.tx.toFixed(1));
+      setTxt('.j-upt', fmtUp(S.up));
+    }
+    let ledOn = true;
+    function tickLed(){
+      ledOn = !ledOn;
+      for (const el of board.querySelectorAll('.j-led'))
+        el.className = (ledOn ? 'e' : 'd') + ' j-led';
+    }
+
+    /* ---- master gate ---- */
+    let roT = null, ledT = null;
+    const animated = () => inView && !document.hidden && !prm.matches;
+    function gateAll(){
+      const run = animated();
+      const pkRun = run && wide.matches && !hovered;
+      if (run){
+        if (!roT)  roT  = setInterval(tickReadouts, 1400);
+        if (!ledT) ledT = setInterval(tickLed, 900);
+      } else {
+        clearInterval(roT);  roT  = null;
+        clearInterval(ledT); ledT = null;
+      }
+      if (pkRun){
+        fwdCycle(); revCycle();
+        if (!drainT) drainT = setTimeout(drainCheck, 800);
+      } else {
+        pkF.stop(); pkR.stop(); pkD.stop();
+        clearTimeout(fwdT); fwdT = null;
+        clearTimeout(revT); revT = null;
+        clearTimeout(drainT); drainT = null;
+      }
+    }
+
+    new IntersectionObserver(es => { inView = es[0].isIntersecting; gateAll(); },
+      { threshold: .15 }).observe(board);
+    board.addEventListener('mouseenter', () => { hovered = true;  gateAll(); });
+    board.addEventListener('mouseleave', () => { hovered = false; gateAll(); });
+    document.addEventListener('visibilitychange', gateAll);
+    prm.addEventListener('change', gateAll);
+    wide.addEventListener('change', gateAll);
+    paintMbx(); setPeer(true); gateAll();
+  })();
+
+  /* ================= fsm v3 ================= */
+  (function fsm(){
+    const fwrap = byId('fwrap');
+    if (!fwrap) return;
+    const logBody = byId('log-body');
+    let tickN = 0;
+    const appendLog = (cls, tag, html) => {
+      if (!logBody) return;
+      const div = document.createElement('div');
+      div.className = 'll ' + cls;
+      div.innerHTML = `<span class="t">${tag}</span>${html}`;
+      logBody.appendChild(div);
+      while (logBody.children.length > 24) logBody.firstChild.remove();   /* capped register */
+      logBody.scrollTop = logBody.scrollHeight;
+    };
+    const stepLog = (a, ar, b, n) =>
+      appendLog('step', 't+' + String(++tickN).padStart(2, '0'),
+        `${a} <span class="a">${ar}</span> ${b} <span class="x">· ${n}</span>`);
+
+    const EDGES = {
+      invite:['link','deny'],  handshake:['noise','deny'],
+      sealed:['rekey','sas','keychg','deny'], unverified:['sasback','deny'],
+      verified:['wipe','deny'], wiped:['deny'], denied:[]
+    };
+    const OUT = {                                    /* arrow, to, via */
+      link:['──▶','handshake','cinder:// link'],
+      noise:['══▶','sealed','noise_xx · 3 flights'],
+      rekey:['──▶','sealed','rekey · self-loop'],
+      sas:['──▶','verified','/sas match'],
+      keychg:['──▶','unverified','key change · sends blocked'],
+      sasback:['──▶','verified','sas match'],
+      wipe:['──▶','wiped','chat.wipe'],
+      deny:['──▶','denied','contact.deny · terminal']
+    };
+
+    /* ---- edge trace paths: [row,col] cells on the 128-col canvas ----
+       measured against prod art: button row r4; labels r3; drop tees
+       r5; deny bus r15; denied box r18-20. deny is per-state: own drop
+       col → bus → junction c30 → down.                               */
+    const hr = (r, a, b) => { const c = []; for (let x=a;x<=b;x++) c.push([r,x]); return c; };
+    const vr = (c, a, b) => { const p = []; for (let y=a;y<=b;y++) p.push([y,c]); return p; };
+    const TRACE = {
+      link:    hr(4, 20, 34),
+      noise:   hr(4, 54, 74),
+      sas:     hr(4, 94, 108),
+      keychg:  vr(88, 5, 9),
+      wipe:    vr(120, 5, 9),
+      rekey:   [[3,80],[2,80],[1,80], ...hr(1, 81, 91), [2,91],[3,91]],
+      sasback: [[11,98],[11,99],[11,100],[10,100],[9,100],[8,100],
+                ...hr(7, 100, 115), [6,115],[5,115]]
+    };
+    const DENY_DROP = { invite:[12,6], handshake:[44,6], sealed:[78,6],
+      unverified:[86,14], verified:[126,6], wiped:[120,13] };
+    function denyPath(state){
+      const d = DENY_DROP[state]; if (!d) return [];
+      const [col, r0] = d, cells = vr(col, r0, 15);         /* own drop → bus */
+      const dir = col < 30 ? 1 : -1;
+      for (let c = col + dir; c !== 30 + dir; c += dir) cells.push([15, c]);
+      cells.push([16,30],[17,30]);                          /* → DENIED */
+      return cells;
+    }
+
+    /* ---- tracer pool: one · per lit edge, loops its path ---- */
+    const tracers = [];
+    function mkTr(){
+      const el = document.createElement('span');
+      el.className = 'tr'; el.textContent = '·'; el.setAttribute('aria-hidden','true');
+      fwrap.appendChild(el); return el;
+    }
+    function stopTraces(){
+      for (const t of tracers){ clearInterval(t.iv); clearTimeout(t.st); t.el.remove(); }
+      tracers.length = 0;
+    }
+    function startTraces(state){
+      stopTraces();
+      if (prm.matches) return;
+      (EDGES[state] || []).forEach((e, idx) => {
+        const cells = e === 'deny' ? denyPath(state) : TRACE[e];
+        if (!cells || !cells.length) return;
+        const el = mkTr();
+        if (e === 'deny') el.classList.add('den');
+        el.classList.add('on');
+        let i = 0;
+        const place = () => {
+          const [r, c] = cells[i % cells.length];
+          el.style.top = (r * 1.55) + 'em'; el.style.left = c + 'ch';
+        };
+        tracers.push({ el,
+          st: setTimeout(() => {
+            place();
+            tracers.find(t => t.el === el).iv =
+              setInterval(() => { i++; place(); }, 58);
+          }, idx * 170),                                       /* stagger edges */
+          iv: 0 });
+      });
+    }
+
+    /* ---- readout: typed 'state → event → state' + sr truth ---- */
+    const roState = byId('ro-state'), roN = byId('ro-n'),
+          roAnim  = byId('ro-anim'),  roSr = byId('ro-sr');
+    let typeIv = null;
+    function phrase(s){
+      const es = EDGES[s] || [];
+      if (!es.length) return `${s} ── terminal · no outgoing edges`;
+      return es.map(e => { const [,to,via] = OUT[e];
+        return `${s} → ${via} → ${to}`; }).join('  │  ');
+    }
+    function typeReadout(str){
+      clearInterval(typeIv);
+      roSr.textContent = str;                    /* aria-live truth, instant */
+      if (prm.matches){ roAnim.textContent = str; return; }
+      let i = 0;
+      typeIv = setInterval(() => {
+        i++;
+        roAnim.innerHTML = str.slice(0, i).replace(/</g,'&lt;') +
+          (i < str.length ? '<span class="cur">▌</span>' : '');
+        if (i >= str.length){ clearInterval(typeIv); typeIv = null; }
+      }, 16);
+      roAnim.textContent = '';
+    }
+    function renderReadout(){
+      if (!sel){
+        roState.textContent = '· · ·'; roN.textContent = 'edges';
+        typeReadout('click a state · enter/space inspects · esc resets');
+      } else {
+        const n = (EDGES[sel] || []).length;
+        roState.textContent = sel; roN.textContent = `edges ${n}`;
+        typeReadout(phrase(sel));
+      }
+    }
+
+    /* ---- selection (prod behavior + traces) ---- */
+    let sel = null;
+    const applySel = () => {
+      for (const el of $('[data-edge].hot')) el.classList.remove('hot');
+      for (const el of $('[data-state].sel')) el.classList.remove('sel');
+      if (!sel) return;
+      for (const el of $(`[data-state="${sel}"]`)) el.classList.add('sel');
+      for (const e of EDGES[sel] || [])
+        for (const el of $(`[data-edge="${e}"]`)) el.classList.add('hot');
+    };
+    const select = s => {
+      sel = (sel === s) ? null : s;
+      applySel();
+      for (const b of $('.st'))
+        b.setAttribute('aria-pressed', String(b.dataset.state === sel));
+      renderReadout();
+      if (sel){
+        startTraces(sel);
+        appendLog('trc', 'trc',
+          `inspect <b>${sel}</b> <span class="x">· ${EDGES[sel].length} out-edges · tracing</span>`);
+      } else stopTraces();
+    };
+    const reset = () => {
+      if (!sel) return;
+      sel = null; stopTraces(); applySel();
+      for (const b of $('.st')) b.setAttribute('aria-pressed', 'false');
+      renderReadout();
+    };
+    for (const pre of $('pre.fsm, pre.rail'))
+      pre.addEventListener('click', e => {
+        const t = e.target.closest('[data-state]');
+        t ? select(t.dataset.state) : reset();
+      });
+    document.addEventListener('keydown', e => { if (e.key === 'Escape') reset(); });
+
+    for (const li of $('.spec li[data-edge]')) {
+      li.addEventListener('mouseenter', () => {
+        for (const el of $(`[data-edge="${li.dataset.edge}"]`)) el.classList.add('hot');
+      });
+      li.addEventListener('mouseleave', applySel);
+    }
+
+    /* ---- marker stepping (prod led cycle) ---- */
+    const leds = $('.led[data-i]');
+    const PATH = [
+      ['invite','──▶','handshake','cinder:// link'],
+      ['handshake','══▶','sealed','noise_xx · 3 flights'],
+      ['sealed','──▶','verified','/sas match']
+    ];
+    let cur = 0, prev = -1, timer = null, visible = false;
+    const paint = () => {
+      for (const l of leds){
+        const on = +l.dataset.i === cur;
+        l.classList.toggle('on', on);
+        l.textContent = on ? '●' : '○';
+      }
+    };
+    const step = () => {
+      if (prev >= 0){
+        if (cur === 0 && prev === 3)
+          appendLog('rst','···','<span class="x">cycle reset · re-enter invite</span>');
+        else { const [a,ar,b,n] = PATH[prev]; stepLog(a, ar, b, n); }
+      }
+      paint(); prev = cur; cur = (cur + 1) % 4;
+    };
+    const park = () => { cur = 3; prev = -1; paint(); };
+    const start = () => {
+      if (timer || prm.matches || !visible || document.hidden) return;
+      timer = setInterval(step, 1100);
+    };
+    const stop = () => { clearInterval(timer); timer = null; };
+
+    if ('IntersectionObserver' in window){
+      const io = new IntersectionObserver(es => {
+        visible = es.some(x => x.isIntersecting);
+        visible ? start() : stop();
+      }, { threshold: .1 });
+      for (const id of ['fsm','rail']){ const el = byId(id); if (el) io.observe(el); }
+    } else visible = true;
+
+    document.addEventListener('visibilitychange',
+      () => document.hidden ? stop() : start());
+    const onPrm = () => {
+      if (prm.matches){
+        stop(); stopTraces(); park(); renderReadout();
+        appendLog('prm','prm','<span class="x">marker parked · prefers-reduced-motion</span>');
+      } else { start(); if (sel) startTraces(sel); renderReadout(); }
+    };
+    prm.addEventListener ? prm.addEventListener('change', onPrm)
+                       : prm.addListener(onPrm);
+
+    renderReadout();
+    if (prm.matches){
+      park();
+      appendLog('prm','prm','<span class="x">marker parked · prefers-reduced-motion</span>');
+    } else { step(); start(); }
+  })();
 })();
 
-
-/* ---------- session fsm v2 — edge inspection + register ---------- */
-(() => {
-  const $ = (s, r = document) => [...r.querySelectorAll(s)];
-  const prm = matchMedia('(prefers-reduced-motion: reduce)');
-
-  /* ---------- transition register ---------- */
-  const logBody = document.getElementById('log-body');
-  let tickN = 0;
-  const appendLog = (cls, tag, html) => {
-    if (!logBody) return;
-    const div = document.createElement('div');
-    div.className = 'll ' + cls;
-    div.innerHTML = `<span class="t">${tag}</span>${html}`;
-    logBody.appendChild(div);
-    while (logBody.children.length > 24) logBody.firstChild.remove();
-    logBody.scrollTop = logBody.scrollHeight;
-  };
-  const stepLog = (a, arrow, b, note) =>
-    appendLog('step', 't+' + String(++tickN).padStart(2, '0'),
-      `${a} <span class="a">${arrow}</span> ${b} <span class="x">· ${note}</span>`);
-
-  /* ---------- edge inspection ---------- */
-  const EDGES = {                       /* outgoing edge set per state   */
-    invite:    ['link', 'deny'],
-    handshake: ['noise', 'deny'],
-    sealed:    ['rekey', 'sas', 'keychg', 'deny'],
-    unverified:['sasback', 'deny'],
-    verified:  ['wipe', 'deny'],
-    wiped:     ['deny'],
-    denied:    []
-  };
-  const OUT = {                         /* readout rows: arrow, to, via  */
-    link:    ['──▶', 'handshake',  'cinder:// link'],
-    noise:   ['══▶', 'sealed',     'noise_xx · 3 flights'],
-    rekey:   ['──▶', 'sealed',     'rekey · self-loop'],
-    sas:     ['──▶', 'verified',   '/verify match'],
-    keychg:  ['──▶', 'unverified', 'key change · sends blocked'],
-    sasback: ['──▶', 'verified',   'sas match'],
-    wipe:    ['──▶', 'wiped',      'chat.wipe'],
-    deny:    ['──▶', 'denied',     'contact.deny · terminal']
-  };
-  const readout = document.getElementById('edge-read');
-  let sel = null;
-
-  const applySel = () => {
-    for (const el of $('[data-edge].hot')) el.classList.remove('hot');
-    for (const el of $('[data-state].sel')) el.classList.remove('sel');
-    if (!sel) return;
-    for (const el of $(`[data-state="${sel}"]`)) el.classList.add('sel');
-    for (const e of EDGES[sel] || [])
-      for (const el of $(`[data-edge="${e}"]`)) el.classList.add('hot');
-  };
-  const renderReadout = () => {
-    if (!readout) return;
-    let inner;
-    if (!sel) {
-      inner = '<span class="v">· · ·</span><span class="k">edges</span>' +
-              '<span class="v">click a state · enter/space inspects · esc resets</span>';
-    } else {
-      const es = (EDGES[sel] || []).map(e => OUT[e]);
-      inner = `<span class="v"><b>${sel}</b></span><span class="k">edges ${es.length || '0'}</span>` +
-        (es.length
-          ? '<span class="v">' + es.map(([a, to, via]) =>
-              `${a} <b>${to}</b> <i>· ${via}</i>`).join(' <s>│</s> ') + '</span>'
-          : '<span class="v"><span class="nul">terminal</span> <i>· no outgoing edges</i></span>');
-    }
-    readout.innerHTML = '<span class="k">inspect</span>' + inner;
-  };
-  const select = s => {
-    sel = (sel === s) ? null : s;
-    applySel();
-    for (const b of $('.st'))
-      b.setAttribute('aria-pressed', String(b.dataset.state === sel));
-    renderReadout();
-    if (sel)
-      appendLog('sel', 'sel',
-        `inspect <b>${sel}</b> <span class="x">· ${EDGES[sel].length} out-edges</span>`);
-  };
-  const reset = () => {
-    if (!sel) return;
-    sel = null;
-    applySel();
-    for (const b of $('.st')) b.setAttribute('aria-pressed', 'false');
-    renderReadout();
-  };
-
-  for (const pre of $('pre.fsm, pre.rail'))
-    pre.addEventListener('click', e => {
-      const t = e.target.closest('[data-state]');
-      t ? select(t.dataset.state) : reset();
-    });
-  document.addEventListener('keydown', e => { if (e.key === 'Escape') reset(); });
-
-  /* spec card rows trace their edge in the schematic on hover */
-  for (const li of $('.spec li[data-edge]')) {
-    li.addEventListener('mouseenter', () => {
-      for (const el of $(`[data-edge="${li.dataset.edge}"]`)) el.classList.add('hot');
-    });
-    li.addEventListener('mouseleave', applySel);
-  }
-
-  /* ---------- marker stepping ---------- */
-  const leds = $('.led[data-i]');
-  const PATH = [
-    ['invite',    '──▶', 'handshake', 'cinder:// link'],
-    ['handshake', '══▶', 'sealed',    'noise_xx · 3 flights'],
-    ['sealed',    '──▶', 'verified',  '/verify match']
-  ];
-  let cur = 0, prev = -1, timer = null, visible = false;
-  const paint = () => {
-    for (const l of leds) {
-      const on = +l.dataset.i === cur;
-      l.classList.toggle('on', on);
-      l.textContent = on ? '●' : '○';
-    }
-  };
-  const step = () => {
-    if (prev >= 0) {
-      if (cur === 0 && prev === 3)
-        appendLog('rst', '···', '<span class="x">cycle reset · re-enter invite</span>');
-      else { const [a, ar, b, n] = PATH[prev]; stepLog(a, ar, b, n); }
-    }
-    paint();
-    prev = cur;
-    cur = (cur + 1) % 4;
-  };
-  const park = () => { cur = 3; prev = -1; paint(); };
-
-  const start = () => {
-    if (timer || prm.matches || !visible || document.hidden) return;
-    timer = setInterval(step, 1100);
-  };
-  const stop = () => { clearInterval(timer); timer = null; };
-
-  if ('IntersectionObserver' in window) {
-    const io = new IntersectionObserver(es => {
-      visible = es.some(x => x.isIntersecting);
-      visible ? start() : stop();
-    }, { threshold: .1 });
-    for (const id of ['fsm', 'rail']) {
-      const el = document.getElementById(id);
-      if (el) io.observe(el);
-    }
-  } else visible = true;
-
-  document.addEventListener('visibilitychange',
-    () => document.hidden ? stop() : start());
-
-  const onPrm = () => {
-    if (prm.matches) {
-      stop(); park();
-      appendLog('prm', 'prm', '<span class="x">marker parked · prefers-reduced-motion</span>');
-    } else start();
-  };
-  prm.addEventListener ? prm.addEventListener('change', onPrm)
-                     : prm.addListener(onPrm);
-
-  renderReadout();
-  if (prm.matches) {
-    park();
-    appendLog('prm', 'prm', '<span class="x">marker parked · prefers-reduced-motion</span>');
-  } else {
-    step();
-    start();
-  }
 })();
 
 /* ---------- mega footer v3 ---------- */

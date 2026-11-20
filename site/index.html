@@ -173,31 +173,71 @@
         <span class="r mono">X25519 · SHA-256 · <b style="color:var(--ember);font-weight:400">DEMO VECTOR</b></span>
       </div>
       <div class="p-body">
-        <div class="inst fpm">
-          <div class="ilab mono"><span>// 01 — fingerprint matrix</span><span>B8×8 · 16 CELL · DITHER</span></div>
+        <figure class="fp-card" id="fpCard">
+      <span class="screw tl">+</span><span class="screw tr">+</span>
+      <span class="screw bl">+</span><span class="screw br">+</span>
+      <div class="plate">
+        <span class="pl-tag"><span class="br">[</span> fig·04 <span class="br">]</span></span>
+        <span class="pl-sep">·</span>
+        <span class="pl-title">peer-fingerprint evidence</span>
+        <span class="pl-leader" aria-hidden="true"></span>
+        <span class="pl-meta">mode:<b id="fpMode">solo</b><span class="pl-sep"> · </span>seed <b>9c1f…aa07</b></span>
+        <button class="seg" id="cmpBtn" type="button" aria-pressed="false"
+          aria-label="toggle compare view" title="toggle compare view (c)"><span class="br">[</span> <span class="opt on">solo</span> <span class="sep">|</span> <span class="opt">compare</span> <span class="br">]</span><kbd class="kk">c</kbd></button>
+      </div>
+
+      <div class="fp-body">
+        <!-- solo: one glyph, one fingerprint -->
+        <div class="fp-solo" id="fpSolo">
+          <div class="ilab"><span>// fingerprint matrix — computed locally</span><span>B8×8 · 16 CELL · DITHER</span></div>
           <div class="scr" role="img"
-            aria-label="Ordered-dither fingerprint matrix derived from a peer's SHA-256 key hash">
+            aria-label="Ordered-dither fingerprint matrix derived from the peer's key hash">
             <canvas id="cv-fp" aria-hidden="true"></canvas>
-            <span class="st mono">FP-16</span><span class="st2 mono">SIG-MAP</span>
-            <span class="st3 mono">DENS ∝ HASH</span><span class="st4 mono">SWP</span>
+            <span class="st tl">FP-16</span><span class="st br">SIG-MAP</span>
           </div>
-          <div class="ro mono">
+          <div class="ro">
             <span>PEER-ID <b class="hot">9c1f…aa07</b></span>
             <span>CELLS <b>16×16</b> · RAMP <b>13</b></span>
           </div>
-          <div class="kv mono" style="margin-top:10px">
-            <span class="k">PEER-ID</span><span class="v hot">9c1f…aa07</span>
+          <div class="fp-hex" id="hexSolo"
+            title="full peer fingerprint — select to copy">…</div>
+          <p class="fp-note">same key, same glyph — anywhere. press
+            <b>[ compare ]</b> to hold it against a claimed peer.</p>
+        </div>
+
+        <!-- compare: your glyph vs the wire's claim -->
+        <div class="fp-cmp" id="fpCmp" hidden>
+          <div class="cmp-grid">
+            <div class="cmp-side">
+              <div class="ilab"><span>// you — local seed</span><span>TRUSTED SRC</span></div>
+              <div class="scr" role="img" aria-label="Your fingerprint matrix">
+                <canvas id="cv-fp-l" aria-hidden="true"></canvas>
+                <i class="dmark" id="dmA" aria-hidden="true"></i>
+              </div>
+              <div class="fp-hex sm" id="hexA">…</div>
+            </div>
+            <div class="vs" aria-hidden="true">≠<i>MITM?</i></div>
+            <div class="cmp-side">
+              <div class="ilab"><span>// claimed — via relay</span><span class="badt">UNVERIFIED</span></div>
+              <div class="scr" role="img" aria-label="Claimed peer's fingerprint matrix">
+                <canvas id="cv-fp-r" aria-hidden="true"></canvas>
+                <i class="dmark" id="dmB" aria-hidden="true"></i>
+              </div>
+              <div class="fp-hex sm" id="hexB">…</div>
+            </div>
           </div>
-          <div class="kv mono">
-            <span class="k">KEY TYPE</span><span class="v">X25519 / 32B PK</span>
-          </div>
-          <div class="kv mono">
-            <span class="k">HASH</span><span class="v">SHA-256 → 16×16 FIELD</span>
-          </div>
-          <div class="kv mono">
-            <span class="k">TRUST</span><span class="v emb">UNVERIFIED — COMPARE SAS</span>
+          <div class="verdict" role="status">
+            <span class="v1" id="vdText">≠ MISMATCH — DO NOT TRUST</span>
+            <span class="v2" id="vdStat">—/— CELLS</span>
           </div>
         </div>
+      </div>
+
+      <div class="fp-foot">
+        <span>FP = SHA-256(PK) → 128-BIT FIELD · MIRRORED L→R</span>
+        <span>MATRIX <b>DETERMINISTIC</b> · SWEEP <b>DECORATIVE</b> · DEMO VECTOR</span>
+      </div>
+    </figure>
         <div class="inst sascol">
           <div class="ilab mono"><span>// 02 — sas compare</span><span>7 GROUPS · SPEAK ALOUD</span></div>
           <div class="sasx" role="table" aria-label="Short authentication string comparison">
@@ -252,46 +292,46 @@
       </div>
     </div>
 
-    <div class="board map-board" id="board" data-pov="t" data-reveal>
+    <div class="board" id="board" data-pov="t" data-peer="on">
     <span class="screw tl">+</span><span class="screw tr">+</span>
     <span class="screw bl">+</span><span class="screw br">+</span>
     <p class="sr">Topology diagram with two switchable views. Transport view:
     YOU, peer-id 4d2e…f18c, runs a Noise_XX x25519 handshake to the blind
     relay, which routes opaque ciphertext onward to PEER, peer-id 9c1f…aa07.
-    Relay view (press v): the same path as the relay sees it: anonymous
-    connections, frame sizes and timing deltas only; all payloads render as
-    unreadable dithered blocks. The relay keeps bounded mailboxes for offline
-    peers and stores no keys. Status readouts are demo values.</p>
+    Relay view (press v): the same path as the relay sees it. Toggle peer
+    offline (o) and packets pause at the relay, drop into the mailbox, and
+    a plus-one tick flashes on the mailbox row; back online they drain.
+    Status readouts are demo values.</p>
     <div class="housing">
 
       <header class="plate">
-        <span class="pl-tag"><span class="br">[</span>fig·03<span class="br">]</span></span><span class="pl-sep">·</span><span class="pl-title">ciphertext path</span><span class="pl-meta"><span class="pl-sep">·</span> view:<b id="viewName">transport</b></span><span class="pl-leader" aria-hidden="true"></span><button class="seg" id="viewBtn" type="button" aria-pressed="false" aria-label="Toggle relay point of view" title="flip point of view (v)"><span class="br">[</span> <span class="opt vt on">transport</span> <span class="sep">|</span> <span class="opt vr">relay</span> <span class="br">]</span><kbd class="kk">v</kbd></button>
+        <span class="pl-tag"><span class="br">[</span>fig·03<span class="br">]</span></span><span class="pl-sep">·</span><span class="pl-title">ciphertext path</span><span class="pl-meta"><span class="pl-sep">·</span> view:<b id="viewName">transport</b><span class="pl-sep">·</span> peer:<b id="peerName">online</b></span><span class="pl-leader" aria-hidden="true"></span><button class="seg" id="viewBtn" type="button" aria-pressed="false" aria-label="Toggle relay point of view" title="flip point of view (v)"><span class="br">[</span> <span class="opt vt on">transport</span> <span class="sep">|</span> <span class="opt vr">relay</span> <span class="br">]</span><kbd class="kk">v</kbd></button><button class="seg peer" id="peerBtn" type="button" aria-pressed="false" aria-label="Toggle peer online or offline" title="peer reachability (o)"><span class="br">[</span> <span class="sep">peer:</span> <span class="opt pon on">online</span> <span class="sep">|</span> <span class="opt poff">offline</span> <span class="br">]</span><kbd class="kk">o</kbd></button>
       </header>
 
       <div class="artwrap">
         <span class="ruler" aria-hidden="true"></span>
         <div class="art">
-          <pre class="m-desktop" data-v="t" aria-hidden="true"><span class="f">┌──────────────────────────────────────────────────────────────────────────────────────────┐</span>
+          <pre class="m-desktop" data-v="t" data-cols="92" aria-hidden="true"><span class="f">┌──────────────────────────────────────────────────────────────────────────────────────────┐</span>
 <span class="f">│</span> <span class="f">link</span> <span class="e j-led">●</span><span class="f"> up</span>     <span class="f">rtt</span> <span class="i j-rtt">24</span><span class="f">ms</span>   <span class="f">q</span> <span class="i j-q">3</span><span class="f">/64</span>   <span class="f">rx</span> <span class="i j-rx">1.0</span><span class="f">kB/s</span>      <span class="f">tx</span> <span class="i j-tx">0.4</span><span class="f">kB/s</span>    <span class="f">t+</span><span class="i j-upt">00:41</span>       <span class="d">demo</span>       <span class="f">│</span>
 <span class="f">│</span>                                                                                          <span class="f">│</span>
 <span class="f">│</span>   <span class="d">●</span> pin: peer static key <span class="d">╌╌╌╌╌┐</span>             invite: <span class="i">cinder://9c1f…aa07</span> · one-time <span class="d">╌┐</span>     <span class="f">│</span>
 <span class="f">│</span>                               <span class="d">│</span>                                                    <span class="d">│</span>     <span class="f">│</span>
 <span class="f">│</span>                               <span class="d">│</span>   <span class="f">┌─────────────────────┐</span>                          <span class="d">│</span>     <span class="f">│</span>
 <span class="f">│</span>  <span class="f">┌─────────────┐</span>              <span class="d">│</span>   <span class="f">│</span> <span class="e">●</span><span class="i"> BLIND RELAY</span>       <span class="f">│</span>                 <span class="f">┌────────┬────┐│</span>
-<span class="f">│</span>  <span class="f">│</span> <span class="e">●</span><span class="i"> YOU</span>       <span class="f">│</span>── noise_xx ──<span class="d">┬</span>──▶<span class="f">│</span> routes ciphertext   <span class="f">│</span>── ciphertext ──▶<span class="f">│</span> <span class="e">●</span><span class="i"> PEER</span>      <span class="f">││</span>
+<span class="f">│</span>  <span class="f">│</span> <span class="e">●</span><span class="i"> YOU</span>       <span class="f">│</span>── noise_xx ──<span class="d">┬</span>──▶<span class="f">│</span> routes ciphertext   <span class="f">│</span>── ciphertext ──▶<span class="f">│</span> <span class="e j-peer">●</span><span class="i"> PEER</span>      <span class="f">││</span>
 <span class="f">│</span>  <span class="f">│</span> <span class="f">4d2e…f18c</span>   <span class="f">│</span>◀── x25519 ───────<span class="f">│</span> sees: <span class="g">░░▒▒▓</span> opaque  <span class="f">│</span>◀─── replies ────<span class="f">│</span> <span class="f">9c1f…aa07</span>   <span class="f">││</span>
-<span class="f">│</span>  <span class="f">└─────────────┘</span>                  <span class="f">└──────────┬──────────┘</span>                 <span class="f">└─────────────┘│</span>
+<span class="f">│</span>  <span class="f">└─────────────┘</span>                  <span class="f">└──────────<span class="j-fork">┬</span>──────────┘</span>                 <span class="f">└─────────────┘│</span>
 <span class="f">│</span>                                              <span class="f">│</span><span class="d"> queued</span>                                    <span class="f">│</span>
 <span class="f">│</span>   relay sees: timing · size · nothing else <span class="d">╌▶</span><span class="f">│</span>                                           <span class="f">│</span>
 <span class="f">│</span>                                   <span class="f">┌──────────┬─────────┐</span>                                 <span class="f">│</span>
 <span class="f">│</span>                                   <span class="f">│</span> <span class="e">●</span><span class="i"> MAILBOX</span><span class="f"> mbx·7e3d</span> <span class="f">│</span>                                 <span class="f">│</span>
-<span class="f">│</span>                                   <span class="f">│</span> <span class="e">▓▓▓</span><span class="f">░░░░░░░░░</span> 3/64  <span class="f">│</span>                                 <span class="f">│</span>
+<span class="f">│</span>                                   <span class="f">│</span> <span class="e j-mbf">▓▓▓</span><span class="f j-mbe">░░░░░░░░░</span> <span class="i j-mbq">3</span><span class="f">/64</span>  <span class="f">│</span>                                 <span class="f">│</span>
 <span class="f">│</span>                                   <span class="f">└────────────────────┘</span>                                 <span class="f">│</span>
 <span class="f">│▓▒··</span>                                                                                  <span class="f"> ░▒▓│</span>
 <span class="f">│</span>  ─<span class="f"> wire</span>   <span class="d">╌</span><span class="f"> callout</span>   <span class="e">●</span><span class="f"> endpoint</span>   <span class="g">▒</span><span class="f"> attacker-visible</span>           <span class="f">relay keeps no keys</span>      <span class="f">│</span>
 <span class="f">│</span>                                                                                          <span class="f">│</span>
 <span class="f">└──────────────────────────────────────────────────────────────────────────────────────────┘</span></pre>
-          <pre class="m-desktop" data-v="r" hidden aria-hidden="true"><span class="f">┌──────────────────────────────────────────────────────────────────────────────────────────┐</span>
+          <pre class="m-desktop" data-v="r" data-cols="92" hidden aria-hidden="true"><span class="f">┌──────────────────────────────────────────────────────────────────────────────────────────┐</span>
 <span class="f">│</span> <span class="f">link</span> <span class="e j-led">●</span><span class="f"> up</span>     <span class="f">rtt</span> <span class="i j-rtt">24</span><span class="f">ms</span>   <span class="f">q</span> <span class="i j-q">3</span><span class="f">/64</span>   <span class="f">rx</span> <span class="i j-rx">1.0</span><span class="f">kB/s</span>      <span class="f">tx</span> <span class="i j-tx">0.4</span><span class="f">kB/s</span>    <span class="f">t+</span><span class="i j-upt">00:41</span>       <span class="d">demo</span>       <span class="f">│</span>
 <span class="f">│</span>                                                                                          <span class="f">│</span>
 <span class="f">│</span>   <span class="d">●</span> metadata: Δt·size·dir <span class="d">╌╌╌╌┐</span>                    identities: none · keys: none  <span class="d">╌┐</span>     <span class="f">│</span>
@@ -300,7 +340,7 @@
 <span class="f">│</span>  <span class="f">┌─────────────┐</span>              <span class="d">│</span>   <span class="f">│</span> <span class="e">●</span><span class="i"> BLIND RELAY</span>       <span class="f">│</span>                 <span class="f">┌────────┬────┐│</span>
 <span class="f">│</span>  <span class="f">│</span> <span class="f">○</span><span class="i"> conn a</span>    <span class="f">│</span>─ Δt41ms·512B <span class="d">┬</span>──▶<span class="f">│</span> sees: Δt·len·dir    <span class="f">│</span>─ Δt9ms·512B ───▶<span class="f">│</span> <span class="f">○</span><span class="i"> conn b</span>    <span class="f">││</span>
 <span class="f">│</span>  <span class="f">│</span> <span class="g">░░▒▒▓</span>       <span class="f">│</span>◀── Δt63ms·512B ──<span class="f">│</span> fwd <span class="g">·░░▓▓</span> · no keys <span class="f">│</span>◀── Δt51ms·512B ─<span class="f">│</span> <span class="g">░░▒▒▓</span>       <span class="f">││</span>
-<span class="f">│</span>  <span class="f">└─────────────┘</span>                  <span class="f">└──────────┬──────────┘</span>                 <span class="f">└─────────────┘│</span>
+<span class="f">│</span>  <span class="f">└─────────────┘</span>                  <span class="f">└──────────<span class="j-fork">┬</span>──────────┘</span>                 <span class="f">└─────────────┘│</span>
 <span class="f">│</span>                                              <span class="f">│</span><span class="d"> queued</span>                                    <span class="f">│</span>
 <span class="f">│</span>   payload: 0B readable · envelope only     <span class="d">╌▶</span><span class="f">│</span>                                           <span class="f">│</span>
 <span class="f">│</span>                                   <span class="f">┌──────────┬─────────┐</span>                                 <span class="f">│</span>
@@ -311,7 +351,7 @@
 <span class="f">│</span>  Δt<span class="f"> timing·</span> 512B<span class="f"> size</span>   <span class="g">░▒▓</span><span class="f"> unreadable</span>   <span class="f">○ anonymous</span>            <span class="f">relay keeps no keys</span>      <span class="f">│</span>
 <span class="f">│</span>                                                                                          <span class="f">│</span>
 <span class="f">└──────────────────────────────────────────────────────────────────────────────────────────┘</span></pre>
-          <pre class="m-mobile" data-v="t" aria-hidden="true"><span class="f">┌────────────────────────────────────────────┐</span>
+          <pre class="m-mobile" data-v="t" data-cols="46" aria-hidden="true"><span class="f">┌────────────────────────────────────────────┐</span>
 <span class="f">│</span> transport view · blind relay   <span class="d">[v]:relay</span>   <span class="f">│</span>
 <span class="f">│</span> <span class="e j-led">●</span> <span class="f">rtt</span> <span class="i j-rtt">24</span><span class="f">ms · q</span> <span class="i j-q">3</span><span class="f">/64</span>                    <span class="d">demo</span><span class="f">│</span>
 <span class="f">│</span>                                            <span class="f">│</span>
@@ -328,15 +368,15 @@
 <span class="f">│</span>        <span class="f">│</span> ciphertext<span class="f">│</span><span class="d"> queued</span>                <span class="f">│</span>
 <span class="f">│</span>        <span class="f">▼</span>           <span class="f">│</span>                       <span class="f">│</span>
 <span class="f">│</span>  <span class="f">┌─────┬─────┐</span>     <span class="f">│</span> <span class="f">┌───────────────────┐</span> <span class="f">│</span>
-<span class="f">│</span>  <span class="f">│</span> <span class="e">●</span><span class="i"> PEER</span>    <span class="f">│</span>     <span class="f">└─┤</span> <span class="e">●</span><span class="i"> MAILBOX</span><span class="f"> mbx·7e3d│</span> <span class="f">│</span>
-<span class="f">│</span>  <span class="f">│</span> <span class="f">9c1f…aa07</span> <span class="f">│</span>       <span class="f">│</span> <span class="e">▓▓▓</span><span class="f">░░░░</span> 3/64      <span class="f">│</span> <span class="f">│</span>
+<span class="f">│</span>  <span class="f">│</span> <span class="e j-peer">●</span><span class="i"> PEER</span>    <span class="f">│</span>     <span class="f">└─┤</span> <span class="e">●</span><span class="i"> MAILBOX</span><span class="f"> mbx·7e3d│</span> <span class="f">│</span>
+<span class="f">│</span>  <span class="f">│</span> <span class="f">9c1f…aa07</span> <span class="f">│</span>       <span class="f">│</span> <span class="e j-mbf">▓▓▓</span><span class="f j-mbe">░░░░</span> <span class="i j-mbq">3</span><span class="f">/64</span>      <span class="f">│</span> <span class="f">│</span>
 <span class="f">│</span>  <span class="f">└───────────┘</span>       <span class="f">└───────────────────┘</span> <span class="f">│</span>
 <span class="f">│▓▒··</span>                                    <span class="f"> ░▒▓│</span>
 <span class="f">│</span> ─<span class="f"> wire</span> <span class="f">·</span> <span class="d">╌</span><span class="f"> callout</span> <span class="f">·</span> <span class="g">▒</span><span class="f"> relay-seen</span>          <span class="f">│</span>
 <span class="f">│</span> <span class="d">●</span> invite <span class="i">cinder://9c1f…aa07</span> ·1x            <span class="f">│</span>
 <span class="f">│</span> <span class="f">pin: peer static key · no keys at relay</span>    <span class="f">│</span>
 <span class="f">└────────────────────────────────────────────┘</span></pre>
-          <pre class="m-mobile" data-v="r" hidden aria-hidden="true"><span class="f">┌────────────────────────────────────────────┐</span>
+          <pre class="m-mobile" data-v="r" data-cols="46" hidden aria-hidden="true"><span class="f">┌────────────────────────────────────────────┐</span>
 <span class="f">│</span> adversary · metadata only      <span class="d">[v]:transp</span>  <span class="f">│</span>
 <span class="f">│</span> <span class="e j-led">●</span> <span class="f">rtt</span> <span class="i j-rtt">24</span><span class="f">ms · q</span> <span class="i j-q">3</span><span class="f">/64</span>                    <span class="d">demo</span><span class="f">│</span>
 <span class="f">│</span>                                            <span class="f">│</span>
@@ -361,14 +401,29 @@
 <span class="f">│</span> <span class="f">○ anonymous</span>                                <span class="f">│</span>
 <span class="f">│</span> <span class="f">relay keeps no keys</span>                        <span class="f">│</span>
 <span class="f">└────────────────────────────────────────────┘</span></pre>
-          <span class="pkt head fwd" id="pkH" aria-hidden="true">▪</span>
-          <span class="pkt trail fwd" id="pkT" aria-hidden="true">·</span>
-          <span class="pkt head rev" id="rkH" aria-hidden="true">▪</span>
-          <span class="pkt trail rev" id="rkT" aria-hidden="true">·</span>
+          <!-- v3 packet stack: head ▮ + decay trail ▓▒░· (fwd / rev / drain / fork-spark) -->
+          <span class="pk h" id="pkH" aria-hidden="true">▮</span>
+          <span class="pk t1" id="pkT1" aria-hidden="true">▓</span>
+          <span class="pk t2" id="pkT2" aria-hidden="true">▒</span>
+          <span class="pk t3" id="pkT3" aria-hidden="true">░</span>
+          <span class="pk t4" id="pkT4" aria-hidden="true">·</span>
+          <span class="pk h" id="rkH" aria-hidden="true">▮</span>
+          <span class="pk t1" id="rkT1" aria-hidden="true">▓</span>
+          <span class="pk t2" id="rkT2" aria-hidden="true">▒</span>
+          <span class="pk t3" id="rkT3" aria-hidden="true">░</span>
+          <span class="pk t4" id="rkT4" aria-hidden="true">·</span>
+          <span class="pk h" id="dkH" aria-hidden="true">▮</span>
+          <span class="pk t1" id="dkT1" aria-hidden="true">▓</span>
+          <span class="pk t2" id="dkT2" aria-hidden="true">▒</span>
+          <span class="pk t3" id="dkT3" aria-hidden="true">░</span>
+          <span class="pk t4" id="dkT4" aria-hidden="true">·</span>
+          <span class="pk sp" id="fkS" aria-hidden="true">·</span>
+          <span class="mbx-tick" id="mbxTick" aria-hidden="true">+1</span>
         </div>
       </div>
 
-      <footer class="keys"><span class="k-tag"><span class="br">[</span>fig·03<span class="br">]</span></span><span class="k-text"><b>noise_xx</b> is end-to-end: the relay forwards <b>opaque frames</b>, sees timing+size only, keeps no keys · readouts are <b>demo</b></span><span class="k-hint"><span class="br">[</span><span class="kv">v</span><span class="br">]</span> flip view</span></footer>
+      <footer class="keys"><span class="k-tag"><span class="br">[</span>fig·03<span class="br">]</span></span><span class="k-text"><b>noise_xx</b> is end-to-end: the relay forwards <b>opaque frames</b>, sees timing+size only, keeps no keys · peer offline → frames <b>queue at mailbox</b> · readouts are <b>demo</b></span><span class="k-hint"><span class="br">[</span><span class="kv">v</span><span class="br">]</span> view <span class="br">[</span><span class="kv">o</span><span class="br">]</span> peer</span></footer>
+      <footer class="keys legend"><span class="k-tag"><span class="br">[</span>legend<span class="br">]</span></span><span><span class="gly e">▮</span> packet head <span class="sep2">·</span> <span class="gly">▓▒░·</span> decay trail <span class="sep2">·</span> <span class="gly e">┬</span> relay fork <span class="sep2">·</span> <span class="gly e">+1</span> mailbox enqueue <span class="sep2">·</span> <span class="gly e">●</span> peer up <span class="sep2">/</span> <span class="gly">○</span> peer down</span><span class="k-hint">motion: reduced-safe</span></footer>
 
     </div>
   </div>
@@ -1014,17 +1069,18 @@
     </div>
 
     <div class="fsmv2">
-<figure class="panel" aria-labelledby="fsm-cap">
+<figure class="panel fsm-panel" aria-labelledby="fsm-cap">
     <figcaption class="bar" id="fsm-cap">
       <span class="tag">fsm-02</span>
       <span class="t">session · transport · trust</span>
-      <span class="r"><i></i>interactive</span>
+      <span class="r"><i></i>interactive · edge trace</span>
     </figcaption>
     <div class="scroll">
-<pre class="fsm" id="fsm" aria-label="Interactive ASCII schematic of the cinder session state machine. Entry at INVITE, transitions to HANDSHAKE, SEALED, VERIFIED. SEALED loops on rekey, drops to UNVERIFIED on key change, which returns to VERIFIED on sas match. VERIFIED drops to WIPED on chat.wipe. Every state falls to DENIED on contact.deny. State buttons inspect outgoing edges.">
+      <div class="fwrap" id="fwrap">
+<pre class="fsm" id="fsm" data-cols="128" aria-label="Interactive ASCII schematic of the cinder session state machine. Entry at INVITE, transitions to HANDSHAKE, SEALED, VERIFIED. SEALED loops on rekey, drops to UNVERIFIED on key change, which returns to VERIFIED on sas match. VERIFIED drops to WIPED on chat.wipe. Every state falls to DENIED on contact.deny. State buttons inspect outgoing edges; a dot marker traces each lit edge.">
                                                                                 <span class="lp" data-edge="rekey">┌─ rekey ──┐</span>
                                                                                 <span class="lp" data-edge="rekey">▲</span>          <span class="lp" data-edge="rekey">▼</span>
-    <span class="bx stc" data-state="invite">┌──────────────┐</span><span class="lbl" data-edge="link"> cinder:// link </span><span class="bx stc" data-state="handshake">┌────────────────┐</span><span class="lbl" data-edge="noise"> noise_xx · 3 flights </span><span class="bx stc" data-state="sealed">┌────────────────┐</span><span class="lbl" data-edge="sas">  /verify match </span><span class="bx stc" data-state="verified">┌────────────────┐</span>
+    <span class="bx stc" data-state="invite">┌──────────────┐</span><span class="lbl" data-edge="link"> cinder:// link </span><span class="bx stc" data-state="handshake">┌────────────────┐</span><span class="lbl" data-edge="noise"> noise_xx · 3 flights </span><span class="bx stc" data-state="sealed">┌────────────────┐</span><span class="lbl" data-edge="sas">   /sas match   </span><span class="bx stc" data-state="verified">┌────────────────┐</span>
 <span class="ent">●</span><span class="arw">──▶</span><button class="st" type="button" data-state="invite" aria-pressed="false" aria-label="INVITE — inspect outgoing edges"><span class="bx">│ </span><span class="led" data-i="0">○</span><span class="bx"> INVITE     │</span></button><span class="arw" data-edge="link">───────────────▶</span><button class="st" type="button" data-state="handshake" aria-pressed="false" aria-label="HANDSHAKE — inspect outgoing edges"><span class="bx">│ </span><span class="led" data-i="1">○</span><span class="bx"> HANDSHAKE    │</span></button><span class="arw" data-edge="noise">═════════════════════▶</span><button class="st" type="button" data-state="sealed" aria-pressed="false" aria-label="SEALED — inspect outgoing edges"><span class="bx">│ </span><span class="led" data-i="2">○</span><span class="bx"> SEALED       │</span></button><span class="arw" data-edge="sas">───────────────▶</span><button class="st" type="button" data-state="verified" aria-pressed="false" aria-label="VERIFIED — inspect outgoing edges"><span class="bx">│ </span><span class="led on" data-i="3">●</span><span class="bx"> VERIFIED     │</span></button>
     <span class="bx stc" data-state="invite">└───────┬──────┘</span>                <span class="bx stc" data-state="handshake">└───────┬────────┘</span>                      <span class="bx stc" data-state="sealed">└─┬─────────┬────┘</span>                <span class="bx stc" data-state="verified">└─────────┬─────┬┘</span>
             <span class="arw" data-edge="deny">│</span>                               <span class="arw" data-edge="deny">│</span>                                 <span class="arw" data-edge="deny">│</span>         <span class="arw" data-edge="keychg">│</span> <span class="wrn" data-edge="keychg">key change</span>               <span class="arw" data-edge="sasback">▲</span>    <span class="arw" data-edge="wipe">│</span>     <span class="arw" data-edge="deny">│</span>
@@ -1046,7 +1102,9 @@
 
     <span class="dim">○ idle    ● active    ──▶ edge    ══▶ flight    ┄┄ terminal    click inspects · esc resets</span>
 </pre>
+      </div>
     </div>
+    <footer class="keys legend"><span class="k-tag"><span class="br">[</span>legend<span class="br">]</span></span><span><span class="gly e">·</span> edge trace <span class="sep2">·</span> <span class="gly">──▶</span> transition <span class="gly">══▶</span> noise flight <span class="sep2">·</span> <span class="gly dan">┄┄</span> terminal <span class="sep2">·</span> <span class="gly e">▲▼</span> rekey loop</span><span class="k-hint"><span class="br">[</span><span class="kv">click</span><span class="br">]</span> inspect <span class="br">[</span><span class="kv">esc</span><span class="br">]</span> reset</span></footer>
   </figure>
 
   <p class="sr-only">
@@ -1067,7 +1125,7 @@
       <span class="r"><i></i>interactive</span>
     </figcaption>
     <div class="scroll">
-<pre class="rail" id="rail" aria-label="Interactive vertical list of session states: invite, handshake, sealed, unverified, verified, wiped, denied. State buttons inspect outgoing edges.">
+<pre class="rail" id="rail" data-cols="38" aria-label="Interactive vertical list of session states: invite, handshake, sealed, unverified, verified, wiped, denied. State buttons inspect outgoing edges.">
 <span class="ent">●</span><span class="arw">──▶</span><span class="bx stc" data-state="invite">┌─────────────┐</span>
     <button class="st" type="button" data-state="invite" aria-pressed="false" aria-label="INVITE — inspect outgoing edges"><span class="bx">│ </span><span class="led" data-i="0">○</span><span class="bx"> INVITE    │</span></button>
     <span class="bx stc" data-state="invite">└───────┬─────┘</span>
@@ -1111,10 +1169,11 @@
     <span class="dim">○ idle   ● active   click inspects</span>
 </pre>
     </div>
+    <footer class="keys legend"><span class="k-tag"><span class="br">[</span>legend<span class="br">]</span></span><span><span class="gly">──▶</span> transition <span class="sep2">·</span> <span class="gly dan">┄┄</span> terminal</span><span class="k-hint"><span class="br">[</span><span class="kv">tap</span><span class="br">]</span> inspect</span></footer>
   </figure>
 
   <div class="inspect" aria-label="Edge inspection and transition register">
-    <div class="readout" id="edge-read" role="status" aria-live="polite"></div>
+    <div class="readout" id="edge-read" role="status" aria-live="polite"><span class="k">inspect</span><span class="v"><b id="ro-state">· · ·</b></span><span class="k" id="ro-n"></span><span class="v typ" id="ro-anim" aria-hidden="true"></span><span class="sr" id="ro-sr"></span></div>
     <div class="log" aria-label="Transition register">
       <div class="log-h">transition register</div>
       <div class="log-body" id="log-body"></div>
@@ -1199,43 +1258,64 @@
     </div>
     <div class="ticket-wrap" data-reveal>
       <p class="tk-kicker mono">// one-time link — admit one</p>
-      <section class="ticket" id="ticket" role="button" tabindex="0" aria-label="invite ticket, click to simulate redemption">
-        <span class="screw tl">+</span><span class="screw tr">+</span>
-        <span class="screw bl">+</span><span class="screw br">+</span>
-        <p class="sr">One-time cinder invite. cinder://9c1f…aa07@relay:8443?rendezvous=8f2a. Single use. Expires on use. Intercepted links cannot be replayed.</p><pre class="t-desktop" aria-hidden="true"><span class="f">┌────────────────────────────────────────────────────────</span><span class="d">┬</span><span class="d">╌╌╌╌╌╌╌╌╌╌╌╌╌╌</span><span class="f">┐</span>
-<span class="f">┊</span>   <span class="m">CINDER · E2E TERMINAL MESSENGER</span>                      <span class="d">┊</span><span class="f">     STUB     </span><span class="f">┊</span>
-<span class="f">┊</span>                                                        <span class="d">┊</span>              <span class="f">┊</span>
-<span class="f">┊</span>   <span class="e">\|/</span>   <span class="i b">ADMIT ONE</span>                                      <span class="d">┊</span><span class="m">       S      </span><span class="f">┊</span>
-<span class="f">┊</span>   <span class="e">-*-</span>   <span class="m">ONE-TIME LINK</span>                                  <span class="d">┊</span><span class="m">       I      </span><span class="f">┊</span>
-<span class="f">┊</span>   <span class="e">/|\</span>                                                  <span class="d">┊</span><span class="m">       N      </span><span class="f">┊</span>
-<span class="f">┊</span>                                                        <span class="d">┊</span><span class="m">       G      </span><span class="f">┊</span>
-<span class="f">┊</span>   <a class="lnk" tabindex="-1" href="cinder://9c1f%e2%80%a6aa07@relay:8443?rendezvous=8f2a">cinder://9c1f…aa07@relay:8443?rendezvous=8f2a</a><span class="cur">▌</span>       <span class="d">┊</span><span class="m">       L      </span><span class="f">┊</span>
-<span class="f">┊</span>                                                        <span class="d">┊</span><span class="m">       E      </span><span class="f">┊</span>
-<span class="f">┊</span>   <span class="m">one-time · expires on use</span>                            <span class="d">┊</span><span class="f">       ·      </span><span class="f">┊</span>
-<span class="f">┊</span>   <span class="m">intercepted links can't be replayed</span>                  <span class="d">┊</span><span class="m">       U      </span><span class="f">┊</span>
-<span class="f">┊</span>                                                        <span class="d">┊</span><span class="m">       S      </span><span class="f">┊</span>
-<span class="f">┊</span>                                                        <span class="d">┊</span><span class="m">       E      </span><span class="f">┊</span>
-<span class="f">┊</span>   <span class="f">NO·8F2A</span>                           <span class="f">TEAR ALONG LINE </span><span class="e">»</span>  <span class="d">┊</span><span class="f stamp">░ VOID AFTER ░</span><span class="f">┊</span>
-<span class="f">┊</span>                                                        <span class="d">┊</span><span class="f stamp">░    USE     ░</span><span class="f">┊</span>
-<span class="f">└────────────────────────────────────────────────────────</span><span class="d">┴</span><span class="d">╌╌╌╌╌╌╌╌╌╌╌╌╌╌</span><span class="f">┘</span></pre><pre class="t-mobile" aria-hidden="true"><span class="f">┌────────────────────────────────────────────────┐</span>
+      <section class="tk" id="tk" role="button" tabindex="0"
+            aria-label="invite ticket — click or press Enter to simulate redemption">
+            <span class="screw tl">+</span><span class="screw tr">+</span>
+            <span class="screw bl">+</span><span class="screw br">+</span>
+            <p class="sr">One-time cinder invite. cinder://9c1f…aa07@relay:8443?rendezvous=8f2a. Single use. Expires on use. Intercepted links cannot be replayed. Activating redeems the ticket and tears off the stub.</p><div class="tk-art t-desktop" aria-hidden="true"><pre class="tk-main"><span class="f">┌────────────────────────────────────────────────────────</span><span class="d">┬</span>
+<span class="f">┊</span>   <span class="m">CINDER · E2E TERMINAL MESSENGER</span>                      <span class="d">┊</span>
+<span class="f">┊</span>                                                        <span class="d">┊</span>
+<span class="f">┊</span>   <span class="e">\|/</span>   <span class="i b">ADMIT ONE</span>                                      <span class="d">┊</span>
+<span class="f">┊</span>   <span class="e">-*-</span>   <span class="m">ONE-TIME LINK</span>                                  <span class="d">┊</span>
+<span class="f">┊</span>   <span class="e">/|\</span>                                                  <span class="d">┊</span>
+<span class="f">┊</span>                                                        <span class="d">┊</span>
+<span class="f">┊</span>   <a class="lnk" href="cinder://9c1f%e2%80%a6aa07@relay:8443?rendezvous=8f2a">cinder://9c1f…aa07@relay:8443?rendezvous=8f2a</a><span class="cur">▌</span>       <span class="d">┊</span>
+<span class="f">┊</span>                                                        <span class="d">┊</span>
+<span class="f">┊</span>   <span class="m">one-time · expires on use</span>                            <span class="d">┊</span>
+<span class="f">┊</span>   <span class="m">intercepted links can't be replayed</span>                  <span class="d">┊</span>
+<span class="f">┊</span>                                                        <span class="d">┊</span>
+<span class="f">┊</span>                                                        <span class="d">┊</span>
+<span class="f">┊</span>   <span class="f">NO·8F2A</span>                           <span class="f">TEAR ALONG LINE </span><span class="e">»</span>  <span class="d">┊</span>
+<span class="f">┊</span>                                                        <span class="d">┊</span>
+<span class="f">└────────────────────────────────────────────────────────</span><span class="d">┴</span></pre><pre class="tk-stub"><span class="d">╌╌╌╌╌╌╌╌╌╌╌╌╌╌</span><span class="f">┐</span>
+<span class="f">     STUB     ┊</span>
+<span class="f">              ┊</span>
+<span class="m">       S      </span><span class="f">┊</span>
+<span class="m">       I      </span><span class="f">┊</span>
+<span class="m">       N      </span><span class="f">┊</span>
+<span class="m">       G      </span><span class="f">┊</span>
+<span class="m">       L      </span><span class="f">┊</span>
+<span class="m">       E      </span><span class="f">┊</span>
+<span class="m">       ·      </span><span class="f">┊</span>
+<span class="m">       U      </span><span class="f">┊</span>
+<span class="m">       S      </span><span class="f">┊</span>
+<span class="m">       E      </span><span class="f">┊</span>
+<span class="f"> KEEP STUB    ┊</span>
+<span class="f"> NO·8F2A      ┊</span>
+<span class="d">╌╌╌╌╌╌╌╌╌╌╌╌╌╌</span><span class="f">┘</span></pre><span class="tk-void">░░░░░░░░░░░░░░
+░ VOID AFTER ░
+░    USE     ░
+░░░░░░░░░░░░░░</span></div><div class="tk-art t-mobile" aria-hidden="true"><pre class="tk-mtop"><span class="f">┌────────────────────────────────────────────────┐</span>
 <span class="f">┊</span>  <span class="m">CINDER · E2E TERMINAL MESSENGER</span>               <span class="f">┊</span>
 <span class="f">┊</span>                                                <span class="f">┊</span>
 <span class="f">┊</span>  <span class="e">\|/</span>   <span class="i b">ADMIT ONE</span>                               <span class="f">┊</span>
 <span class="f">┊</span>  <span class="e">-*-</span>   <span class="m">ONE-TIME LINK</span>                           <span class="f">┊</span>
 <span class="f">┊</span>  <span class="e">/|\</span>                                           <span class="f">┊</span>
 <span class="f">┊</span>                                                <span class="f">┊</span>
-<span class="f">┊</span>  <a class="lnk" tabindex="-1" href="cinder://9c1f%e2%80%a6aa07@relay:8443?rendezvous=8f2a">cinder://9c1f…aa07@relay:8443?rendezvous=8f2a</a> <span class="f">┊</span>
+<span class="f">┊</span>  <a class="lnk" href="cinder://9c1f%e2%80%a6aa07@relay:8443?rendezvous=8f2a">cinder://9c1f…aa07@relay:8443?rendezvous=8f2a</a> <span class="f">┊</span>
 <span class="f">┊</span>                                                <span class="f">┊</span>
 <span class="f">┊</span>  <span class="m">one-time · expires on use</span>                     <span class="f">┊</span>
 <span class="f">┊</span>  <span class="m">intercepted links can't be replayed</span>           <span class="f">┊</span>
 <span class="f">┊</span>                                                <span class="f">┊</span>
-<span class="d">├┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┤</span>
-<span class="f">┊</span>  <span class="m">SINGLE USE</span> <span class="f">· TEAR HERE</span>                        <span class="f">┊</span>
-<span class="f">┊</span>  <span class="f stamp">░ VOID AFTER ░</span>                       <span class="f">NO·8F2A</span>  <span class="f">┊</span>
-<span class="f">┊</span>  <span class="f stamp">░    USE     ░</span>                                <span class="f">┊</span>
+<span class="d">├┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┤</span></pre><pre class="tk-mstub"><span class="f">┊</span>                                                <span class="f">┊</span>
+<span class="f">┊</span>  <span class="m">SINGLE USE · TEAR HERE</span>                        <span class="f">┊</span>
+<span class="f">┊</span>  <span class="m">KEEP STUB · </span><span class="f">NO·8F2A</span>                           <span class="f">┊</span>
 <span class="f">┊</span>                                                <span class="f">┊</span>
-<span class="f">└────────────────────────────────────────────────┘</span></pre>
-      </section>
+<span class="f">└────────────────────────────────────────────────┘</span></pre><span class="tk-void">░░░░░░░░░░░░░░
+░ VOID AFTER ░
+░    USE     ░
+░░░░░░░░░░░░░░</span></div>
+          </section>
       <div class="tk-keys mono" id="invite-keys">click the ticket <b>burns the link</b> · intercepted copies can't replay</div>
     </div>
   </div>

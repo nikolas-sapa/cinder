@@ -167,8 +167,9 @@ h1{font-family:'Space Grotesk',sans-serif;font-weight:700;font-size:88px;line-he
     font-family:var(--mono);font-size:11.5px;
     background:transparent;
     -webkit-tap-highlight-color:transparent;touch-action:manipulation}
-.ctl4-key-cap{position:relative;display:inline-flex;align-items:center;
-    justify-content:center;min-width:15ch;min-height:36px;padding:0 12px;
+.ctl4-key-cap{position:relative;display:flex;align-items:center;
+    justify-content:center;flex:1;min-width:14ch;min-height:0;
+    height:100%;padding:0 16px;
     color:var(--muted);letter-spacing:.1em;overflow:hidden;border-radius:6px;
     background:linear-gradient(180deg,#1E2228 0%,#16191E 60%,#12151A 100%);
     border:1px solid #2A2E35;border-bottom-color:#060708;
@@ -178,8 +179,7 @@ h1{font-family:'Space Grotesk',sans-serif;font-weight:700;font-size:88px;line-he
       0 8px 14px rgba(0,0,0,.5);
     transition:transform .07s ease,box-shadow .07s ease,color .15s,
       border-color .15s,background .15s}
-.ctl4-key-tex{position:absolute;inset:0;width:100%;height:100%;
-    image-rendering:pixelated;pointer-events:none}
+.ctl4-key-tex{display:none}
 .ctl4-key-cap::after{content:"";position:absolute;top:-30%;bottom:-30%;left:-45%;
     width:24%;pointer-events:none;transform:skewX(-16deg);
     background:linear-gradient(90deg,transparent,

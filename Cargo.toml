@@ -5,6 +5,7 @@ members = ["cinder-core", "cinder-relay", "cinder"]
 [workspace.package]
 edition = "2021"
 license = "MIT"
+repository = "https://github.com/nikolas-sapa/cinder"
 
 # cargo-dist release configuration — consumed by .github/workflows/release.yml.
 # The workflow is hand-maintained in the standard `dist init` layout;

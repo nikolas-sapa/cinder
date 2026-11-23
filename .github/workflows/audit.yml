@@ -13,7 +13,6 @@ on:
 
 permissions:
   contents: read
-  checks: write
 
 env:
   CARGO_TERM_COLOR: always
@@ -24,10 +23,16 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      # Reads .cargo/audit.toml for ignores (policy: zero ignores).
-      - uses: rustsec/audit-check@v2
+      - uses: dtolnay/rust-toolchain@stable
+      # Plain cargo-audit instead of rustsec/audit-check: the action opens a
+      # GitHub issue per informational warning on scheduled runs, which fails
+      # with a read-only token. Exits non-zero on vulnerabilities only;
+      # unmaintained warnings are printed but do not fail the job.
+      - uses: taiki-e/install-action@v2
         with:
-          token: ${{ secrets.GITHUB_TOKEN }}
+          tool: cargo-audit
+      # Reads .cargo/audit.toml for ignores (policy: zero ignores).
+      - run: cargo audit
 
   deny-advisories:
     name: cargo deny check advisories
